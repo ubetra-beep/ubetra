@@ -1,0 +1,13 @@
+# Byte-compiled / local
+.venv
+__pycache__
+*.pyc
+.git
+.github
+.env
+backend/data/*.db
+backend/data/ubetra.db*
+backend/data/vapid.json
+*.db
+.cursor
+docker-compose.override.yml

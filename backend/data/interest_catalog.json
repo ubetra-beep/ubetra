@@ -1,0 +1,1001 @@
+{
+  "categories": [
+    {
+      "id": "sex_acts",
+      "name": "Sex Acts",
+      "description": "BDSM is about lots more than sex, but sex is still a big part of it.",
+      "display_order": 1,
+      "interests": [
+        {
+          "id": "sex_acts_receiving_handjobs_fingering",
+          "display_copy": "Receiving handjobs/fingering",
+          "submissive_display_override": "Giving handjobs/fingering",
+          "description": null,
+          "display_order": 1
+        },
+        {
+          "id": "sex_acts_giving_handjobs_fingering",
+          "display_copy": "Giving handjobs/fingering",
+          "submissive_display_override": "Receiving handjobs/fingering",
+          "description": null,
+          "display_order": 2
+        },
+        {
+          "id": "sex_acts_piv_sex",
+          "display_copy": "PiV sex",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 3
+        },
+        {
+          "id": "sex_acts_receiving_oral_sex",
+          "display_copy": "Receiving oral sex",
+          "submissive_display_override": "Giving oral sex",
+          "description": null,
+          "display_order": 4
+        },
+        {
+          "id": "sex_acts_giving_oral_sex",
+          "display_copy": "Giving oral sex",
+          "submissive_display_override": "Receiving oral sex",
+          "description": null,
+          "display_order": 5
+        },
+        {
+          "id": "sex_acts_anal_sex_pegging_penetrating",
+          "display_copy": "Anal sex/pegging (penetrating)",
+          "submissive_display_override": "Anal sex/pegging (being penetrated)",
+          "description": null,
+          "display_order": 6
+        },
+        {
+          "id": "sex_acts_anal_sex_pegging_being_penetrated",
+          "display_copy": "Anal sex/pegging (being penetrated)",
+          "submissive_display_override": "Anal sex/pegging (penetrating)",
+          "description": null,
+          "display_order": 7
+        },
+        {
+          "id": "sex_acts_having_your_ass_eaten",
+          "display_copy": "Having your ass eaten",
+          "submissive_display_override": "Eating ass",
+          "description": null,
+          "display_order": 8
+        },
+        {
+          "id": "sex_acts_eating_ass",
+          "display_copy": "Eating ass",
+          "submissive_display_override": "Having your ass eaten",
+          "description": null,
+          "display_order": 9
+        },
+        {
+          "id": "sex_acts_prostate_play",
+          "display_copy": "Prostate play",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 10
+        },
+        {
+          "id": "sex_acts_footjobs",
+          "display_copy": "Footjobs",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 12
+        },
+        {
+          "id": "sex_acts_mutual_masturbation",
+          "display_copy": "Mutual masturbation",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 13
+        },
+        {
+          "id": "sex_acts_69ing",
+          "display_copy": "69ing",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 14
+        },
+        {
+          "id": "sex_acts_fisting",
+          "display_copy": "Fisting",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 15
+        },
+        {
+          "id": "sex_acts_anal_fisting",
+          "display_copy": "Anal fisting",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 16
+        }
+      ]
+    },
+    {
+      "id": "outfits",
+      "name": "Outfits",
+      "description": "Sex is great naked of course, but sometimes adding some clothes into the mix can spark something in you as well.",
+      "display_order": 2,
+      "interests": [
+        {
+          "id": "outfits_high_heels",
+          "display_copy": "High heels",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 1
+        },
+        {
+          "id": "outfits_lingerie",
+          "display_copy": "Lingerie",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 2
+        },
+        {
+          "id": "outfits_socks_stockings",
+          "display_copy": "Socks/Stockings",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 3
+        },
+        {
+          "id": "outfits_leather",
+          "display_copy": "Leather",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 4
+        },
+        {
+          "id": "outfits_latex",
+          "display_copy": "Latex",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 5
+        },
+        {
+          "id": "outfits_masks_hoods",
+          "display_copy": "Masks/Hoods",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 6
+        },
+        {
+          "id": "outfits_gloves",
+          "display_copy": "Gloves",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 7
+        },
+        {
+          "id": "outfits_uniforms_costumes",
+          "display_copy": "Uniforms/Costumes",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 8
+        },
+        {
+          "id": "outfits_naked_sub_clothed_dom",
+          "display_copy": "Naked sub/Clothed dom",
+          "submissive_display_override": null,
+          "description": "A large power differential is created with a fully clothed dominant bossing around a naked submissive.",
+          "display_order": 9
+        },
+        {
+          "id": "outfits_cosplay",
+          "display_copy": "Cosplay",
+          "submissive_display_override": null,
+          "description": "Have sex while dressed and styled as a fictional character! Cosplay isn't always sexual, but if you and your partner have a character or characters in mind then this is a great way to kick off some role play.",
+          "display_order": 10
+        }
+      ]
+    },
+    {
+      "id": "domination_submission",
+      "name": "Domination/Submission",
+      "description": "Power dynamics come in all sorts of flavors, and you aren't bound to stay with just one.",
+      "display_order": 3,
+      "interests": [
+        {
+          "id": "domination_submission_domestic_servitude",
+          "display_copy": "Domestic servitude",
+          "submissive_display_override": null,
+          "description": "Forcing a submissive to act as a butler, waitress, maid, or housekeeper can add to a dynamic while also making chores more fun.",
+          "display_order": 1
+        },
+        {
+          "id": "domination_submission_orgasm_control",
+          "display_copy": "Orgasm control",
+          "submissive_display_override": null,
+          "description": "Typically done with an agreement that a submissive always needs permission to orgasm, which can often lead to begging and denial.",
+          "display_order": 2
+        },
+        {
+          "id": "domination_submission_daddy_mommy_dom",
+          "display_copy": "Daddy/Mommy dom",
+          "submissive_display_override": null,
+          "description": "A dynamic of gentle dominance that leans into \"daddy\" or \"mommy\" titles for the dominant. This is typically more outwardly loving then a typical D/S dynamic, with the dom simply knowing what is best, rather than punishing.",
+          "display_order": 3
+        },
+        {
+          "id": "domination_submission_pet_play",
+          "display_copy": "Pet play",
+          "submissive_display_override": null,
+          "description": "The power dynamic of a pet and owner, with the owner forcing the pet to do tricks, stay on all fours, wag their \"tail\" etc. With this dynamic, behaving as a human is punished while behaving as an animal is rewarded.",
+          "display_order": 4
+        },
+        {
+          "id": "domination_submission_sex_slave",
+          "display_copy": "Sex slave",
+          "submissive_display_override": null,
+          "description": "Full ownership of the submissive by the dominant.",
+          "display_order": 5
+        },
+        {
+          "id": "domination_submission_training",
+          "display_copy": "Training",
+          "submissive_display_override": null,
+          "description": "In a training dynamic the submissive is being taught how to perform their sexual submissiveness, is punished when they make mistakes and is rewarded when they perform well. Typically training goes hand in hand with an ultimate goal of some sort (perform a difficult sex act, lasting longer, or having perfect behavior as some examples).",
+          "display_order": 6
+        },
+        {
+          "id": "domination_submission_blackmail",
+          "display_copy": "Blackmail",
+          "submissive_display_override": null,
+          "description": "A blackmail dynamic would involve being forced to do things under the (fake) threat of having some sexual secrets revealed against the submissive's will.",
+          "display_order": 7
+        },
+        {
+          "id": "domination_submission_cnc",
+          "display_copy": "CNC",
+          "submissive_display_override": null,
+          "description": "Consensual non-consent is the practice of essentially simulating rape/sexual assault. Both partners agree ahead of time to role play the submissive not consenting, and then later the dominant takes the submissive by force while they actively resist.",
+          "display_order": 8
+        },
+        {
+          "id": "domination_submission_kidnapping",
+          "display_copy": "Kidnapping",
+          "submissive_display_override": null,
+          "description": "A simulated kidnapping, where the submissive is taken (consensually) by force, and held for use by the dominant for an extended period of time with no hope of escape.",
+          "display_order": 9
+        },
+        {
+          "id": "domination_submission_breeding",
+          "display_copy": "Breeding",
+          "submissive_display_override": null,
+          "description": "In a breeding dynamic, the submissive is being kept and used purely for their reproductive organs. They are \"means to an end\" in this fantasy, and are used quickly and thoroughly without regard for their pleasure.",
+          "display_order": 10
+        },
+        {
+          "id": "domination_submission_brat_taming",
+          "display_copy": "Brat taming",
+          "submissive_display_override": null,
+          "description": "A playful push-pull dynamic where a bratty submissive tests limits and the dominant corrects them. The fun is in the attitude at the start, and bringing the sub to heel with the consequences.",
+          "display_order": 11
+        },
+        {
+          "id": "domination_submission_slut_training",
+          "display_copy": "Slut training",
+          "submissive_display_override": null,
+          "description": "The submissive starts out roleplaying an inexperienced prude and through a training regimen is turned into a slut willing and able to do any sex act.",
+          "display_order": 12
+        }
+      ]
+    },
+    {
+      "id": "activities",
+      "name": "Activities",
+      "description": "Once you've started a scene, you may want to do some things besides sex. ",
+      "display_order": 4,
+      "interests": [
+        {
+          "id": "activities_giving_a_striptease",
+          "display_copy": "Giving a striptease",
+          "submissive_display_override": "Receiving a striptease",
+          "description": null,
+          "display_order": 1
+        },
+        {
+          "id": "activities_receiving_a_striptease",
+          "display_copy": "Receiving a striptease",
+          "submissive_display_override": "Giving a striptease",
+          "description": null,
+          "display_order": 2
+        },
+        {
+          "id": "activities_body_oil",
+          "display_copy": "Body oil",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 3
+        },
+        {
+          "id": "activities_praise",
+          "display_copy": "Praise",
+          "submissive_display_override": null,
+          "description": "Sincere flattery and praise of the submissive during sex when they are behaving correctly. Most commonly associated with \"good girl\" or \"good boy\", but you can go well beyond this.",
+          "display_order": 4
+        },
+        {
+          "id": "activities_massage",
+          "display_copy": "Massage",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 5
+        },
+        {
+          "id": "activities_edging",
+          "display_copy": "Edging",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 6
+        },
+        {
+          "id": "activities_sensory_deprivation",
+          "display_copy": "Sensory deprivation",
+          "submissive_display_override": null,
+          "description": "Taking the submissive's vision and hearing away for an extended period of time. Often paired with full body immobilization.",
+          "display_order": 7
+        },
+        {
+          "id": "activities_sensation_play",
+          "display_copy": "Sensation play",
+          "submissive_display_override": null,
+          "description": "The dominant playing with various types of sensations including: cold, heat, wartenberg wheels, wax, and feathers. Often paired with blindfolding.",
+          "display_order": 8
+        },
+        {
+          "id": "activities_tease_denial",
+          "display_copy": "Tease & denial",
+          "submissive_display_override": null,
+          "description": "The practice of bringing a submissive close to orgasm, but then not getting them over the edge repeatedly.",
+          "display_order": 9
+        },
+        {
+          "id": "activities_giving_ruined_orgasms",
+          "display_copy": "Giving ruined orgasms",
+          "submissive_display_override": "Receiving ruined orgasms",
+          "description": "A ruined orgasm is an orgasm that loses almost all of its pleasure because all stimulation was removed right at the \"moment of no return.\" Often used as a punishment.",
+          "display_order": 10
+        },
+        {
+          "id": "activities_forced_orgasms",
+          "display_copy": "Forced orgasms",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 11
+        },
+        {
+          "id": "activities_recording_to_watch_later",
+          "display_copy": "Recording to watch later",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 12
+        },
+        {
+          "id": "activities_food_play",
+          "display_copy": "Food play",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 13
+        },
+        {
+          "id": "activities_body_worship",
+          "display_copy": "Body worship",
+          "submissive_display_override": null,
+          "description": "The dominant choosing a specific part of their body and having the submissive rub, kiss, caress and otherwise devote themselves to it for an extended period.",
+          "display_order": 14
+        },
+        {
+          "id": "activities_sleep_play",
+          "display_copy": "Sleep play",
+          "submissive_display_override": null,
+          "description": "Waking a submissive for sex without asking for permission, or even having sex without fully waking them up. Consent needs to be discussed ahead of trying this.",
+          "display_order": 15
+        },
+        {
+          "id": "activities_forced_fantasy_revelation",
+          "display_copy": "Forced fantasy revelation",
+          "submissive_display_override": null,
+          "description": "A dominant forcing their submissive to reveal recent fantasies they've had. If they're not juicy enough, they can punish them until the truly depraved secrets come out.",
+          "display_order": 16
+        },
+        {
+          "id": "activities_findom",
+          "display_copy": "Findom",
+          "submissive_display_override": null,
+          "description": "Consensual involvement of money in the dynamic, with funds flowing to the dominant. ",
+          "display_order": 17
+        }
+      ]
+    },
+    {
+      "id": "pain_torture",
+      "name": "Pain/Torture",
+      "description": "Sadists and masochists alike have all sorts of options for having their fun.",
+      "display_order": 5,
+      "interests": [
+        {
+          "id": "pain_torture_inflicting_light_pain",
+          "display_copy": "Inflicting light pain",
+          "submissive_display_override": "Receiving light pain",
+          "description": "Light pain in this context is about the amount of pain from a bumped elbow, a minor sunburn, or a shower that is too hot but not scalding.",
+          "display_order": 1
+        },
+        {
+          "id": "pain_torture_inflicting_moderate_pain",
+          "display_copy": "Inflicting moderate pain",
+          "submissive_display_override": "Receiving medium pain",
+          "description": "Moderate pain in this context is about the amount of pain from a strong muscle cramp, a slap in the face, or swallowing with a sore throat.",
+          "display_order": 2
+        },
+        {
+          "id": "pain_torture_inflicting_heavy_pain",
+          "display_copy": "Inflicting heavy pain",
+          "submissive_display_override": "Receiving heavy pain",
+          "description": "Heavy pain in this context is about the amount of pain from a sprained ankle bearing weight, a strong dental pain, or a minor burn. Going above this level of pain is not recommended, even if both partners are consenting.",
+          "display_order": 3
+        },
+        {
+          "id": "pain_torture_spanking",
+          "display_copy": "Spanking",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 4
+        },
+        {
+          "id": "pain_torture_paddling",
+          "display_copy": "Paddling",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 5
+        },
+        {
+          "id": "pain_torture_hair_pulling",
+          "display_copy": "Hair pulling",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 6
+        },
+        {
+          "id": "pain_torture_choking",
+          "display_copy": "Choking",
+          "submissive_display_override": null,
+          "description": "Choking should always be performed without any real constriction of airways, applying pressure only to the jaw, collarbone, and sides of the neck.",
+          "display_order": 7
+        },
+        {
+          "id": "pain_torture_biting",
+          "display_copy": "Biting",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 8
+        },
+        {
+          "id": "pain_torture_nipple_torture",
+          "display_copy": "Nipple torture",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 9
+        },
+        {
+          "id": "pain_torture_hot_wax",
+          "display_copy": "Hot wax",
+          "submissive_display_override": null,
+          "description": "Pouring hot wax on a submissive, ensure the specific wax you are using is body safe, some candles melt at too high a temperature.",
+          "display_order": 10
+        },
+        {
+          "id": "pain_torture_slapping",
+          "display_copy": "Slapping",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 11
+        },
+        {
+          "id": "pain_torture_beating",
+          "display_copy": "Beating",
+          "submissive_display_override": null,
+          "description": "Hitting with a closed fist. Extreme care should be taken to not cause serious harm if you agree to try beating.",
+          "display_order": 12
+        },
+        {
+          "id": "pain_torture_scratching",
+          "display_copy": "Scratching",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 13
+        },
+        {
+          "id": "pain_torture_flogging",
+          "display_copy": "Flogging",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 14
+        },
+        {
+          "id": "pain_torture_light_tickling",
+          "display_copy": "Light tickling",
+          "submissive_display_override": null,
+          "description": "Tickling for a few seconds, enough to feel helpless but not enough to lose your breath.",
+          "display_order": 15
+        },
+        {
+          "id": "pain_torture_prolonged_tickling",
+          "display_copy": "Prolonged tickling",
+          "submissive_display_override": null,
+          "description": "Tickling for longer periods, enough to fully lose control.",
+          "display_order": 16
+        },
+        {
+          "id": "pain_torture_post_orgasm_torture",
+          "display_copy": "Post orgasm torture",
+          "submissive_display_override": null,
+          "description": "Continuing stimulation well past orgasm can be overstimulating to the point of torture.",
+          "display_order": 17
+        },
+        {
+          "id": "pain_torture_genital_torture",
+          "display_copy": "Genital torture",
+          "submissive_display_override": null,
+          "description": "Often called cock and ball torture, or clit torture depending on the submissive's gender, this can be slapping, constricting, or stretching the genitals in painful ways without causing lasting damage.",
+          "display_order": 18
+        },
+        {
+          "id": "pain_torture_ballbusting",
+          "display_copy": "Ballbusting",
+          "submissive_display_override": null,
+          "description": "A more extreme form of CBT involving strikes or kicks to the balls. It can cause real injury, and so requires controlled intensity to not go too far.",
+          "display_order": 19
+        },
+        {
+          "id": "pain_torture_bastinado",
+          "display_copy": "Bastinado",
+          "submissive_display_override": null,
+          "description": "Impact on the soles of the feet. It can be surprisingly intense, so start gentle, avoid joints, and treat it like a high-sensation area.",
+          "display_order": 20
+        },
+        {
+          "id": "pain_torture_leaving_hidden_marks",
+          "display_copy": "Leaving hidden marks",
+          "submissive_display_override": null,
+          "description": "Bruises and other evidence of your play being left behind in places generally hidden by clothes (i.e. on the butt, torso, pelvis)",
+          "display_order": 21
+        },
+        {
+          "id": "pain_torture_leaving_public_marks",
+          "display_copy": "Leaving public marks",
+          "submissive_display_override": null,
+          "description": "Bruises and other evidence of your play being left behind in places not generally hidden by clothes (i.e. on the butt, torso, pelvis)",
+          "display_order": 22
+        },
+        {
+          "id": "pain_torture_breath_play",
+          "display_copy": "Breath play",
+          "submissive_display_override": null,
+          "description": "Covering the submissive's mouth and nose, constricting their breath for a period of time. This is quite dangerous, and should be discussed beforehand.",
+          "display_order": 23
+        }
+      ]
+    },
+    {
+      "id": "degradation",
+      "name": "Degradation",
+      "description": "Psychological dominance is can be achieved by degrading a submissive, introducing a whole new avenue for play.",
+      "display_order": 6,
+      "interests": [
+        {
+          "id": "degradation_forced_begging",
+          "display_copy": "Forced begging",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 1
+        },
+        {
+          "id": "degradation_humiliation",
+          "display_copy": "Humiliation",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 2
+        },
+        {
+          "id": "degradation_body_appearance_degradation",
+          "display_copy": "Body/Appearance degradation",
+          "submissive_display_override": null,
+          "description": "Sharply criticizing the submissive's body, based on size, shape, or other factors. Often men want their penis size to be criticized specifically.",
+          "display_order": 3
+        },
+        {
+          "id": "degradation_humiliating_nicknames",
+          "display_copy": "Humiliating nicknames",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 4
+        },
+        {
+          "id": "degradation_spitting",
+          "display_copy": "Spitting",
+          "submissive_display_override": "Being spat on",
+          "description": null,
+          "display_order": 5
+        },
+        {
+          "id": "degradation_swallowing_cum",
+          "display_copy": "Swallowing cum",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 6
+        },
+        {
+          "id": "degradation_watersports_urine",
+          "display_copy": "Watersports (urine)",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 7
+        },
+        {
+          "id": "degradation_foot_worship",
+          "display_copy": "Foot worship",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 8
+        },
+        {
+          "id": "degradation_enemas",
+          "display_copy": "Enemas",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 9
+        },
+        {
+          "id": "degradation_ass_worship",
+          "display_copy": "Ass worship",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 11
+        },
+        {
+          "id": "degradation_self_degradation",
+          "display_copy": "Self degradation",
+          "submissive_display_override": null,
+          "description": "Forcing a submissive to degrade themself by threat of some punishment.",
+          "display_order": 12
+        },
+        {
+          "id": "degradation_forced_crossdressing",
+          "display_copy": "Forced crossdressing",
+          "submissive_display_override": null,
+          "description": "Often called \"feminization\" for men, this can be as simple as them putting on a thong, to as involved as them putting on a full \"sissy\" uniform.",
+          "display_order": 13
+        },
+        {
+          "id": "degradation_forced_deepthroat",
+          "display_copy": "Forced deepthroat",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 14
+        }
+      ]
+    },
+    {
+      "id": "restraints",
+      "name": "Restraints",
+      "description": "Physically restricting a submissive's movement and freedom is a core part of BDSM.",
+      "display_order": 7,
+      "interests": [
+        {
+          "id": "restraints_cuffs_wrist_ankle",
+          "display_copy": "Cuffs (wrist & ankle)",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 1
+        },
+        {
+          "id": "restraints_collars",
+          "display_copy": "Collars",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 2
+        },
+        {
+          "id": "restraints_blindfolds",
+          "display_copy": "Blindfolds",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 3
+        },
+        {
+          "id": "restraints_chastity",
+          "display_copy": "Chastity",
+          "submissive_display_override": null,
+          "description": "The practice of locking up submissive genitals in a cage or belt, and giving the dominant the key.",
+          "display_order": 4
+        },
+        {
+          "id": "restraints_full_immobilization",
+          "display_copy": "Full immobilization",
+          "submissive_display_override": null,
+          "description": "Bondage so restrictive that the submissive is unable to move at all.",
+          "display_order": 5
+        },
+        {
+          "id": "restraints_gags",
+          "display_copy": "Gags",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 6
+        },
+        {
+          "id": "restraints_mummification",
+          "display_copy": "Mummification",
+          "submissive_display_override": null,
+          "description": "Wrapping the submissive up tightly with their arms at their sides and legs together, often with saran wrap or bandages. Results in full immobilization and a constricted feeling.",
+          "display_order": 7
+        },
+        {
+          "id": "restraints_suspension_bondage",
+          "display_copy": "Suspension bondage",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 8
+        },
+        {
+          "id": "restraints_rope_bondage",
+          "display_copy": "Rope bondage",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 10
+        },
+        {
+          "id": "restraints_chains",
+          "display_copy": "Chains",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 11
+        }
+      ]
+    },
+    {
+      "id": "toys",
+      "name": "Toys",
+      "description": "Bringing some accessories into your play is a great way to try something new, and there are a variety of options.",
+      "display_order": 8,
+      "interests": [
+        {
+          "id": "toys_vibrators",
+          "display_copy": "Vibrators",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 1
+        },
+        {
+          "id": "toys_dildos",
+          "display_copy": "Dildos",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 2
+        },
+        {
+          "id": "toys_suction_toys",
+          "display_copy": "Suction toys",
+          "submissive_display_override": null,
+          "description": "A suction-style stim toy (often for the clitoris) that creates pulsing, focused sensation. People who like intense, targeted stimulation often love these.",
+          "display_order": 3
+        },
+        {
+          "id": "toys_nipple_clamps",
+          "display_copy": "Nipple clamps",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 4
+        },
+        {
+          "id": "toys_cock_rings",
+          "display_copy": "Cock rings",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 5
+        },
+        {
+          "id": "toys_strap_on_dildos",
+          "display_copy": "Strap-on dildos",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 6
+        },
+        {
+          "id": "toys_butt_plugs",
+          "display_copy": "Butt plugs",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 7
+        },
+        {
+          "id": "toys_anal_beads",
+          "display_copy": "Anal beads",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 8
+        },
+        {
+          "id": "toys_anal_hooks",
+          "display_copy": "Anal hooks",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 9
+        },
+        {
+          "id": "toys_prostate_massager",
+          "display_copy": "Prostate massager",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 10
+        },
+        {
+          "id": "toys_urethral_sounds",
+          "display_copy": "Urethral sounds",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 11
+        },
+        {
+          "id": "toys_remote_control_vibrator",
+          "display_copy": "Remote control vibrator",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 12
+        }
+      ]
+    },
+    {
+      "id": "role_play",
+      "name": "Role play",
+      "description": "Another fun way to mix things up is to fully pretend to be different people, in novel situations that involve a power dynamic.",
+      "display_order": 9,
+      "interests": [
+        {
+          "id": "role_play_interrogation",
+          "display_copy": "Interrogation",
+          "submissive_display_override": null,
+          "description": "An interrogation is one of the easiest role plays to set up, simply come up with some secret the submissive knows and the dominant doesn't, and then have the dominant work to extract that information however they can.",
+          "display_order": 1
+        },
+        {
+          "id": "role_play_teacher_student",
+          "display_copy": "Teacher/Student",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 2
+        },
+        {
+          "id": "role_play_boss_employee",
+          "display_copy": "Boss/Employee",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 3
+        },
+        {
+          "id": "role_play_home_intruder",
+          "display_copy": "Home intruder",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 4
+        },
+        {
+          "id": "role_play_pet_owner",
+          "display_copy": "Pet/Owner",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 5
+        },
+        {
+          "id": "role_play_pony_play",
+          "display_copy": "Pony play",
+          "submissive_display_override": null,
+          "description": "A subtype of pet play with a strong fanbase, pony play involves forcing the submissive to walk like a pony in an upright posture with specific headgear, shoes, and accessories, or risk being cropped on the rear.",
+          "display_order": 6
+        },
+        {
+          "id": "role_play_primal",
+          "display_copy": "Primal",
+          "submissive_display_override": null,
+          "description": "A raw, animal-energy vibe - growling, chasing, pinning, playful struggle, and instinct. Many people like it because it feels less scripted and more physical.",
+          "display_order": 7
+        },
+        {
+          "id": "role_play_medical",
+          "display_copy": "Medical",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 8
+        }
+      ]
+    },
+    {
+      "id": "exhibitionism_group_sex",
+      "name": "Exhibitionism/Group sex",
+      "description": "Involving other people in your sex life can be an additional thrill, and there are some options that don't require another person in your bedroom directly.",
+      "display_order": 10,
+      "interests": [
+        {
+          "id": "exhibitionism_group_sex_pretending_to_involve_others",
+          "display_copy": "Pretending to involve others",
+          "submissive_display_override": null,
+          "description": "Scratch the itch of exhibitionism with just the two of you, this can be just talking about involving others, or blindfolding the submissive and the dominant pretending to be someone else.",
+          "display_order": 1
+        },
+        {
+          "id": "exhibitionism_group_sex_using_a_mirror",
+          "display_copy": "Using a mirror",
+          "submissive_display_override": null,
+          "description": "Be voyeurs on yourselves using a cleverly placed mirror.",
+          "display_order": 2
+        },
+        {
+          "id": "exhibitionism_group_sex_public_play",
+          "display_copy": "Public play",
+          "submissive_display_override": null,
+          "description": "Risky-feeling flirting or teasing in places where it's legal like private parties, or BDSM clubs, taking care to not expose unconsenting strangers.",
+          "display_order": 3
+        },
+        {
+          "id": "exhibitionism_group_sex_recording_and_uploading",
+          "display_copy": "Recording and uploading",
+          "submissive_display_override": null,
+          "description": "Posting some amateur pornography can be a great rush, but only when both partners are up for it.",
+          "display_order": 4
+        },
+        {
+          "id": "exhibitionism_group_sex_involving_an_online_forum",
+          "display_copy": "Involving an online forum",
+          "submissive_display_override": null,
+          "description": "This can be as simple as posting \"I've got my submissive tied up, I'll do the top voted suggestion to them\" on an anonymous forum, but can also be more involved. Giving anonymous strangers some input into your dynamic can satisfy some exhibitionist urges without re",
+          "display_order": 5
+        },
+        {
+          "id": "exhibitionism_group_sex_threesome_with_woman",
+          "display_copy": "Threesome with woman",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 6
+        },
+        {
+          "id": "exhibitionism_group_sex_threesome_with_man",
+          "display_copy": "Threesome with man",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 7
+        },
+        {
+          "id": "exhibitionism_group_sex_cuckolding_with_woman",
+          "display_copy": "Cuckolding with woman",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 8
+        },
+        {
+          "id": "exhibitionism_group_sex_cuckolding_with_man",
+          "display_copy": "Cuckolding with man",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 9
+        },
+        {
+          "id": "exhibitionism_group_sex_forced_bisexuality",
+          "display_copy": "Forced bisexuality",
+          "submissive_display_override": null,
+          "description": "\"Forcing\" the submissive into sexual acts with a gender they are not typically attracted to (all parties consenting ahead of time of course).",
+          "display_order": 10
+        },
+        {
+          "id": "exhibitionism_group_sex_orgy",
+          "display_copy": "Orgy",
+          "submissive_display_override": null,
+          "description": null,
+          "display_order": 11
+        }
+      ]
+    }
+  ]
+}

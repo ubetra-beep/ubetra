@@ -1,0 +1,46 @@
+# Secrets & local env
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Runtime data (never commit user DBs or generated keys)
+backend/data/*.db
+backend/data/*.db-*
+backend/data/vapid.json
+*.db
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.cursor/
+
+# Local deploy overrides & personal home-lab notes (not for public)
+docker-compose.override.yml
+deploy/adguard/
+deploy/DUCKDNS_HOME_WIFI.md
+deploy/fix_duckdns_ip.py
+deploy/remote-rebuild.sh
+deploy/remote-up.sh
+deploy/caddy/Caddyfile.edge
+deploy/check-catalog.sh
+
+# Build / transfer artifacts
+*.tar
+ubetra-deploy.tar
+dist/
+build/
+
+# Misc local
+_tmp*
+*.log

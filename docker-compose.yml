@@ -1,0 +1,20 @@
+services:
+  ubetra:
+    build: .
+    image: ${UBETRA_IMAGE:-ubetra:local}
+    container_name: ubetra
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      UBETRA_ALLOW_PUBLIC_REGISTER: ${UBETRA_ALLOW_PUBLIC_REGISTER:-true}
+      UBETRA_MFA_REQUIRED: ${UBETRA_MFA_REQUIRED:-false}
+      UBETRA_PUBLIC_APP_URL: ${UBETRA_PUBLIC_APP_URL:-http://127.0.0.1:8000}
+      UBETRA_DATABASE_URL: sqlite:////app/backend/data/ubetra.db
+    volumes:
+      - ubetra-data:/app/backend/data
+    ports:
+      - "${UBETRA_HOST_PORT:-8000}:8000"
+
+volumes:
+  ubetra-data:

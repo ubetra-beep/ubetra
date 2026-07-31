@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#1a1a1a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Space" />
+    <meta name="description" content="Private shared planner" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <title>Shared space</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="top-bar" class="top-bar hidden">
+        <div class="brand-cluster">
+          <div class="brand" id="app-brand" tabindex="0" role="button">Shared space</div>
+          <div id="dom-goal-meters" class="dom-goal-meters hidden" aria-live="polite"></div>
+        </div>
+        <div class="top-actions">
+          <button id="install-pwa-btn" class="ghost-btn hidden" type="button">Install app</button>
+          <button id="settings-btn" class="ghost-btn hidden" type="button">Settings</button>
+          <button id="logout-btn" class="ghost-btn hidden" type="button">Log out</button>
+        </div>
+      </header>
+      <main id="view" class="view"></main>
+      <nav id="bottom-nav" class="bottom-nav hidden" aria-label="Main navigation"></nav>
+    </div>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

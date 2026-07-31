@@ -1,0 +1,14 @@
+# Example Caddy site block for a self-hosted UBETRA install.
+# Replace YOUR_DOMAIN with your hostname (DuckDNS, Cloudflare, etc.).
+# Point the reverse_proxy host at your container or uvicorn process.
+
+YOUR_DOMAIN {
+  reverse_proxy ubetra:8000
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    -Server
+  }
+}
