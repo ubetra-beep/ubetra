@@ -76,12 +76,14 @@ Optional: set `UBETRA_HOST_PORT=18000` in the environment (or a local `docker-co
 
 ### Pull a published image (when available)
 
-After GitHub Packages publishes builds:
+After the GHCR publish workflow is enabled:
 
 ```bash
 export UBETRA_IMAGE=ghcr.io/ubetra-beep/ubetra:0.1.0
 docker compose up -d
 ```
+
+Until then, use **build from this repo** above. The workflow file lives at [`docs/docker-publish.yml`](docs/docker-publish.yml) — copy it to `.github/workflows/` once the GitHub CLI token has the `workflow` scope.
 
 ---
 
