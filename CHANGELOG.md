@@ -3,6 +3,15 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.75] — 2026-07-31
+
+### Changed
+- Chat encryption key is **server-shared** per dynamic (same pattern as the shared AI key) — turn it on once; every signed-in device syncs automatically
+- Settings copy: “Encrypted chat (shared key)” (honest: the server can decrypt; no more redeem codes required for new phones)
+
+### Fixed
+- Multi-device encrypted chat no longer depends on one-time share/redeem codes
+
 ## [0.74] — 2026-07-31
 
 ### Fixed

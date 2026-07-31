@@ -319,7 +319,9 @@ async function api(path, options = {}) {
         : Array.isArray(detail)
           ? detail.map((item) => item.msg || item).join(", ")
           : data?.error || text || `Request failed (${response.status})`;
-    throw new Error(message);
+    const err = new Error(message);
+    err.status = response.status;
+    throw err;
   }
   return data;
 }
@@ -1181,7 +1183,7 @@ function encryptionUnavailableError() {
 
 function e2eKeyMissingError() {
   const err = new Error(
-    "This device has no chat encryption key. On a device where chat already works: Settings → Privacy → Copy link & code, then redeem that code here (same account or partner)."
+    "No shared chat encryption key yet. Turn on Encrypted chat in Settings → Privacy (or Chat ☰) once — every signed-in device will pick it up automatically."
   );
   err.code = "E2E_KEY_MISSING";
   return err;
@@ -1203,34 +1205,88 @@ function base64ToBytes(b64) {
   return bytes;
 }
 
+async function importChatKeyRaw(storedB64) {
+  const raw = base64ToBytes(storedB64);
+  return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
 async function getChatCryptoKey(dynamicId) {
   if (!cryptoSubtleAvailable()) throw encryptionUnavailableError();
   const stored = localStorage.getItem(chatKeyStorage(dynamicId));
   if (!stored) return null;
-  const raw = base64ToBytes(stored);
-  return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+  return importChatKeyRaw(stored);
 }
 
-/** Create a brand-new key (only when first enabling E2E or explicitly rotating). */
+/** Create a brand-new key and cache it locally (caller uploads to server). */
 async function createChatCryptoKey(dynamicId) {
   if (!cryptoSubtleAvailable()) throw encryptionUnavailableError();
   const bytes = crypto.getRandomValues(new Uint8Array(32));
-  localStorage.setItem(chatKeyStorage(dynamicId), bytesToBase64(bytes));
-  return crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+  const stored = bytesToBase64(bytes);
+  localStorage.setItem(chatKeyStorage(dynamicId), stored);
+  return { key: await importChatKeyRaw(stored), raw: stored };
 }
 
-/**
- * Return the device key. Never invents a second key for an already-encrypted dynamic —
- * that used to break decrypt across phones after signing in elsewhere.
- */
+async function fetchSharedChatKey(dynamicId) {
+  try {
+    const res = await api(`/dynamics/${dynamicId}/chat/key`);
+    if (res?.key) {
+      localStorage.setItem(chatKeyStorage(dynamicId), res.key);
+      return res.key;
+    }
+  } catch (err) {
+    if (err.status === 404 || err.status === 400) return null;
+    throw err;
+  }
+  return null;
+}
+
+async function uploadSharedChatKey(dynamicId, keyB64) {
+  try {
+    await api(`/dynamics/${dynamicId}/chat/key`, {
+      method: "PUT",
+      body: JSON.stringify({ key: keyB64 }),
+    });
+    return true;
+  } catch (err) {
+    // Another device already set a different key — use theirs instead.
+    if (err.status === 409) {
+      const fetched = await fetchSharedChatKey(dynamicId);
+      return !!fetched;
+    }
+    throw err;
+  }
+}
+
+const syncedChatKeys = new Set();
+
 async function ensureChatCryptoKey(dynamicId, { createIfMissing = false } = {}) {
-  const existing = await getChatCryptoKey(dynamicId);
-  if (existing) return existing;
+  if (!cryptoSubtleAvailable()) throw encryptionUnavailableError();
+
+  let stored = localStorage.getItem(chatKeyStorage(dynamicId));
+  if (stored) {
+    if (!syncedChatKeys.has(dynamicId)) {
+      await uploadSharedChatKey(dynamicId, stored).catch(() => false);
+      syncedChatKeys.add(dynamicId);
+    }
+    return importChatKeyRaw(localStorage.getItem(chatKeyStorage(dynamicId)) || stored);
+  }
+
+  stored = await fetchSharedChatKey(dynamicId);
+  if (stored) {
+    syncedChatKeys.add(dynamicId);
+    return importChatKeyRaw(stored);
+  }
+
   if (!createIfMissing) throw e2eKeyMissingError();
-  return createChatCryptoKey(dynamicId);
+
+  const created = await createChatCryptoKey(dynamicId);
+  await uploadSharedChatKey(dynamicId, created.raw);
+  syncedChatKeys.add(dynamicId);
+  return created.key;
 }
 
 async function encryptChatText(dynamicId, text) {
+  await ensureChatCryptoKey(dynamicId, { createIfMissing: false });
   const key = await getChatCryptoKey(dynamicId);
   if (!key) throw e2eKeyMissingError();
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -1246,8 +1302,16 @@ async function decryptChatText(dynamicId, payload) {
   if (!cryptoSubtleAvailable()) {
     return "[Encryption unavailable — open Settings]";
   }
-  const key = await getChatCryptoKey(dynamicId);
-  if (!key) return "[No key on this device — redeem in Settings → Privacy]";
+  let key = await getChatCryptoKey(dynamicId);
+  if (!key) {
+    try {
+      await ensureChatCryptoKey(dynamicId, { createIfMissing: false });
+      key = await getChatCryptoKey(dynamicId);
+    } catch {
+      /* leave key null */
+    }
+  }
+  if (!key) return "[Waiting for shared encryption key…]";
   try {
     const packed = base64ToBytes(payload);
     const iv = packed.slice(0, 12);
@@ -1255,7 +1319,7 @@ async function decryptChatText(dynamicId, payload) {
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
     return new TextDecoder().decode(plain);
   } catch {
-    return "[Unable to decrypt — wrong key on this device. Redeem the code from a working device.]";
+    return "[Unable to decrypt — shared key may not match this ciphertext.]";
   }
 }
 
@@ -11436,6 +11500,11 @@ function renderChat(dynamicId) {
   ])
     .then(async ([chatSettings, messages]) => {
       settings = chatSettings;
+      if (chatSettings.e2e_enabled) {
+        await ensureChatCryptoKey(id, {
+          createIfMissing: !chatSettings.key_configured,
+        }).catch(() => null);
+      }
       if (chatSettings.push_enabled) {
         ensureChatPushEnabled().catch(() => {});
       }
@@ -11686,7 +11755,7 @@ function renderChat(dynamicId) {
       );
       settingsPanel.append(el("label", {}, ["Server cache (days worth of hours, if not forever)", expireHours]));
       settingsPanel.append(el("p", { className: "muted" }, "Default is 30 days (720 hours) so offline phones and other logged-in devices can sync. Encrypted messages stay as ciphertext on the server."));
-      settingsPanel.append(el("label", { className: "checkbox-label" }, [e2eMode, " End-to-end encryption"]));
+      settingsPanel.append(el("label", { className: "checkbox-label" }, [e2eMode, " Encrypted chat (shared key)"]));
       settingsPanel.append(el("label", { className: "checkbox-label" }, [chatPushEnabled, " Push notifications"]));
       appendMaybeLocked(
         el("label", { className: "checkbox-label" }, [systemEvents, " Post activity logs to chat"]),
@@ -11710,8 +11779,9 @@ function renderChat(dynamicId) {
                 if (!cryptoSubtleAvailable()) {
                   throw encryptionUnavailableError();
                 }
-                // Only mint a key the first time E2E is turned on on this device.
-                await ensureChatCryptoKey(id, { createIfMissing: !hasChatCryptoKey(id) && !settings.e2e_enabled });
+                await ensureChatCryptoKey(id, {
+                  createIfMissing: !settings.e2e_enabled || !settings.key_configured,
+                });
               }
               settings = await api(`/dynamics/${id}/chat/settings`, {
                 method: "PUT",
@@ -11769,37 +11839,24 @@ function renderChat(dynamicId) {
       const headerWrap = el("div", { className: "chat-header-wrap" }, [header, settingsPanel]);
 
       const e2eDeviceBanner = el("div", { className: "e2e-key-banner warn-banner hidden" });
-      const redeemInline = el("input", {
-        placeholder: "8-character code from your other device",
-        autocomplete: "off",
-      });
-      const redeemInlineBtn = el("button", {
-        type: "button",
-        className: "primary-btn",
-        onClick: async () => {
-          error.classList.add("hidden");
-          const code = redeemInline.value.trim();
-          if (!code) return;
-          try {
-            const result = await api(`/dynamics/${id}/chat/key-redeem`, {
-              method: "POST",
-              body: JSON.stringify({ code: code.toUpperCase() }),
-            });
-            localStorage.setItem(chatKeyStorage(id), result.key);
-            redeemInline.value = "";
-            refreshE2eDeviceBanner();
-            await refresh();
-          } catch (err) {
-            error.textContent = err.message;
-            error.classList.remove("hidden");
-          }
-        },
-      }, "Redeem key on this device");
       const e2eDevicePanel = el("div", { className: "card stack e2e-device-panel hidden" }, [
         e2eDeviceBanner,
-        el("p", { className: "muted" }, "Signing in on a new phone/browser does not copy the encryption key. Share a one-time code from a device that already works, then redeem it here."),
-        el("label", {}, ["One-time code", redeemInline]),
-        redeemInlineBtn,
+        el("p", { className: "muted" }, "Encrypted chat uses a shared key on the server (like the AI key). Sign in on this device and open chat — it should sync automatically."),
+        el("button", {
+          type: "button",
+          className: "primary-btn",
+          onClick: async () => {
+            error.classList.add("hidden");
+            try {
+              await ensureChatCryptoKey(id, { createIfMissing: false });
+              refreshE2eDeviceBanner();
+              await refresh();
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, "Sync encryption key"),
         el("button", {
           type: "button",
           className: "ghost-btn",
@@ -11807,16 +11864,23 @@ function renderChat(dynamicId) {
         }, "Open Privacy settings"),
       ]);
 
-      function refreshE2eDeviceBannerImpl() {
+      async function refreshE2eDeviceBannerImpl() {
+        if (!settings.e2e_enabled) {
+          e2eDevicePanel.classList.add("hidden");
+          return;
+        }
+        if (!hasChatCryptoKey(id)) {
+          await ensureChatCryptoKey(id, { createIfMissing: false }).catch(() => null);
+        }
         const needsKey = !!settings.e2e_enabled && !hasChatCryptoKey(id);
         e2eDevicePanel.classList.toggle("hidden", !needsKey);
         if (needsKey) {
           e2eDeviceBanner.classList.remove("hidden");
-          e2eDeviceBanner.textContent = "Chat encryption is on, but this device has no key — messages will show as unable to decrypt until you redeem.";
+          e2eDeviceBanner.textContent = "Encrypted chat is on, but this device has not synced the shared key yet.";
         }
       }
       refreshE2eDeviceBanner = refreshE2eDeviceBannerImpl;
-      refreshE2eDeviceBanner();
+      await refreshE2eDeviceBanner();
 
       const screen = el("div", { className: "chat-screen" }, [
         headerWrap,
@@ -12058,6 +12122,7 @@ function renderSettings() {
       const redeemCode = el("input", { placeholder: "8-character code" });
       redeemCode.value = initialRedeemCode;
       const shareCodeDisplay = el("p", { className: "muted hidden" });
+      let privacyBaselineMeta = { keyConfigured: false };
 
       dynamics.forEach((d) => {
         privacyDynamic.appendChild(el("option", { value: d.id }, formatDynamicTitle(d)));
@@ -12075,43 +12140,33 @@ function renderSettings() {
         const hasKey = !!(dynamicId && localStorage.getItem(chatKeyStorage(dynamicId)));
         const e2eOn = !!e2eMode.checked;
         e2eKeyBanner.classList.remove("ok-banner", "warn-banner", "muted");
+        shareKeySection.classList.add("hidden");
+        redeemKeySection.classList.add("hidden");
+        if (e2eAdvancedReShare) e2eAdvancedReShare.classList.add("hidden");
         if (!dynamicId) {
           e2eKeyBanner.classList.add("muted");
           e2eKeyBanner.textContent = "Join a dynamic to set up chat encryption.";
-          shareKeySection.classList.add("hidden");
-          redeemKeySection.classList.add("hidden");
-          if (typeof e2eAdvancedReShare !== "undefined" && e2eAdvancedReShare) e2eAdvancedReShare.classList.add("hidden");
           return;
         }
         if (!e2eOn) {
           e2eKeyBanner.classList.add("muted");
-          e2eKeyBanner.textContent = "End-to-end encryption is off. Turn it on, then share or redeem a key with your partner.";
-          shareKeySection.classList.remove("hidden");
-          redeemKeySection.classList.remove("hidden");
-          if (e2eAdvancedReShare) e2eAdvancedReShare.classList.add("hidden");
+          e2eKeyBanner.textContent = "Encrypted chat is off. Turn it on once — the key is shared on the server for every signed-in device (same idea as the AI key).";
           return;
         }
         if (!hasCrypto) {
           e2eKeyBanner.classList.add("warn-banner");
-          e2eKeyBanner.textContent = "Web Crypto unavailable — open the app over HTTPS (or localhost) to use E2E text.";
-          shareKeySection.classList.add("hidden");
-          redeemKeySection.classList.add("hidden");
-          if (e2eAdvancedReShare) e2eAdvancedReShare.classList.add("hidden");
+          e2eKeyBanner.textContent = "Web Crypto unavailable — open the app over HTTPS (or localhost) to use encrypted text.";
           return;
         }
         if (hasKey) {
           e2eKeyBanner.classList.add("ok-banner");
-          e2eKeyBanner.textContent = "Encryption key is active on this device. Partner messages can decrypt here.";
-          shareKeySection.classList.add("hidden");
-          redeemKeySection.classList.add("hidden");
+          e2eKeyBanner.textContent = "Shared encryption key is active. Any device signed into this dynamic can decrypt chat.";
           if (e2eAdvancedReShare) e2eAdvancedReShare.classList.remove("hidden");
           return;
         }
         e2eKeyBanner.classList.add("warn-banner");
-        e2eKeyBanner.textContent = "E2E is on, but this device has no key yet. Share a code from the other device, or redeem a code below.";
-        shareKeySection.classList.remove("hidden");
-        redeemKeySection.classList.remove("hidden");
-        if (e2eAdvancedReShare) e2eAdvancedReShare.classList.add("hidden");
+        e2eKeyBanner.textContent = "Encrypted chat is on, but this device has not synced the shared key yet. Save privacy settings or open Chat to sync.";
+        if (e2eAdvancedReShare) e2eAdvancedReShare.classList.remove("hidden");
       }
 
       shareKeySection.append(
@@ -12203,8 +12258,8 @@ function renderSettings() {
       );
 
       e2eAdvancedReShare = el("details", { className: "stack hidden" }, [
-        el("summary", {}, "Advanced — re-share, redeem, or replace key"),
-        el("p", { className: "muted" }, "New phone or browser? Redeem a code from a device that already works — do not create a new key or old messages stay undecryptable. Only generate/share a new key if you intentionally rotate."),
+        el("summary", {}, "Legacy — one-time share codes"),
+        el("p", { className: "muted" }, "Optional. New devices normally sync the shared key automatically when you sign in. Codes are only needed if an old device never uploaded its key."),
         el("button", {
           className: "ghost-btn",
           type: "button",
@@ -12310,7 +12365,7 @@ function renderSettings() {
         partnerEmail.value = contact.email || "";
         partnerPhone.value = contact.phone || "";
         return api(`/dynamics/${dynamicId}/chat/settings`)
-          .then((chatSettings) => {
+          .then(async (chatSettings) => {
             retainHistory.checked = chatSettings.retain_history;
             e2eMode.checked = chatSettings.e2e_enabled;
             expireHours.value = String(chatSettings.expire_hours || 720);
@@ -12320,6 +12375,12 @@ function renderSettings() {
             privacyStatus.textContent = chatSettings.retain_history
               ? "Messages stay on the server forever (all your devices can sync anytime)."
               : `Messages stay on the server for ${chatSettings.expire_hours || 720} hour(s) so offline / other devices can catch up, then auto-delete.`;
+            if (chatSettings.e2e_enabled) {
+              await ensureChatCryptoKey(dynamicId, {
+                createIfMissing: !chatSettings.key_configured,
+              }).catch(() => null);
+            }
+            privacyBaselineMeta = { keyConfigured: !!chatSettings.key_configured };
             refreshE2eKeyUi();
             if (typeof snapshotPrivacyBaseline === "function") {
               snapshotPrivacyBaseline();
@@ -12341,9 +12402,8 @@ function renderSettings() {
       async function ensureE2eBeforeShare() {
         const dynamicId = privacyDynamic.value;
         if (!dynamicId) throw new Error("Select a dynamic first");
-        // Never invent a second key while E2E is already on — redeem from a working device instead.
         await ensureChatCryptoKey(dynamicId, {
-          createIfMissing: !hasChatCryptoKey(dynamicId) && !e2eMode.checked,
+          createIfMissing: !e2eMode.checked || !privacyBaselineMeta.keyConfigured,
         });
         if (!e2eMode.checked) {
           e2eMode.checked = true;
@@ -12860,7 +12920,7 @@ function renderSettings() {
       });
       stack.appendChild(el("div", { className: "card stack" }, [
           el("h2", {}, "Privacy & security"),
-          el("p", { className: "muted" }, "Partner chat privacy, auto-expire, and end-to-end encryption. Keys never leave your devices except via one-time share codes."),
+          el("p", { className: "muted" }, "Partner chat privacy, auto-expire, and encrypted chat. The encryption key is shared on the server for your dynamic (like the AI key) so every signed-in device can decrypt."),
           dynamics.length
             ? el("label", {}, ["Dynamic", privacyDynamic])
             : el("p", { className: "muted" }, "Join a dynamic to configure chat."),
@@ -12870,8 +12930,8 @@ function renderSettings() {
             children: el("label", { className: "checkbox-label" }, [retainHistory, " Keep forever on server (no auto-delete)"]),
           }),
           el("label", {}, ["Server cache duration (offline & multi-device sync)", expireHours]),
-          el("p", { className: "muted" }, "Default 30 days. Messages are stored on the server (ciphertext if E2E is on) so another phone or an offline device can catch up when it reconnects."),
-          el("label", { className: "checkbox-label" }, [e2eMode, " End-to-end encryption"]),
+          el("p", { className: "muted" }, "Default 30 days. Messages are stored on the server (ciphertext when encryption is on) so another phone or an offline device can catch up when it reconnects."),
+          el("label", { className: "checkbox-label" }, [e2eMode, " Encrypted chat (shared key)"]),
           el("label", { className: "checkbox-label" }, [chatPushEnabled, " Push notifications for this dynamic's chat"]),
           el("label", { className: "checkbox-label" }, [pushDeviceEnabled, " Notify this device when partner sends a chat message"]),
           pushDeviceStatus,
@@ -12884,7 +12944,7 @@ function renderSettings() {
           el(
             "p",
             { className: "muted" },
-            "Text E2E needs Web Crypto (HTTPS or localhost). Images are not E2E-encrypted the same way, so they still send when crypto is unavailable."
+            "Encrypted text needs Web Crypto (HTTPS or localhost). Anyone with access to this server’s database can decrypt chat — same trust model as the shared AI key."
           ),
           e2eKeyBanner,
           shareKeySection,
@@ -12897,6 +12957,7 @@ function renderSettings() {
         privacyBaseline = {
           retain: retainHistory.checked,
           e2e: e2eMode.checked,
+          keyConfigured: !!privacyBaselineMeta.keyConfigured || hasChatCryptoKey(privacyDynamic.value),
           expire: expireHours.value,
           system: systemEvents.checked,
           push: chatPushEnabled.checked,
@@ -12961,7 +13022,7 @@ function renderSettings() {
           if (e2eMode.checked) {
             if (!cryptoSubtleAvailable()) throw encryptionUnavailableError();
             await ensureChatCryptoKey(dynamicId, {
-              createIfMissing: !hasChatCryptoKey(dynamicId) && !privacyBaseline?.e2e,
+              createIfMissing: !privacyBaseline?.e2e || !privacyBaseline?.keyConfigured,
             });
           }
           const updated = await api(`/dynamics/${dynamicId}/chat/settings`, {

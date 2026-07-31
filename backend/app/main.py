@@ -42,7 +42,7 @@ HAR_CATALOG = Path(
 
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
-app = FastAPI(title="UBETRA", version="0.74")
+app = FastAPI(title="UBETRA", version="0.75")
 
 app.add_middleware(
     CORSMiddleware,

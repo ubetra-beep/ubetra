@@ -402,6 +402,7 @@ class TagPresetsUpdate(BaseModel):
 class ChatSettingsOut(BaseModel):
     retain_history: bool
     e2e_enabled: bool
+    key_configured: bool = False
     expire_hours: int
     system_events: bool
     push_enabled: bool
@@ -478,6 +479,15 @@ class ChatKeyRedeemIn(BaseModel):
 
 class ChatKeyRedeemOut(BaseModel):
     key: str
+
+
+class ChatSharedKeyOut(BaseModel):
+    key: str
+    configured: bool = True
+
+
+class ChatSharedKeyIn(BaseModel):
+    key: str = Field(min_length=16, max_length=4096)
 
 
 class ChatMessageCreate(BaseModel):

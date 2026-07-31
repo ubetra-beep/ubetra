@@ -34,6 +34,8 @@ from ..schemas import (
     ChatMessageOut,
     ChatSettingsOut,
     ChatSettingsUpdate,
+    ChatSharedKeyIn,
+    ChatSharedKeyOut,
     ImageUnlockResolve,
     SettingsRequestCreate,
     SettingsRequestResolve,
@@ -113,6 +115,21 @@ def _new_share_code(db: Session) -> str:
     )
 
 
+def _chat_settings_out(dynamic: Dynamic, membership: Membership) -> ChatSettingsOut:
+    return ChatSettingsOut(
+        retain_history=bool(dynamic.chat_retain_history),
+        e2e_enabled=bool(dynamic.chat_e2e_enabled),
+        key_configured=bool((getattr(dynamic, "chat_shared_key", None) or "").strip()),
+        expire_hours=int(dynamic.chat_expire_hours or DEFAULT_CHAT_EXPIRE_HOURS),
+        system_events=bool(getattr(dynamic, "chat_system_events", True)),
+        push_enabled=bool(getattr(dynamic, "chat_push_enabled", True)),
+        you_are_dominant=is_dominant(membership),
+        chastity_sub_can_delete_breaks=bool(
+            getattr(dynamic, "chastity_sub_can_delete_breaks", True)
+        ),
+    )
+
+
 @router.get("/dynamics/{dynamic_id}/chat/settings", response_model=ChatSettingsOut)
 def get_chat_settings(
     dynamic_id: str,
@@ -123,31 +140,7 @@ def get_chat_settings(
     dynamic = db.get(Dynamic, dynamic_id)
     if dynamic is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
-    return ChatSettingsOut(
-        retain_history=bool(dynamic.chat_retain_history),
-        e2e_enabled=bool(dynamic.chat_e2e_enabled),
-        expire_hours=int(dynamic.chat_expire_hours or DEFAULT_CHAT_EXPIRE_HOURS),
-        system_events=bool(getattr(dynamic, "chat_system_events", True)),
-        push_enabled=bool(getattr(dynamic, "chat_push_enabled", True)),
-        you_are_dominant=is_dominant(membership),
-        chastity_sub_can_delete_breaks=bool(
-            getattr(dynamic, "chastity_sub_can_delete_breaks", True)
-        ),
-    )
-
-
-def _chat_settings_out(dynamic: Dynamic, membership: Membership) -> ChatSettingsOut:
-    return ChatSettingsOut(
-        retain_history=bool(dynamic.chat_retain_history),
-        e2e_enabled=bool(dynamic.chat_e2e_enabled),
-        expire_hours=int(dynamic.chat_expire_hours or DEFAULT_CHAT_EXPIRE_HOURS),
-        system_events=bool(getattr(dynamic, "chat_system_events", True)),
-        push_enabled=bool(getattr(dynamic, "chat_push_enabled", True)),
-        you_are_dominant=is_dominant(membership),
-        chastity_sub_can_delete_breaks=bool(
-            getattr(dynamic, "chastity_sub_can_delete_breaks", True)
-        ),
-    )
+    return _chat_settings_out(dynamic, membership)
 
 
 @router.put("/dynamics/{dynamic_id}/chat/settings", response_model=ChatSettingsOut)
@@ -190,6 +183,59 @@ def update_chat_settings(
     return _chat_settings_out(dynamic, membership)
 
 
+@router.get("/dynamics/{dynamic_id}/chat/key", response_model=ChatSharedKeyOut)
+def get_shared_chat_key(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ChatSharedKeyOut:
+    """Return the shared chat key for any member (same pattern as shared AI key)."""
+    get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    if not dynamic.chat_e2e_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Encrypted chat is not enabled for this dynamic",
+        )
+    key = (getattr(dynamic, "chat_shared_key", None) or "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No shared chat key yet — turn on encryption from a device to create one",
+        )
+    return ChatSharedKeyOut(key=key, configured=True)
+
+
+@router.put("/dynamics/{dynamic_id}/chat/key", response_model=ChatSharedKeyOut)
+def put_shared_chat_key(
+    dynamic_id: str,
+    payload: ChatSharedKeyIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ChatSharedKeyOut:
+    """Upload/set the shared chat key. First writer wins; later uploads must match."""
+    get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+
+    new_key = payload.key.strip()
+    existing = (getattr(dynamic, "chat_shared_key", None) or "").strip()
+    if existing and existing != new_key:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A shared chat key already exists for this dynamic",
+        )
+    if not existing:
+        dynamic.chat_shared_key = new_key
+        if not dynamic.chat_e2e_enabled:
+            dynamic.chat_e2e_enabled = True
+        db.commit()
+    return ChatSharedKeyOut(key=new_key if existing else dynamic.chat_shared_key, configured=True)
+
+
 @router.post(
     "/dynamics/{dynamic_id}/chat/key-share",
     response_model=ChatKeyShareOut,
@@ -208,8 +254,12 @@ def share_chat_key(
     if not dynamic.chat_e2e_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Enable end-to-end encryption before sharing a key",
+            detail="Enable encrypted chat before sharing a key",
         )
+    # Prefer seeding the shared key when missing (legacy share codes still work).
+    key = payload.key.strip()
+    if not (getattr(dynamic, "chat_shared_key", None) or "").strip():
+        dynamic.chat_shared_key = key
 
     _purge_expired(db, dynamic_id)
     code = _new_share_code(db)
@@ -218,7 +268,7 @@ def share_chat_key(
         ChatKeyTransfer(
             dynamic_id=dynamic_id,
             code=code,
-            key_payload=payload.key.strip(),
+            key_payload=key,
             created_by_membership_id=membership.id,
             expires_at=expires_at,
         )
@@ -239,6 +289,7 @@ def redeem_chat_key(
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatKeyRedeemOut:
     membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
 
     code = payload.code.strip().upper()
     transfer = (
@@ -250,6 +301,11 @@ def redeem_chat_key(
         .first()
     )
     if transfer is None:
+        # Fall back to shared key if encryption is already set up server-side.
+        if dynamic is not None:
+            shared = (getattr(dynamic, "chat_shared_key", None) or "").strip()
+            if shared:
+                return ChatKeyRedeemOut(key=shared)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invalid or expired code")
     if transfer.redeemed_at is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Code already used")
@@ -261,6 +317,9 @@ def redeem_chat_key(
     transfer.redeemed_at = datetime.utcnow()
     transfer.redeemed_by_membership_id = membership.id
     key = transfer.key_payload
+    if dynamic is not None and not (getattr(dynamic, "chat_shared_key", None) or "").strip():
+        dynamic.chat_shared_key = key
+        dynamic.chat_e2e_enabled = True
     db.commit()
     return ChatKeyRedeemOut(key=key)
 

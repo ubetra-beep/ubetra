@@ -212,6 +212,26 @@ def run_migrations() -> None:
         conn.execute(
           text("ALTER TABLE dynamics ADD COLUMN chat_e2e_enabled BOOLEAN DEFAULT 0")
         )
+      if "chat_shared_key" not in dynamic_columns:
+        conn.execute(
+          text("ALTER TABLE dynamics ADD COLUMN chat_shared_key TEXT DEFAULT ''")
+        )
+      # Seed shared keys from prior one-time transfer rows when possible.
+      try:
+        conn.execute(
+          text(
+            "UPDATE dynamics SET chat_shared_key = ("
+            "  SELECT t.key_payload FROM chat_key_transfers t "
+            "  WHERE t.dynamic_id = dynamics.id "
+            "  ORDER BY COALESCE(t.redeemed_at, t.created_at) DESC LIMIT 1"
+            ") "
+            "WHERE chat_e2e_enabled = 1 "
+            "AND (chat_shared_key IS NULL OR chat_shared_key = '') "
+            "AND EXISTS (SELECT 1 FROM chat_key_transfers t2 WHERE t2.dynamic_id = dynamics.id)"
+          )
+        )
+      except Exception:
+        pass
       if "chat_expire_hours" not in dynamic_columns:
         conn.execute(
           text("ALTER TABLE dynamics ADD COLUMN chat_expire_hours INTEGER DEFAULT 720")
