@@ -1,4 +1,4 @@
-const CACHE = "ubetra-v72";
+const CACHE = "ubetra-v74";
 const ASSETS = [
   "/",
   "/assets/styles.css",
@@ -50,24 +50,62 @@ self.addEventListener("push", (event) => {
   const url = payload.url || "/";
   const tag = payload.tag || "ubetra-chat";
   const dynamicId = payload.dynamic_id || "";
+
   event.waitUntil(
-    Promise.all([
-      self.registration.showNotification(title, {
-        body,
-        tag,
-        data: { url, dynamicId },
-        renotify: true,
-      }),
-      self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
-        list.forEach((client) => {
-          client.postMessage({
-            type: "ubetra-chat-push",
-            dynamicId,
-            url,
-          });
+    (async () => {
+      const list = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+
+      // Ask open tabs whether this chat is already on-screen (skip OS banner if so).
+      let suppressBanner = false;
+      if (dynamicId && String(tag).startsWith("ubetra-chat")) {
+        const checks = await Promise.all(
+          list.map(
+            (client) =>
+              new Promise((resolve) => {
+                const channel = new MessageChannel();
+                const timer = setTimeout(() => resolve(false), 400);
+                channel.port1.onmessage = (ev) => {
+                  clearTimeout(timer);
+                  resolve(!!ev.data?.suppress);
+                };
+                try {
+                  client.postMessage(
+                    { type: "ubetra-push-should-suppress", dynamicId, tag },
+                    [channel.port2]
+                  );
+                } catch {
+                  clearTimeout(timer);
+                  resolve(false);
+                }
+              })
+          )
+        );
+        suppressBanner = checks.some(Boolean);
+      }
+
+      const tasks = [];
+      if (!suppressBanner) {
+        tasks.push(
+          self.registration.showNotification(title, {
+            body,
+            tag,
+            data: { url, dynamicId },
+            renotify: true,
+            icon: "/icons/icon-192.png",
+            badge: "/icons/icon-192.png",
+            vibrate: [120, 60, 120],
+          })
+        );
+      }
+      list.forEach((client) => {
+        client.postMessage({
+          type: "ubetra-chat-push",
+          dynamicId,
+          url,
         });
-      }),
-    ])
+      });
+      await Promise.all(tasks);
+    })()
   );
 });
 

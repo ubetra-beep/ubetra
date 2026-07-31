@@ -1477,10 +1477,32 @@ async function subscribeChatPush() {
     throw new Error("Notification permission denied — enable notifications for this site in browser settings");
   }
   let sub = await reg.pushManager.getSubscription();
+  const expectedKey = urlBase64ToUint8Array(public_key);
+  if (sub) {
+    const existingKey = sub.options?.applicationServerKey;
+    let keyMatches = true;
+    if (existingKey) {
+      const existing = existingKey instanceof ArrayBuffer
+        ? new Uint8Array(existingKey)
+        : new Uint8Array(existingKey);
+      keyMatches =
+        existing.byteLength === expectedKey.byteLength &&
+        existing.every((b, i) => b === expectedKey[i]);
+    }
+    if (!keyMatches) {
+      try {
+        await api(`/push/subscribe?endpoint=${encodeURIComponent(sub.endpoint)}`, { method: "DELETE" });
+      } catch {
+        /* server may already lack this endpoint */
+      }
+      await sub.unsubscribe();
+      sub = null;
+    }
+  }
   if (!sub) {
     sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(public_key),
+      applicationServerKey: expectedKey,
     });
   }
   const json = sub.toJSON();
@@ -1727,6 +1749,18 @@ async function bootstrap() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
     navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "ubetra-push-should-suppress") {
+        const port = event.ports?.[0];
+        if (!port) return;
+        const dynId = event.data.dynamicId || "";
+        const { parts } = parseRoute();
+        const onThisChat = parts[0] === "chat" && !!dynId && parts[1] === dynId;
+        const visible =
+          document.visibilityState === "visible" &&
+          (typeof document.hasFocus !== "function" || document.hasFocus());
+        port.postMessage({ suppress: onThisChat && visible });
+        return;
+      }
       if (event.data?.type === "ubetra-navigate" && event.data.url) {
         let path = event.data.url;
         if (path.startsWith("/#")) path = path.slice(2);

@@ -21,26 +21,31 @@ def _subscription_info(sub: PushSubscription) -> dict[str, Any]:
     }
 
 
-def send_web_push(subscription: PushSubscription, payload: dict[str, Any]) -> bool:
+def send_web_push(subscription: PushSubscription, payload: dict[str, Any]) -> str:
+    """Send a push. Returns 'ok', 'stale' (drop subscription), or 'error' (keep)."""
     if not is_configured():
-        return False
+        return "error"
     try:
         webpush(
             subscription_info=_subscription_info(subscription),
             data=json.dumps(payload),
             vapid_private_key=vapid_private_key(),
             vapid_claims={"sub": vapid_contact()},
+            # Keep undelivered pushes so Android/FCM can wake the device later.
+            ttl=86400,
         )
-        return True
+        return "ok"
     except WebPushException as exc:
         status = exc.response.status_code if exc.response is not None else None
-        if status in (404, 410):
-            return False
-        logger.warning("Web push failed: %s", exc)
-        return False
+        # Gone / not found / forbidden = browser dropped the subscription.
+        if status in (401, 403, 404, 410):
+            logger.info("Web push stale subscription (%s): %s", status, subscription.endpoint[:80])
+            return "stale"
+        logger.warning("Web push failed (%s): %s", status, exc)
+        return "error"
     except Exception as exc:
         logger.warning("Web push error: %s", exc)
-        return False
+        return "error"
 
 
 def _message_preview(
@@ -109,7 +114,7 @@ def notify_chat_push(
             continue
         subs = db.query(PushSubscription).filter(PushSubscription.user_id == user_id).all()
         for sub in subs:
-            if not send_web_push(sub, payload):
+            if send_web_push(sub, payload) == "stale":
                 stale.append(sub)
 
     for sub in stale:
@@ -177,7 +182,7 @@ def notify_playtime_push(
             continue
         subs = db.query(PushSubscription).filter(PushSubscription.user_id == user_id).all()
         for sub in subs:
-            if not send_web_push(sub, payload):
+            if send_web_push(sub, payload) == "stale":
                 stale.append(sub)
 
     for sub in stale:
@@ -247,7 +252,7 @@ def notify_keyholders_push(
             continue
         subs = db.query(PushSubscription).filter(PushSubscription.user_id == user_id).all()
         for sub in subs:
-            if not send_web_push(sub, payload):
+            if send_web_push(sub, payload) == "stale":
                 stale.append(sub)
 
     for sub in stale:

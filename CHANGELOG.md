@@ -3,6 +3,18 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.74] — 2026-07-31
+
+### Fixed
+- Web Push chat notifications failed silently (VAPID PEM passed incorrectly to pywebpush; library incompatible with current cryptography)
+- Push TTL was `0`, so Android/FCM could drop messages when the device was briefly unreachable
+- Failed push sends no longer wipe valid subscriptions (only real stale endpoints are removed)
+
+### Changed
+- Upgrade `pywebpush` to 2.3.0; write VAPID private key to a PEM file for signing
+- Skip OS notification banners when that chat is already open and visible (in-app refresh still runs)
+- Service worker cache `ubetra-v74`
+
 ## [0.1.1] — 2026-07-31
 
 ### Changed

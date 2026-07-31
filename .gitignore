@@ -16,6 +16,7 @@ __pycache__/
 backend/data/*.db
 backend/data/*.db-*
 backend/data/vapid.json
+backend/data/vapid_private.pem
 *.db
 
 # OS / editor
@@ -40,6 +41,7 @@ deploy/check-catalog.sh
 ubetra-deploy.tar
 dist/
 build/
+scripts/fix-server-ports.sh
 
 # Misc local
 _tmp*

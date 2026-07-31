@@ -1,6 +1,6 @@
 # UBETRA
 
-**Version:** `0.1.0` (beta)
+**Version:** `0.74` (beta)
 
 Self-hosted private planner for consensual adult relationship dynamics. Runs as a Progressive Web App (PWA) on your own hardware — **not** a hosted SaaS.
 
@@ -79,7 +79,7 @@ Optional: set `UBETRA_HOST_PORT=18000` in the environment (or a local `docker-co
 After the GHCR publish workflow is enabled:
 
 ```bash
-export UBETRA_IMAGE=ghcr.io/ubetra-beep/ubetra:0.1.0
+export UBETRA_IMAGE=ghcr.io/ubetra-beep/ubetra:0.74
 docker compose up -d
 ```
 

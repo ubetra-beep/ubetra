@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     smtp_tls: bool = True
+    # Web Push VAPID contact (mailto: or https:). FCM rejects some placeholders.
+    vapid_contact: str = "mailto:admin@example.com"
 
     class Config:
         env_prefix = "UBETRA_"
