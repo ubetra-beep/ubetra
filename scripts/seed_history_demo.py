@@ -1,11 +1,11 @@
 """Seed ~3 months of demo history for a domme/sub dynamic.
 
-Default pair: xseptional (dominant) + justjim (submissive).
+Default pair: Princess (dominant) + Prince (submissive).
 Re-runnable: deletes prior demo-seed tagged rows for that dynamic first.
 
 Usage:
   .\\.venv\\Scripts\\python.exe scripts\\seed_history_demo.py
-  .\\.venv\\Scripts\\python.exe scripts\\seed_history_demo.py --dom xseptional --sub justjim
+  .\\.venv\\Scripts\\python.exe scripts\\seed_history_demo.py --dom Princess --sub Prince
 """
 
 from __future__ import annotations
@@ -426,8 +426,8 @@ def seed(dom_name: str, sub_name: str, days: int = 90) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed 3 months of history demo data")
-    parser.add_argument("--dom", default="xseptional", help="Dominant username")
-    parser.add_argument("--sub", default="justjim", help="Submissive username")
+    parser.add_argument("--dom", default="Princess", help="Dominant username")
+    parser.add_argument("--sub", default="Prince", help="Submissive username")
     parser.add_argument("--days", type=int, default=90, help="How many days back to seed")
     args = parser.parse_args()
     seed(args.dom, args.sub, days=args.days)

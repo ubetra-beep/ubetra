@@ -694,7 +694,7 @@ def create_historical_lockup(
 HISTORICAL_CSV_HEADERS = ["submissive", "started_at", "ended_at", "note", "tags"]
 
 
-def _historical_csv_template_body(example_name: str = "justjim") -> str:
+def _historical_csv_template_body(example_name: str = "Prince") -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(HISTORICAL_CSV_HEADERS)
@@ -779,7 +779,7 @@ def download_historical_csv_template(
         )
         .all()
     )
-    example = "justjim"
+    example = "Prince"
     if subs:
         example = (subs[0].user.username if subs[0].user else None) or subs[0].display_name
     body = _historical_csv_template_body(example)
