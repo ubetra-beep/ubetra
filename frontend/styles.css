@@ -1909,9 +1909,12 @@ button.chat-log-line:hover {
   background: rgba(125, 206, 160, 0.08);
 }
 
-.e2e-key-banner.warn-banner {
-  border-color: #6b5420;
-  background: rgba(230, 179, 90, 0.08);
+.e2e-device-panel {
+  margin: 0.5rem 0.75rem;
+}
+
+.e2e-device-panel .e2e-key-banner {
+  margin: 0;
 }
 
 .llm-advanced > summary {
