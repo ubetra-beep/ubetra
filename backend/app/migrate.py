@@ -206,7 +206,7 @@ def run_migrations() -> None:
         )
       if "chat_retain_history" not in dynamic_columns:
         conn.execute(
-          text("ALTER TABLE dynamics ADD COLUMN chat_retain_history BOOLEAN DEFAULT 1")
+          text("ALTER TABLE dynamics ADD COLUMN chat_retain_history BOOLEAN DEFAULT 0")
         )
       if "chat_e2e_enabled" not in dynamic_columns:
         conn.execute(
@@ -214,8 +214,19 @@ def run_migrations() -> None:
         )
       if "chat_expire_hours" not in dynamic_columns:
         conn.execute(
-          text("ALTER TABLE dynamics ADD COLUMN chat_expire_hours INTEGER DEFAULT 24")
+          text("ALTER TABLE dynamics ADD COLUMN chat_expire_hours INTEGER DEFAULT 720")
         )
+      # One-time-ish: old auto-delete default was 24h — too short for offline / multi-device.
+      # Only bump rows still on that short auto-delete default (not forever-history dynamics).
+      try:
+        conn.execute(
+          text(
+            "UPDATE dynamics SET chat_expire_hours = 720 "
+            "WHERE chat_expire_hours = 24 AND chat_retain_history = 0"
+          )
+        )
+      except Exception:
+        pass
       if "chat_system_events" not in dynamic_columns:
         conn.execute(
           text("ALTER TABLE dynamics ADD COLUMN chat_system_events BOOLEAN DEFAULT 1")

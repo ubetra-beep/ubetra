@@ -11054,7 +11054,7 @@ function renderChat(dynamicId) {
   state.activeDynamicId = id;
   setViewContent(el("p", { className: "muted" }, "Loading chat..."));
 
-  let settings = { retain_history: true, e2e_enabled: false, expire_hours: 24, system_events: true, push_enabled: true, you_are_dominant: false };
+  let settings = { retain_history: false, e2e_enabled: false, expire_hours: 720, system_events: true, push_enabled: true, you_are_dominant: false };
   const revealedImages = new Set();
   let blurImages = localStorage.getItem(chatBlurStorage()) !== "false";
   let blurMode = getChatBlurMode();
@@ -11602,7 +11602,12 @@ function renderChat(dynamicId) {
         setChatBlurMode(blurMode);
         paintMessages(lastMessages);
       });
-      const expireHours = el("input", { type: "number", min: "1", max: "168", value: String(settings.expire_hours || 24) });
+      const expireHours = el("input", {
+        type: "number",
+        min: "1",
+        max: String(24 * 90),
+        value: String(settings.expire_hours || 720),
+      });
       const panelStatus = el("p", { className: "muted" }, "");
       const panelError = el("div", { className: "error hidden" });
       const isDom = !!settings.you_are_dominant;
@@ -11641,11 +11646,12 @@ function renderChat(dynamicId) {
         ),
       );
       appendMaybeLocked(
-        el("label", { className: "checkbox-label" }, [retainHistory, " Keep chat history on server"]),
+        el("label", { className: "checkbox-label" }, [retainHistory, " Keep forever on server (no auto-delete)"]),
         "chat.retain_history",
-        "Keep chat history on server"
+        "Keep forever on server (no auto-delete)"
       );
-      settingsPanel.append(el("label", {}, ["Expire hours (if not kept)", expireHours]));
+      settingsPanel.append(el("label", {}, ["Server cache (days worth of hours, if not forever)", expireHours]));
+      settingsPanel.append(el("p", { className: "muted" }, "Default is 30 days (720 hours) so offline phones and other logged-in devices can sync. Encrypted messages stay as ciphertext on the server."));
       settingsPanel.append(el("label", { className: "checkbox-label" }, [e2eMode, " End-to-end encryption"]));
       settingsPanel.append(el("label", { className: "checkbox-label" }, [chatPushEnabled, " Push notifications"]));
       appendMaybeLocked(
@@ -11678,7 +11684,7 @@ function renderChat(dynamicId) {
                 body: JSON.stringify({
                   retain_history: retainHistory.checked,
                   e2e_enabled: e2eMode.checked,
-                  expire_hours: parseInt(expireHours.value, 10) || 24,
+                  expire_hours: parseInt(expireHours.value, 10) || 720,
                   system_events: systemEvents.checked,
                   push_enabled: chatPushEnabled.checked,
                 }),
@@ -11980,9 +11986,17 @@ function renderSettings() {
       const retainHistory = el("input", { type: "checkbox" });
       const e2eMode = el("input", { type: "checkbox" });
       const expireHours = el("select");
-      [[1, "1 hour"], [6, "6 hours"], [12, "12 hours"], [24, "24 hours"], [48, "2 days"], [168, "1 week"]].forEach(([v, l]) => {
+      [
+        [24, "24 hours"],
+        [72, "3 days"],
+        [168, "1 week"],
+        [336, "2 weeks"],
+        [720, "30 days (default)"],
+        [2160, "90 days"],
+      ].forEach(([v, l]) => {
         expireHours.appendChild(el("option", { value: String(v) }, l));
       });
+      expireHours.value = "720";
       const blurByDefault = el("input", { type: "checkbox" });
       blurByDefault.checked = localStorage.getItem(chatBlurStorage()) !== "false";
       const blurModeSelect = el("select");
@@ -12265,13 +12279,13 @@ function renderSettings() {
           .then((chatSettings) => {
             retainHistory.checked = chatSettings.retain_history;
             e2eMode.checked = chatSettings.e2e_enabled;
-            expireHours.value = String(chatSettings.expire_hours || 24);
+            expireHours.value = String(chatSettings.expire_hours || 720);
             expireHours.disabled = chatSettings.retain_history;
             systemEvents.checked = chatSettings.system_events !== false;
             chatPushEnabled.checked = chatSettings.push_enabled !== false;
             privacyStatus.textContent = chatSettings.retain_history
-              ? "Messages are kept on the server until you delete them or turn off history."
-              : `Messages auto-delete after ${chatSettings.expire_hours || 24} hour(s).`;
+              ? "Messages stay on the server forever (all your devices can sync anytime)."
+              : `Messages stay on the server for ${chatSettings.expire_hours || 720} hour(s) so offline / other devices can catch up, then auto-delete.`;
             refreshE2eKeyUi();
             if (typeof snapshotPrivacyBaseline === "function") {
               snapshotPrivacyBaseline();
@@ -12819,9 +12833,10 @@ function renderSettings() {
           privacyStatus,
           lockedSettingsWrap({
             locked: !!(policy && !policy.you_are_dominant),
-            children: el("label", { className: "checkbox-label" }, [retainHistory, " Keep chat history on server"]),
+            children: el("label", { className: "checkbox-label" }, [retainHistory, " Keep forever on server (no auto-delete)"]),
           }),
-          el("label", {}, ["Auto-delete after (when history is off)", expireHours]),
+          el("label", {}, ["Server cache duration (offline & multi-device sync)", expireHours]),
+          el("p", { className: "muted" }, "Default 30 days. Messages are stored on the server (ciphertext if E2E is on) so another phone or an offline device can catch up when it reconnects."),
           el("label", { className: "checkbox-label" }, [e2eMode, " End-to-end encryption"]),
           el("label", { className: "checkbox-label" }, [chatPushEnabled, " Push notifications for this dynamic's chat"]),
           el("label", { className: "checkbox-label" }, [pushDeviceEnabled, " Notify this device when partner sends a chat message"]),
@@ -12926,8 +12941,8 @@ function renderSettings() {
             }),
           });
           privacyStatus.textContent = updated.retain_history
-            ? "Messages are kept on the server."
-            : `Messages auto-delete after ${updated.expire_hours} hour(s).`;
+            ? "Messages stay on the server forever."
+            : `Messages stay on the server for ${updated.expire_hours} hour(s), then auto-delete.`;
           refreshE2eKeyUi();
           snapshotPrivacyBaseline();
           const requested = (isSubmissive && (retainChanged || systemChanged));

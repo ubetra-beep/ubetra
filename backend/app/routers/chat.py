@@ -21,6 +21,10 @@ from ..models import (
     User,
     VaultImage,
 )
+
+# Server-side chat cache default (multi-device / offline sync).
+DEFAULT_CHAT_EXPIRE_HOURS = 24 * 30  # 30 days
+
 from ..schemas import (
     ChatKeyRedeemIn,
     ChatKeyRedeemOut,
@@ -122,7 +126,7 @@ def get_chat_settings(
     return ChatSettingsOut(
         retain_history=bool(dynamic.chat_retain_history),
         e2e_enabled=bool(dynamic.chat_e2e_enabled),
-        expire_hours=int(dynamic.chat_expire_hours or 24),
+        expire_hours=int(dynamic.chat_expire_hours or DEFAULT_CHAT_EXPIRE_HOURS),
         system_events=bool(getattr(dynamic, "chat_system_events", True)),
         push_enabled=bool(getattr(dynamic, "chat_push_enabled", True)),
         you_are_dominant=is_dominant(membership),
@@ -136,7 +140,7 @@ def _chat_settings_out(dynamic: Dynamic, membership: Membership) -> ChatSettings
     return ChatSettingsOut(
         retain_history=bool(dynamic.chat_retain_history),
         e2e_enabled=bool(dynamic.chat_e2e_enabled),
-        expire_hours=int(dynamic.chat_expire_hours or 24),
+        expire_hours=int(dynamic.chat_expire_hours or DEFAULT_CHAT_EXPIRE_HOURS),
         system_events=bool(getattr(dynamic, "chat_system_events", True)),
         push_enabled=bool(getattr(dynamic, "chat_push_enabled", True)),
         you_are_dominant=is_dominant(membership),
@@ -363,7 +367,7 @@ def send_message(
 
     expires_at = None
     if not dynamic.chat_retain_history:
-        hours = max(1, int(dynamic.chat_expire_hours or 24))
+        hours = max(1, int(dynamic.chat_expire_hours or DEFAULT_CHAT_EXPIRE_HOURS))
         expires_at = datetime.utcnow() + timedelta(hours=hours)
 
     message = ChatMessage(
@@ -454,7 +458,7 @@ def create_settings_request(
 
     expires_at = None
     if not dynamic.chat_retain_history:
-        hours = max(1, int(dynamic.chat_expire_hours or 24))
+        hours = max(1, int(dynamic.chat_expire_hours or DEFAULT_CHAT_EXPIRE_HOURS))
         expires_at = datetime.utcnow() + timedelta(hours=hours)
 
     message = ChatMessage(
@@ -612,7 +616,7 @@ def request_image_unlock(
 
     expires_at = None
     if not dynamic.chat_retain_history:
-        hours = max(1, int(dynamic.chat_expire_hours or 24))
+        hours = max(1, int(dynamic.chat_expire_hours or DEFAULT_CHAT_EXPIRE_HOURS))
         expires_at = datetime.utcnow() + timedelta(hours=hours)
 
     request_msg = ChatMessage(

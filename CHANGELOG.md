@@ -3,6 +3,13 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.1.1] — 2026-07-31
+
+### Changed
+- Chat server cache default is **30 days** (was 24 hours when history was off), so offline devices and extra logged-in phones can sync
+- New dynamics default to timed server cache (30 days) instead of forever; “keep forever” remains available
+- E2E: do not mint a second encryption key on a new device (redeem from a working device instead)
+
 ## [0.1.0] — 2026-07-31
 
 ### Added

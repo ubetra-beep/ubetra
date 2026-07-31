@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from ..models import ChatMessage, ChatMessageType, Dynamic, Membership
 
+DEFAULT_CHAT_EXPIRE_HOURS = 24 * 30  # 30 days
+
 
 def _truncate(text: str, limit: int = 72) -> str:
     cleaned = text.strip()
@@ -31,7 +33,7 @@ def post_system_event(
 
     expires_at = None
     if not dynamic.chat_retain_history:
-        hours = max(1, int(dynamic.chat_expire_hours or 24))
+        hours = max(1, int(dynamic.chat_expire_hours or DEFAULT_CHAT_EXPIRE_HOURS))
         expires_at = datetime.utcnow() + timedelta(hours=hours)
 
     body = text.strip()

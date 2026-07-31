@@ -412,7 +412,7 @@ class ChatSettingsOut(BaseModel):
 class ChatSettingsUpdate(BaseModel):
     retain_history: bool | None = None
     e2e_enabled: bool | None = None
-    expire_hours: int | None = Field(default=None, ge=1, le=168)
+    expire_hours: int | None = Field(default=None, ge=1, le=24 * 90)
     system_events: bool | None = None
     push_enabled: bool | None = None
     chastity_sub_can_delete_breaks: bool | None = None

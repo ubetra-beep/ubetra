@@ -30,7 +30,7 @@ def setting_label(key: str) -> str:
         "feelings.prompt_mode": "Feelings prompt mode",
         "feelings.require_end_of_day": "Require end-of-day feelings",
         "chat.system_events": "Post activity logs to chat",
-        "chat.retain_history": "Keep chat history on server",
+        "chat.retain_history": "Keep chat forever on server (no auto-delete)",
         "assistant.tone": "Assistant domme tone",
         "assistant.extra_instructions": "Assistant domme extra instructions",
     }
@@ -81,7 +81,11 @@ def apply_setting(
 
     if setting_key == "chat.retain_history":
         dynamic.chat_retain_history = bool(value)
-        return "enabled chat history retention" if value else "disabled chat history retention"
+        return (
+            "enabled forever chat history on server"
+            if dynamic.chat_retain_history
+            else "disabled forever chat history (using timed server cache)"
+        )
 
     if setting_key == "feelings.prompt_mode":
         mode = str(value or "soft").strip().lower()
@@ -162,7 +166,8 @@ def policy_snapshot(dynamic: Dynamic) -> dict:
             getattr(dynamic, "feelings_require_end_of_day", True)
         ),
         "chat_system_events": bool(getattr(dynamic, "chat_system_events", True)),
-        "chat_retain_history": bool(getattr(dynamic, "chat_retain_history", True)),
+        "chat_retain_history": bool(getattr(dynamic, "chat_retain_history", False)),
+        "chat_expire_hours": int(getattr(dynamic, "chat_expire_hours", 720) or 720),
         "assistant_tone": getattr(dynamic, "assistant_tone", None) or "balanced",
         "assistant_extra_instructions": getattr(dynamic, "assistant_extra_instructions", None) or "",
         "enabled_features": sorted(parse_enabled_features(dynamic.enabled_features)),

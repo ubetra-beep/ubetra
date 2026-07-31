@@ -215,9 +215,9 @@ class Dynamic(Base):
             "finger,oral,vibrator,masturbation,cheated,anal,prostate"
         ),
     )
-    chat_retain_history: Mapped[bool] = mapped_column(Boolean, default=True)
+    chat_retain_history: Mapped[bool] = mapped_column(Boolean, default=False)
     chat_e2e_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    chat_expire_hours: Mapped[int] = mapped_column(Integer, default=24)
+    chat_expire_hours: Mapped[int] = mapped_column(Integer, default=720)  # 30 days
     chat_system_events: Mapped[bool] = mapped_column(Boolean, default=True)
     chat_push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # When False, only the keyholder can delete temporary unlock log entries
