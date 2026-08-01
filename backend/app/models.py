@@ -215,6 +215,8 @@ class Dynamic(Base):
             "finger,oral,vibrator,masturbation,cheated,anal,prostate"
         ),
     )
+    # Shared chastity lockup tag chips — starts empty; custom tags become permanent for both partners.
+    chastity_tag_presets: Mapped[str] = mapped_column(Text, default="")
     chat_retain_history: Mapped[bool] = mapped_column(Boolean, default=False)
     chat_e2e_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # Shared AES key (base64) for encrypted chat — same model as shared_llm_api_key.
@@ -251,6 +253,7 @@ class Dynamic(Base):
     task_lists: Mapped[list["TaskList"]] = relationship(back_populates="dynamic")
     acts: Mapped[list["ActOfSubmission"]] = relationship(back_populates="dynamic")
     context_links: Mapped[list["ContextLink"]] = relationship(back_populates="dynamic")
+    journal_entries: Mapped[list["JournalEntry"]] = relationship(back_populates="dynamic")
     org_entries: Mapped[list["OrgTrackingEntry"]] = relationship(back_populates="dynamic")
     chastity_lockups: Mapped[list["ChastityLockup"]] = relationship(back_populates="dynamic")
     chastity_limit_proposals: Mapped[list["ChastityLimitProposal"]] = relationship(
@@ -344,7 +347,7 @@ class Membership(Base):
     share_kinks: Mapped[bool] = mapped_column(Boolean, default=False)
     interview_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     interview_summary: Mapped[str] = mapped_column(Text, default="")
-    chastity_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    chastity_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     chastity_max_lock_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
     chastity_enrollment_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     spti_data: Mapped[str] = mapped_column(Text, default="")
@@ -371,6 +374,7 @@ class Membership(Base):
         back_populates="membership", order_by="InterviewMessage.created_at"
     )
     context_links: Mapped[list["ContextLink"]] = relationship(back_populates="added_by")
+    journal_entries: Mapped[list["JournalEntry"]] = relationship(back_populates="membership")
 
 
 class InterestCategory(Base):
@@ -624,15 +628,40 @@ class ContextLink(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
     added_by_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
-    category: Mapped[ContextLinkCategory] = mapped_column(Enum(ContextLinkCategory))
+    category: Mapped[ContextLinkCategory] = mapped_column(
+        Enum(ContextLinkCategory), default=ContextLinkCategory.other
+    )
+    # stories | journals | scenes | other — preferred subject tag for AI / UI
+    subject: Mapped[str] = mapped_column(String(32), default="other")
     title: Mapped[str] = mapped_column(String(200))
-    url: Mapped[str] = mapped_column(String(2000))
+    url: Mapped[str] = mapped_column(String(2000), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     fetched_text: Mapped[str] = mapped_column(Text, default="")
+    filename: Mapped[str] = mapped_column(String(255), default="")
+    mime_type: Mapped[str] = mapped_column(String(120), default="")
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    use_for_ai: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     dynamic: Mapped[Dynamic] = relationship(back_populates="context_links")
     added_by: Mapped[Membership] = relationship(back_populates="context_links")
+
+
+class JournalEntry(Base):
+    __tablename__ = "journal_entries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    use_for_ai: Mapped[bool] = mapped_column(Boolean, default=True)
+    llm_assisted: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dynamic: Mapped[Dynamic] = relationship(back_populates="journal_entries")
+    membership: Mapped[Membership] = relationship(back_populates="journal_entries")
 
 
 class OrgTrackingEntry(Base):

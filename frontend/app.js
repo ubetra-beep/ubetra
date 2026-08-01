@@ -1392,10 +1392,31 @@ function chatBlurModeStorage() {
   return "ubetra_chat_blur_mode";
 }
 
-/** @returns {"hold"|"timed5"|"session"} */
+function chatBlurPrefsMigratedStorage() {
+  return "ubetra_chat_blur_prefs_v1";
+}
+
+/**
+ * Resolve blur mode. New browsers default to hold; existing installs that already
+ * had chat prefs / a token keep session unless they already chose a mode.
+ * @returns {"hold"|"timed5"|"session"}
+ */
 function getChatBlurMode() {
-  const mode = localStorage.getItem(chatBlurModeStorage()) || "session";
-  if (mode === "hold" || mode === "timed5" || mode === "session") return mode;
+  const stored = localStorage.getItem(chatBlurModeStorage());
+  if (stored === "hold" || stored === "timed5" || stored === "session") return stored;
+
+  if (!localStorage.getItem(chatBlurPrefsMigratedStorage())) {
+    const hadBlurPref = localStorage.getItem(chatBlurStorage()) != null;
+    const hadToken = localStorage.getItem("ubetra_token") != null;
+    if (hadBlurPref || hadToken) {
+      localStorage.setItem(chatBlurModeStorage(), "session");
+      localStorage.setItem(chatBlurPrefsMigratedStorage(), "1");
+      return "session";
+    }
+    localStorage.setItem(chatBlurModeStorage(), "hold");
+    localStorage.setItem(chatBlurPrefsMigratedStorage(), "1");
+    return "hold";
+  }
   return "session";
 }
 
@@ -7138,6 +7159,41 @@ function renderPlaytimeScene(dynamicId) {
           }
           body.appendChild(ratings);
 
+          body.appendChild(
+            el("button", {
+              className: "primary-btn",
+              type: "button",
+              disabled: flow.busy,
+              onClick: async () => {
+                clearError();
+                setBusy(true);
+                try {
+                  const sceneText = [
+                    flow.scene.title || "",
+                    flow.scene.summary || "",
+                    flow.scene.body || "",
+                  ].filter(Boolean).join("\n\n");
+                  await api(`/dynamics/${dynamicId}/context`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      subject: "scenes",
+                      title: flow.scene.title || flow.subject || "Playtime scene",
+                      text_content: sceneText,
+                      notes: `Playtime scene · ${flow.effort || ""} effort · lean ${flow.lean || ""}`.trim(),
+                      use_for_ai: true,
+                    }),
+                  });
+                  const ok = el("p", { className: "muted" }, "Saved to Knowledge library as a scene.");
+                  body.insertBefore(ok, ratings);
+                } catch (err) {
+                  showError(err.message);
+                } finally {
+                  setBusy(false);
+                }
+              },
+            }, "Save to library (scene)")
+          );
+
           const rejectNote = el("textarea", {
             placeholder: "Optional note for a different scene (e.g. less intensity, more teasing)…",
           });
@@ -7344,36 +7400,65 @@ function renderContext(dynamicId) {
   Promise.all([
     api(`/dynamics/${dynamicId}/context`),
     api(`/dynamics/${dynamicId}/context/categories`),
+    api(`/dynamics/${dynamicId}/journal`).catch(() => []),
     loadDynamic(dynamicId),
   ])
-    .then(([links, categories]) => {
+    .then(([links, categories, journals]) => {
       const error = el("div", { className: "error hidden" });
-      const title = el("input", { placeholder: "Title (e.g. Our contract)" });
-      const url = el("input", { placeholder: "Google Drive link" });
-      const notes = el("textarea", { placeholder: "Optional notes or paste excerpt if the file is private" });
-      const category = el("select");
+      const status = el("p", { className: "muted" });
+      const title = el("input", { placeholder: "Title" });
+      const textBody = el("textarea", {
+        placeholder: "Paste text, or upload a file below (.txt, .md, .csv, .json, .html, .pdf, .docx)",
+        rows: "5",
+      });
+      const subject = el("select");
       categories.forEach((cat) => {
-        category.appendChild(el("option", { value: cat.id }, cat.label));
+        subject.appendChild(el("option", { value: cat.id }, cat.label));
+      });
+      const useForAi = el("input", { type: "checkbox", checked: true });
+      const fileInput = el("input", {
+        type: "file",
+        accept: ".txt,.md,.csv,.json,.html,.htm,.pdf,.docx,text/plain,text/markdown,text/csv,application/json,text/html,application/pdf",
+        className: "hidden",
       });
 
       const list = el("div", { className: "stack" });
       function paintLinks(items) {
         list.replaceChildren();
         if (!items.length) {
-          list.appendChild(el("p", { className: "muted" }, "No links yet."));
+          list.appendChild(el("p", { className: "muted" }, "No files yet."));
           return;
         }
         items.forEach((link) => {
-          const catLabel = categories.find((c) => c.id === link.category)?.label || link.category;
+          const subLabel =
+            categories.find((c) => c.id === (link.subject || link.category))?.label
+            || link.subject
+            || link.category;
+          const aiToggle = el("input", { type: "checkbox" });
+          aiToggle.checked = link.use_for_ai !== false;
+          aiToggle.addEventListener("change", async () => {
+            try {
+              await api(`/dynamics/${dynamicId}/context/${link.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ use_for_ai: aiToggle.checked }),
+              });
+              status.textContent = "Updated AI toggle.";
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+              aiToggle.checked = !aiToggle.checked;
+            }
+          });
           list.appendChild(
             el("div", { className: "card stack" }, [
-              el("div", { className: "row" }, [
+              el("div", { className: "row wrap" }, [
                 el("strong", {}, link.title),
-                el("span", { className: "pill" }, catLabel),
+                el("span", { className: "pill" }, subLabel),
               ]),
-              el("a", { href: link.url, target: "_blank", rel: "noopener noreferrer" }, "Open in Google Drive"),
+              link.filename ? el("p", { className: "muted" }, link.filename) : null,
+              link.text_preview ? el("p", { className: "muted" }, link.text_preview) : null,
               link.notes ? el("p", { className: "muted" }, link.notes) : null,
-              link.has_fetched_text ? el("p", { className: "muted" }, "Public doc text fetched for AI context.") : null,
+              el("label", { className: "checkbox-label" }, [aiToggle, " Use for AI"]),
               el("button", {
                 className: "ghost-btn",
                 onClick: async () => {
@@ -7387,40 +7472,192 @@ function renderContext(dynamicId) {
       }
       paintLinks(links);
 
+      async function uploadFile(file) {
+        if (!file) return;
+        error.classList.add("hidden");
+        const body = new FormData();
+        body.append("file", file);
+        body.append("subject", subject.value);
+        body.append("title", title.value || file.name || "Upload");
+        body.append("notes", "");
+        body.append("use_for_ai", useForAi.checked ? "true" : "false");
+        const token = state.token;
+        const res = await fetch(`${API}/dynamics/${dynamicId}/context/upload`, {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.message || "Upload failed");
+        renderContext(dynamicId);
+      }
+
+      fileInput.addEventListener("change", async () => {
+        try {
+          await uploadFile(fileInput.files?.[0]);
+        } catch (err) {
+          error.textContent = err.message;
+          error.classList.remove("hidden");
+        } finally {
+          fileInput.value = "";
+        }
+      });
+
+      const journalList = el("div", { className: "stack" });
+      const jTitle = el("input", { placeholder: "Journal title" });
+      const jBody = el("textarea", { placeholder: "Write freely…", rows: "5" });
+      const jAi = el("input", { type: "checkbox", checked: true });
+      const assistPrompt = el("input", { placeholder: "e.g. Expand this into a reflective entry" });
+
+      function paintJournals(items) {
+        journalList.replaceChildren();
+        if (!items.length) {
+          journalList.appendChild(el("p", { className: "muted" }, "No journal entries yet."));
+          return;
+        }
+        items.forEach((entry) => {
+          const toggle = el("input", { type: "checkbox" });
+          toggle.checked = entry.use_for_ai !== false;
+          toggle.addEventListener("change", async () => {
+            try {
+              await api(`/dynamics/${dynamicId}/journal/${entry.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ use_for_ai: toggle.checked }),
+              });
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+              toggle.checked = !toggle.checked;
+            }
+          });
+          journalList.appendChild(
+            el("div", { className: "card stack" }, [
+              el("div", { className: "row wrap" }, [
+                el("strong", {}, entry.title || "Untitled"),
+                el("span", { className: "muted" }, entry.author_display_name),
+              ]),
+              el("p", {}, (entry.body || "").slice(0, 400) || "(empty)"),
+              entry.llm_assisted ? el("p", { className: "muted" }, "AI-assisted") : null,
+              el("label", { className: "checkbox-label" }, [toggle, " Use for AI"]),
+              el("button", {
+                className: "ghost-btn",
+                onClick: async () => {
+                  await api(`/dynamics/${dynamicId}/journal/${entry.id}`, { method: "DELETE" });
+                  renderContext(dynamicId);
+                },
+              }, "Delete"),
+            ])
+          );
+        });
+      }
+      paintJournals(journals || []);
+
       const stack = el("div", { className: "stack" }, [
-        el("h1", {}, "Context library"),
-        el("p", { className: "muted" }, "Add Google Drive links — fiction, contracts, guides — so the AI can reference them."),
+        el("h1", {}, "Knowledge & context"),
+        el("p", { className: "muted" }, "Upload text files for the assistant, journal privately, and toggle what is shared with AI. Subjects: stories, journals, scenes."),
+        status,
         el("div", { className: "card stack" }, [
-          el("label", {}, ["Category", category]),
+          el("h2", {}, "File library"),
+          el("label", {}, ["Subject", subject]),
           el("label", {}, ["Title", title]),
-          el("label", {}, ["Google Drive URL", url]),
-          el("label", {}, ["Notes (optional)", notes]),
-          el("button", {
-            className: "primary-btn",
-            onClick: async () => {
-              error.classList.add("hidden");
-              try {
-                await api(`/dynamics/${dynamicId}/context`, {
-                  method: "POST",
-                  body: JSON.stringify({
-                    category: category.value,
-                    title: title.value,
-                    url: url.value,
-                    notes: notes.value,
-                  }),
-                });
-                title.value = "";
-                url.value = "";
-                notes.value = "";
-                renderContext(dynamicId);
-              } catch (err) {
-                error.textContent = err.message;
-                error.classList.remove("hidden");
-              }
-            },
-          }, "Add link"),
+          el("label", {}, ["Paste text (optional)", textBody]),
+          el("label", { className: "checkbox-label" }, [useForAi, " Use for AI"]),
+          el("div", { className: "row wrap" }, [
+            el("button", {
+              className: "primary-btn",
+              type: "button",
+              onClick: () => fileInput.click(),
+            }, "Upload file"),
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: async () => {
+                error.classList.add("hidden");
+                try {
+                  if (!title.value.trim() && !textBody.value.trim()) {
+                    throw new Error("Add a title and paste text, or upload a file.");
+                  }
+                  await api(`/dynamics/${dynamicId}/context`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      subject: subject.value,
+                      title: title.value.trim() || "Pasted note",
+                      text_content: textBody.value,
+                      notes: "",
+                      use_for_ai: useForAi.checked,
+                    }),
+                  });
+                  title.value = "";
+                  textBody.value = "";
+                  renderContext(dynamicId);
+                } catch (err) {
+                  error.textContent = err.message;
+                  error.classList.remove("hidden");
+                }
+              },
+            }, "Save pasted text"),
+          ]),
+          fileInput,
         ]),
         list,
+        el("div", { className: "card stack" }, [
+          el("h2", {}, "Journal"),
+          el("p", { className: "muted" }, "Optional AI assist — you keep or edit the result before saving."),
+          el("label", {}, ["Title", jTitle]),
+          el("label", {}, ["Entry", jBody]),
+          el("label", { className: "checkbox-label" }, [jAi, " Use for AI"]),
+          el("label", {}, ["Assist prompt (optional)", assistPrompt]),
+          el("div", { className: "row wrap" }, [
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: async () => {
+                error.classList.add("hidden");
+                try {
+                  if (!assistPrompt.value.trim()) throw new Error("Enter an assist prompt first.");
+                  const res = await api(`/dynamics/${dynamicId}/journal/assist`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      prompt: assistPrompt.value.trim(),
+                      draft: jBody.value,
+                    }),
+                  });
+                  if (res.text) jBody.value = res.text;
+                  status.textContent = "Assist filled the draft — edit and save when ready.";
+                } catch (err) {
+                  error.textContent = err.message;
+                  error.classList.remove("hidden");
+                }
+              },
+            }, "Assist with AI"),
+            el("button", {
+              className: "primary-btn",
+              type: "button",
+              onClick: async () => {
+                error.classList.add("hidden");
+                try {
+                  await api(`/dynamics/${dynamicId}/journal`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      title: jTitle.value.trim() || "Journal entry",
+                      body: jBody.value,
+                      use_for_ai: jAi.checked,
+                      llm_assisted: !!assistPrompt.value.trim() && !!jBody.value.trim(),
+                    }),
+                  });
+                  jTitle.value = "";
+                  jBody.value = "";
+                  assistPrompt.value = "";
+                  renderContext(dynamicId);
+                } catch (err) {
+                  error.textContent = err.message;
+                  error.classList.remove("hidden");
+                }
+              },
+            }, "Save journal entry"),
+          ]),
+        ]),
+        journalList,
         error,
         el("button", {
           className: "ghost-btn",
@@ -8764,6 +9001,14 @@ function renderTracking(dynamicId) {
       ]);
 
       stack.appendChild(formCard);
+      stack.appendChild(el("div", { className: "stack" }, [
+        el("button", {
+          type: "button",
+          className: "link-btn",
+          onClick: () => navigate(`/dynamic/${dynamicId}/tracking/history`),
+        }, "Prior orgasm / play history →"),
+        el("p", { className: "muted" }, "Import past orgasms and play from CSV or other apps."),
+      ]));
       stack.appendChild(logsSection);
       stack.appendChild(error);
       stack.appendChild(el("button", {
@@ -8771,6 +9016,176 @@ function renderTracking(dynamicId) {
         onClick: () => navigate(`/dynamic/${dynamicId}/track`),
       }, "Back to tracking"));
       refreshTrackingFields();
+      setViewContent(stack);
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+}
+
+function renderOrgasmPriorHistory(dynamicId) {
+  setViewContent(el("p", { className: "muted" }, "Loading prior history tools..."));
+  Promise.all([
+    loadDynamic(dynamicId),
+  ])
+    .then(() => {
+      const dynamic = state.currentDynamic;
+      const partners = dynamic.partners || [];
+      const error = el("div", { className: "error hidden" });
+      const status = el("p", { className: "muted" });
+
+      const stack = el("div", { className: "stack" }, [
+        el("h1", {}, "Prior orgasm / play history"),
+        el("p", { className: "muted" }, "Import past tracking from before UBETRA. Template rows include example default tags (Full Orgasm, Handjob, Edging, etc.)."),
+        error,
+        status,
+      ]);
+
+      const csvCard = el("div", { className: "card stack" }, [
+        el("h2", {}, "CSV import"),
+        el("p", { className: "muted" }, "Columns: partner, event_type (orgasm|no_orgasm), occurred_at, ended_at, notes, tags, orgasm_tags. Use | in orgasm_tags to separate multiple orgasms."),
+      ]);
+      csvCard.appendChild(el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          error.classList.add("hidden");
+          try {
+            const token = state.token;
+            const res = await fetch(`${API}/dynamics/${dynamicId}/tracking/historical/csv-template`, {
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
+            if (!res.ok) throw new Error(await res.text() || "Could not download template");
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = el("a", { href: url, download: "ubetra-orgasm-history-template.csv" });
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            status.textContent = "Template downloaded.";
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+          }
+        },
+      }, "Download CSV template"));
+
+      const fileInput = el("input", {
+        type: "file",
+        accept: ".csv,text/csv",
+        className: "hidden",
+      });
+      fileInput.addEventListener("change", async () => {
+        const file = fileInput.files?.[0];
+        if (!file) return;
+        error.classList.add("hidden");
+        status.textContent = "Importing…";
+        try {
+          const body = new FormData();
+          body.append("file", file);
+          const token = state.token;
+          const res = await fetch(`${API}/dynamics/${dynamicId}/tracking/historical/import-csv`, {
+            method: "POST",
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            body,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || data.message || "Import failed");
+          const bits = [`Imported ${data.created || 0} entr${data.created === 1 ? "y" : "ies"}.`];
+          if (data.error_count) bits.push(`${data.error_count} row error(s).`);
+          status.textContent = bits.join(" ");
+          if (data.errors?.length) {
+            error.textContent = data.errors.join("\n");
+            error.classList.remove("hidden");
+          }
+        } catch (err) {
+          status.textContent = "";
+          error.textContent = err.message;
+          error.classList.remove("hidden");
+        } finally {
+          fileInput.value = "";
+        }
+      });
+      csvCard.appendChild(fileInput);
+      csvCard.appendChild(el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => fileInput.click(),
+      }, "Upload CSV"));
+      stack.appendChild(csvCard);
+
+      const manualCard = el("div", { className: "card stack" }, [
+        el("h2", {}, "Add one entry"),
+        el("p", { className: "muted" }, "Log a single past orgasm or play session."),
+      ]);
+      const partnerSelect = el("select");
+      partners.forEach((p) => partnerSelect.appendChild(el("option", { value: p.id }, p.display_name)));
+      const eventType = el("select", {}, [
+        el("option", { value: "orgasm" }, "Orgasm"),
+        el("option", { value: "no_orgasm" }, "No orgasm (play)"),
+      ]);
+      const occurred = el("input", { type: "datetime-local" });
+      const ended = el("input", { type: "datetime-local" });
+      const notes = el("input", { placeholder: "Notes (optional)" });
+      const orgasmTags = buildTagPicker(trackingTagPresets("orgasm"));
+      const playTags = buildTagPicker(trackingTagPresets("play"));
+      const orgasmWrap = el("label", { className: "stack" }, ["Orgasm tags", orgasmTags.row, orgasmTags.custom]);
+      const playWrap = el("label", { className: "stack hidden" }, ["Play tags", playTags.row, playTags.custom]);
+      eventType.addEventListener("change", () => {
+        const isOrgasm = eventType.value === "orgasm";
+        orgasmWrap.classList.toggle("hidden", !isOrgasm);
+        playWrap.classList.toggle("hidden", isOrgasm);
+      });
+      manualCard.appendChild(el("label", {}, ["Partner", partnerSelect]));
+      manualCard.appendChild(el("label", {}, ["Type", eventType]));
+      manualCard.appendChild(el("label", {}, ["Occurred at", occurred]));
+      manualCard.appendChild(el("label", {}, ["Ended at (optional)", ended]));
+      manualCard.appendChild(el("label", {}, ["Notes", notes]));
+      manualCard.appendChild(orgasmWrap);
+      manualCard.appendChild(playWrap);
+      manualCard.appendChild(el("button", {
+        className: "primary-btn",
+        onClick: async () => {
+          if (!occurred.value) {
+            error.textContent = "Occurred at is required.";
+            error.classList.remove("hidden");
+            return;
+          }
+          error.classList.add("hidden");
+          try {
+            const payload = {
+              for_membership_id: partnerSelect.value,
+              event_type: eventType.value,
+              occurred_at: new Date(occurred.value).toISOString(),
+              notes: notes.value,
+            };
+            if (ended.value) payload.ended_at = new Date(ended.value).toISOString();
+            if (eventType.value === "orgasm") {
+              const tags = orgasmTags.getTags();
+              if (!tags.length) throw new Error("Add at least one orgasm tag.");
+              payload.orgasms = [{ tags }];
+            } else {
+              payload.tags = playTags.getTags();
+            }
+            await api(`/dynamics/${dynamicId}/tracking`, {
+              method: "POST",
+              body: JSON.stringify(payload),
+            });
+            status.textContent = "Historical entry saved.";
+            occurred.value = "";
+            ended.value = "";
+            notes.value = "";
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+          }
+        },
+      }, "Add entry"));
+      stack.appendChild(manualCard);
+
+      stack.appendChild(el("button", {
+        className: "ghost-btn",
+        onClick: () => navigate(`/dynamic/${dynamicId}/tracking`),
+      }, "Back to orgasm tracking"));
       setViewContent(stack);
     })
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
@@ -9128,7 +9543,7 @@ function renderChastity(dynamicId) {
     api(`/dynamics/${dynamicId}/chastity/settings`),
     api(`/dynamics/${dynamicId}/chastity`),
     api(`/dynamics/${dynamicId}/chastity/limit-proposals`).catch(() => []),
-    api(`/dynamics/${dynamicId}/tags`).catch(() => ({ presets: [] })),
+    api(`/dynamics/${dynamicId}/chastity/tags`).catch(() => ({ presets: [] })),
     api(`/dynamics/${dynamicId}/chastity-goals`).catch(() => null),
     loadDynamic(dynamicId),
   ])
@@ -9140,7 +9555,7 @@ function renderChastity(dynamicId) {
       const chastityTagPresets = tagData.presets || [];
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Chastity tracking"),
-        el("p", { className: "muted" }, "Lockups are tracked for enrolled submissives only. Orgasm and lockup data can be shared with the assistant domme in Settings."),
+        el("p", { className: "muted" }, "Lockups are tracked for submissives with chastity available. Orgasm and lockup data can be shared with the assistant domme in Settings."),
         error,
         flowHost,
       ]);
@@ -9170,15 +9585,33 @@ function renderChastity(dynamicId) {
       }
 
       if (!overview.any_enabled) {
-        stack.appendChild(el("div", { className: "card stack" }, [
-          el("h2", {}, "Chastity not enrolled"),
-          el("p", { className: "muted" }, "Enrollment and lock-time agreements live under Ground rules. The keyholder controls enrollment; a submissive can request it."),
-          el("button", {
-            className: "primary-btn",
-            type: "button",
-            onClick: () => navigate(`/dynamic/${dynamicId}/ground-rules`),
-          }, "Open Ground rules"),
-        ]));
+        const empty = el("div", { className: "card stack" }, [
+          el("h2", {}, "No one available for chastity"),
+          el("p", { className: "muted" }, "The keyholder can enable chastity for a submissive below or in Ground rules. To hide the whole module, turn off Chastity in Menu → Features."),
+        ]);
+        if (settings.you_are_dominant && subs.length) {
+          subs.forEach((sub) => {
+            empty.appendChild(el("button", {
+              className: "primary-btn",
+              type: "button",
+              onClick: async () => {
+                try {
+                  await saveSubSettings(sub.membership_id, true, sub.chastity_max_lock_hours ?? 72);
+                  renderChastity(dynamicId);
+                } catch (err) {
+                  error.textContent = err.message;
+                  error.classList.remove("hidden");
+                }
+              },
+            }, `Enable chastity for ${sub.display_name}`));
+          });
+        }
+        empty.appendChild(el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: () => navigate(`/dynamic/${dynamicId}/ground-rules`),
+        }, "Open Ground rules"));
+        stack.appendChild(empty);
         stack.appendChild(el("button", {
           className: "ghost-btn",
           onClick: () => navigate(`/dynamic/${dynamicId}/track`),
@@ -9192,7 +9625,7 @@ function renderChastity(dynamicId) {
         type: "button",
         className: "link-btn",
         onClick: () => navigate(`/dynamic/${dynamicId}/ground-rules`),
-      }, "Enrollment & lock time agreements →"));
+      }, "Availability & lock time agreements →"));
 
       enrolled.forEach((partner) => {
         const hero = el("div", { className: `card lockup-hero ${partner.state === "locked" ? "locked" : ""}` });
@@ -9593,7 +10026,7 @@ function renderChastityPriorHistory(dynamicId) {
   Promise.all([
     api(`/dynamics/${dynamicId}/chastity/overview`),
     api(`/dynamics/${dynamicId}/chastity/settings`),
-    api(`/dynamics/${dynamicId}/tags`).catch(() => ({ presets: [] })),
+    api(`/dynamics/${dynamicId}/chastity/tags`).catch(() => ({ presets: [] })),
     loadDynamic(dynamicId),
   ])
     .then(([overview, settings, tagData]) => {
@@ -9748,8 +10181,8 @@ function renderChastityRulesPanel(dynamicId, settings, limitProposals, { onChang
   const wrap = el("div", { className: "stack" });
 
   const enrollCard = el("details", { className: "card stack", open: true }, [
-    el("summary", {}, "Chastity enrollment"),
-    el("p", { className: "muted" }, "A submissive can request enrollment. The keyholder can approve, decline, or demand-enable anytime."),
+    el("summary", {}, "Chastity availability"),
+    el("p", { className: "muted" }, "When the Chastity feature is on, tracking is available for each submissive unless the keyholder turns it off here. To disable the whole module, use Menu → Features (submissives can request that via Dom-controlled settings)."),
   ]);
 
   function saveSubSettings(subId, enabled, maxHours) {
@@ -9764,7 +10197,7 @@ function renderChastityRulesPanel(dynamicId, settings, limitProposals, { onChang
   }
 
   if (!subs.length) {
-    enrollCard.appendChild(el("p", { className: "muted" }, "Add a submissive partner before enabling chastity."));
+    enrollCard.appendChild(el("p", { className: "muted" }, "Add a submissive partner before configuring chastity."));
   } else if (settings.you_are_dominant) {
     subs.forEach((sub) => {
       const enabled = el("input", { type: "checkbox" });
@@ -9779,74 +10212,33 @@ function renderChastityRulesPanel(dynamicId, settings, limitProposals, { onChang
       const block = el("div", { className: "stack" }, [
         el("label", { className: "checkbox-label" }, [
           enabled,
-          ` ${sub.display_name}${sub.enrollment_requested && !sub.chastity_enabled ? " (requested)" : ""}`,
+          ` Chastity available for ${sub.display_name}`,
         ]),
         el("label", {}, ["Max lock time", maxSelect]),
-        el("div", { className: "row wrap" }, [
-          el("button", {
-            className: "primary-btn",
-            type: "button",
-            onClick: async () => {
-              try {
-                const hours = maxSelect.value === "null" ? null : parseInt(maxSelect.value, 10);
-                await saveSubSettings(sub.membership_id, enabled.checked, hours);
-                onChanged?.();
-              } catch (err) {
-                onError?.(err.message);
-              }
-            },
-          }, sub.chastity_enabled || enabled.checked ? "Save enrollment" : "Demand enroll"),
-          sub.enrollment_requested && !sub.chastity_enabled
-            ? el("button", {
-              className: "ghost-btn",
-              type: "button",
-              onClick: async () => {
-                try {
-                  await api(`/dynamics/${dynamicId}/chastity/enrollment-request/${sub.membership_id}/decline`, { method: "POST" });
-                  onChanged?.();
-                } catch (err) {
-                  onError?.(err.message);
-                }
-              },
-            }, "Decline request")
-            : null,
-        ]),
+        el("button", {
+          className: "primary-btn",
+          type: "button",
+          onClick: async () => {
+            try {
+              const hours = maxSelect.value === "null" ? null : parseInt(maxSelect.value, 10);
+              await saveSubSettings(sub.membership_id, enabled.checked, hours);
+              onChanged?.();
+            } catch (err) {
+              onError?.(err.message);
+            }
+          },
+        }, "Save"),
       ]);
       enrollCard.appendChild(block);
     });
   } else {
     const selfSub = subs.find((s) => s.membership_id === settings.you_membership_id);
     if (!selfSub) {
-      enrollCard.appendChild(el("p", { className: "muted" }, "Enrollment is managed by your keyholder."));
+      enrollCard.appendChild(el("p", { className: "muted" }, "Chastity availability is controlled by your keyholder."));
     } else if (selfSub.chastity_enabled) {
-      enrollCard.appendChild(el("p", { className: "muted" }, `You are enrolled. Max lock: ${selfSub.chastity_max_lock_hours == null ? "no limit" : `${selfSub.chastity_max_lock_hours}h`}.`));
-    } else if (selfSub.enrollment_requested) {
-      enrollCard.appendChild(el("p", { className: "muted" }, "Enrollment request pending keyholder approval."));
-      enrollCard.appendChild(el("button", {
-        className: "ghost-btn",
-        type: "button",
-        onClick: async () => {
-          try {
-            await api(`/dynamics/${dynamicId}/chastity/enrollment-request/cancel`, { method: "POST" });
-            onChanged?.();
-          } catch (err) {
-            onError?.(err.message);
-          }
-        },
-      }, "Cancel request"));
+      enrollCard.appendChild(el("p", { className: "muted" }, `Chastity is available for you. Max lock: ${selfSub.chastity_max_lock_hours == null ? "no limit" : `${selfSub.chastity_max_lock_hours}h`}.`));
     } else {
-      enrollCard.appendChild(el("button", {
-        className: "primary-btn",
-        type: "button",
-        onClick: async () => {
-          try {
-            await api(`/dynamics/${dynamicId}/chastity/enrollment-request`, { method: "POST" });
-            onChanged?.();
-          } catch (err) {
-            onError?.(err.message);
-          }
-        },
-      }, "Request chastity enrollment"));
+      enrollCard.appendChild(el("p", { className: "muted" }, "The keyholder has disabled chastity tracking for you. Ask them to re-enable it here, or to turn the Chastity feature off entirely in Menu → Features if you want the module hidden."));
     }
   }
   wrap.appendChild(enrollCard);
@@ -9938,7 +10330,7 @@ function renderGroundRules(dynamicId) {
 
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Ground rules"),
-        el("p", { className: "muted" }, "Agreements, chastity enrollment, and lock-time limits. Anyone can propose agreements; only the keyholder approves. Chastity enrollment is keyholder-controlled."),
+        el("p", { className: "muted" }, "Agreements, chastity availability, and lock-time limits. Anyone can propose agreements; only the keyholder approves. The keyholder can disable chastity for a submissive instantly."),
         el("p", { className: "muted" }, `${bundle.approved_count} approved · ${bundle.pending_count} pending`),
         error,
       ]);
@@ -10741,6 +11133,12 @@ function renderVault(dynamicId) {
     const error = el("div", { className: "error hidden" });
     const grid = el("div", { className: "vault-grid" });
     const fileInput = el("input", { type: "file", accept: "image/*", className: "hidden" });
+    const cameraInput = el("input", {
+      type: "file",
+      accept: "image/*",
+      capture: "environment",
+      className: "hidden",
+    });
 
     if (!images.length) {
       grid.appendChild(el("p", { className: "muted" }, "No images yet. Chat photos are saved here encrypted, or upload below."));
@@ -10789,8 +11187,7 @@ function renderVault(dynamicId) {
       grid.appendChild(card);
     }
 
-    fileInput.addEventListener("change", async () => {
-      const file = fileInput.files?.[0];
+    async function uploadVaultFile(file) {
       if (!file) return;
       error.classList.add("hidden");
       try {
@@ -10805,23 +11202,41 @@ function renderVault(dynamicId) {
             image_blurred: localStorage.getItem(chatBlurStorage()) !== "false",
           }),
         });
-        fileInput.value = "";
         load();
       } catch (err) {
         error.textContent = err.message;
         error.classList.remove("hidden");
       }
+    }
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files?.[0];
+      fileInput.value = "";
+      await uploadVaultFile(file);
+    });
+    cameraInput.addEventListener("change", async () => {
+      const file = cameraInput.files?.[0];
+      cameraInput.value = "";
+      await uploadVaultFile(file);
     });
 
     setViewContent(el("div", { className: "stack" }, [
       el("h1", {}, "Image vault"),
-      el("p", { className: "muted" }, "Private images from chat. Blur reveal follows Chat settings (hold / 5s / session)."),
-      el("button", {
-        className: "primary-btn",
-        type: "button",
-        onClick: () => fileInput.click(),
-      }, "Upload image"),
+      el("p", { className: "muted" }, "Private images from chat. Blur reveal follows Chat settings (hold / 5s / session). When Encrypted chat is on, images use the shared chat key."),
+      el("div", { className: "row wrap" }, [
+        el("button", {
+          className: "primary-btn",
+          type: "button",
+          onClick: () => cameraInput.click(),
+        }, "Take photo"),
+        el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: () => fileInput.click(),
+        }, "Upload image"),
+      ]),
       fileInput,
+      cameraInput,
       grid,
       error,
       el("button", {
@@ -11341,41 +11756,60 @@ function renderChat(dynamicId) {
         const shouldBlur =
           permissionBlocked ||
           (!!msg.image_blurred && !revealedImages.has(msg.id));
-        const img = el("img", {
-          className: `chat-image ${shouldBlur ? "blurred" : ""}`,
-          src: msg.image_data,
-          alt: "Shared image",
-        });
+        let imageSrc = msg.image_data;
+        if (
+          typeof imageSrc === "string" &&
+          !imageSrc.startsWith("data:") &&
+          !imageSrc.startsWith("blob:") &&
+          !imageSrc.startsWith("http")
+        ) {
+          try {
+            const decrypted = await decryptVaultPayload(id, imageSrc);
+            imageSrc = decrypted || "[Unable to decrypt image]";
+          } catch {
+            imageSrc = "[Unable to decrypt image]";
+          }
+        }
+        const isDecryptError = typeof imageSrc === "string" && imageSrc.startsWith("[Unable");
         const bubbleKids = [
           el("span", { className: "muted chat-sender" }, msg.sender_display_name),
-          img,
         ];
-        if (permissionBlocked) {
-          attachBlurReveal(img, { id: msg.id, revealedSet: revealedImages, locked: true });
-          bubbleKids.push(
-            el("p", { className: "muted" }, "Locked — permission required to view."),
-            el("button", {
-              type: "button",
-              className: "ghost-btn",
-              onClick: async () => {
-                try {
-                  await api(`/dynamics/${id}/chat/messages/${msg.id}/request-image-unlock`, {
-                    method: "POST",
-                    body: "{}",
-                  });
-                  await refresh();
-                } catch (err) {
-                  const errEl = document.querySelector(".chat-screen .error");
-                  if (errEl) {
-                    errEl.textContent = err.message;
-                    errEl.classList.remove("hidden");
+        if (isDecryptError) {
+          bubbleKids.push(el("p", { className: "muted" }, imageSrc));
+        } else {
+          const img = el("img", {
+            className: `chat-image ${shouldBlur ? "blurred" : ""}`,
+            src: imageSrc,
+            alt: "Shared image",
+          });
+          bubbleKids.push(img);
+          if (permissionBlocked) {
+            attachBlurReveal(img, { id: msg.id, revealedSet: revealedImages, locked: true });
+            bubbleKids.push(
+              el("p", { className: "muted" }, "Locked — permission required to view."),
+              el("button", {
+                type: "button",
+                className: "ghost-btn",
+                onClick: async () => {
+                  try {
+                    await api(`/dynamics/${id}/chat/messages/${msg.id}/request-image-unlock`, {
+                      method: "POST",
+                      body: "{}",
+                    });
+                    await refresh();
+                  } catch (err) {
+                    const errEl = document.querySelector(".chat-screen .error");
+                    if (errEl) {
+                      errEl.textContent = err.message;
+                      errEl.classList.remove("hidden");
+                    }
                   }
-                }
-              },
-            }, "Request unlock")
-          );
-        } else if (msg.image_blurred && !revealedImages.has(msg.id)) {
-          attachBlurReveal(img, { id: msg.id, revealedSet: revealedImages });
+                },
+              }, "Request unlock")
+            );
+          } else if (msg.image_blurred && !revealedImages.has(msg.id)) {
+            attachBlurReveal(img, { id: msg.id, revealedSet: revealedImages });
+          }
         }
         if (msg.image_locked && msg.is_yours) {
           bubbleKids.push(
@@ -11424,14 +11858,21 @@ function renderChat(dynamicId) {
 
   async function sendImage(file, { locked = false } = {}) {
     const data = await readImageFile(file);
-    await ensureChatCryptoKey(id, { createIfMissing: false });
+    let image_data = data;
+    if (settings.e2e_enabled) {
+      if (!cryptoSubtleAvailable()) throw encryptionUnavailableError();
+      await ensureChatCryptoKey(id, { createIfMissing: false });
+      image_data = await encryptChatText(id, data);
+    } else {
+      await ensureChatCryptoKey(id, { createIfMissing: false }).catch(() => null);
+    }
     const vault_image_encrypted = await encryptVaultPayload(id, data);
     const lock = !!locked && !!settings.you_are_dominant;
     await api(`/dynamics/${id}/chat/messages`, {
       method: "POST",
       body: JSON.stringify({
         message_type: "image",
-        image_data: data,
+        image_data,
         image_blurred: blurImages || lock,
         image_locked: lock,
         vault_image_encrypted,
@@ -11520,11 +11961,17 @@ function renderChat(dynamicId) {
         accept: "image/*",
         className: "hidden",
       });
+      const cameraInput = el("input", {
+        type: "file",
+        accept: "image/*",
+        capture: "environment",
+        className: "hidden",
+      });
       const attachBtn = el("button", {
         className: "chat-icon-btn",
         type: "button",
-        title: "Attach image",
-        "aria-label": "Attach image",
+        title: "Attach or take photo",
+        "aria-label": "Attach or take photo",
       }, "+");
       const sendBtn = el("button", {
         className: "chat-send-btn",
@@ -11591,9 +12038,9 @@ function renderChat(dynamicId) {
           handleSend();
         }
       });
-      attachBtn.addEventListener("click", () => imageInput.click());
-      imageInput.addEventListener("change", async () => {
-        const file = imageInput.files?.[0];
+
+      async function handlePickedImage(inputEl) {
+        const file = inputEl.files?.[0];
         if (!file) return;
         error.classList.add("hidden");
         try {
@@ -11601,19 +12048,54 @@ function renderChat(dynamicId) {
           if (settings.you_are_dominant) {
             const choice = await askDomImageOptions(file);
             if (!choice) {
-              imageInput.value = "";
+              inputEl.value = "";
               return;
             }
             locked = !!choice.locked;
           }
           await sendImage(file, { locked });
-          imageInput.value = "";
+          inputEl.value = "";
           await refresh();
         } catch (err) {
           error.textContent = err.message;
           error.classList.remove("hidden");
         }
+      }
+
+      attachBtn.addEventListener("click", () => {
+        const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
+        const sheet = el("div", { className: "chat-image-sheet card stack" }, [
+          el("strong", {}, "Add photo"),
+          el("button", {
+            type: "button",
+            className: "primary-btn",
+            onClick: () => {
+              backdrop.remove();
+              cameraInput.click();
+            },
+          }, "Take photo"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              backdrop.remove();
+              imageInput.click();
+            },
+          }, "Choose from library"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => backdrop.remove(),
+          }, "Cancel"),
+        ]);
+        backdrop.appendChild(sheet);
+        backdrop.addEventListener("click", (ev) => {
+          if (ev.target === backdrop) backdrop.remove();
+        });
+        document.body.appendChild(backdrop);
       });
+      imageInput.addEventListener("change", () => handlePickedImage(imageInput));
+      cameraInput.addEventListener("change", () => handlePickedImage(cameraInput));
 
       let typingPingAt = 0;
       input.addEventListener("input", () => {
@@ -11716,7 +12198,7 @@ function renderChat(dynamicId) {
       const isDom = !!settings.you_are_dominant;
       if (!cryptoSubtleAvailable() && e2eMode.checked) {
         panelStatus.textContent =
-          "Web Crypto unavailable on this URL — turn off E2E or use https:// / localhost. Images still send (not E2E-encrypted).";
+          "Web Crypto unavailable on this URL — turn off E2E or use https:// / localhost. Text and images need Web Crypto when Encrypted chat is on.";
       }
 
       function appendMaybeLocked(labelNode, settingKey, settingLabel) {
@@ -11745,7 +12227,7 @@ function renderChat(dynamicId) {
         el(
           "p",
           { className: "muted" },
-          "Session unblur resets on reload or leaving chat. Text E2E needs Web Crypto; images are stored separately and still work without it."
+          "Session unblur resets on reload or leaving chat. When Encrypted chat is on, text and images both use the shared AES key."
         ),
       );
       appendMaybeLocked(
@@ -11888,6 +12370,8 @@ function renderChat(dynamicId) {
         chatLog,
         error,
         composer,
+        imageInput,
+        cameraInput,
       ]);
       viewEl.classList.add("chat-view");
       setViewContent(screen);
@@ -13498,7 +13982,10 @@ async function renderRoute() {
     if (parts[2] === "interview") return renderInterview(dynamicId);
     if (parts[2] === "context") return renderContext(dynamicId);
     if (parts[2] === "track") return renderTrackingHub(dynamicId);
-    if (parts[2] === "tracking") return renderTracking(dynamicId);
+    if (parts[2] === "tracking") {
+      if (parts[3] === "history") return renderOrgasmPriorHistory(dynamicId);
+      return renderTracking(dynamicId);
+    }
     if (parts[2] === "feelings") return renderFeelings(dynamicId);
     if (parts[2] === "punishment") {
       if (parts[3]) return renderPunishment(dynamicId, parts[3]);

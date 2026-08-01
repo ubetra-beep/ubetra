@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta
-
+import csv
+import io
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 
 from sqlalchemy.orm import Session, joinedload
 
@@ -23,6 +25,7 @@ from ..models import (
 )
 
 from ..schemas import (
+    OrgasmDetailCreate,
     OrgTrackingEntryCreate,
     OrgTrackingEntryOut,
     OrgTrackingEntryUpdate,
@@ -689,4 +692,232 @@ def delete_tracking_entry(
     db.delete(entry)
 
     db.commit()
+
+
+HISTORICAL_CSV_HEADERS = [
+    "partner",
+    "event_type",
+    "occurred_at",
+    "ended_at",
+    "notes",
+    "tags",
+    "orgasm_tags",
+]
+
+# Example default tags mirroring frontend ORGASM_TYPE_PRESETS / PLAY_TYPE_PRESETS
+_EXAMPLE_ORGASM_TAGS = "full orgasm,handjob"
+_EXAMPLE_PLAY_TAGS = "edging,massage"
+
+
+def _tracking_csv_template_body(example_name: str = "Prince") -> str:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(HISTORICAL_CSV_HEADERS)
+    writer.writerow(
+        [
+            example_name,
+            "orgasm",
+            "2025-06-01T20:00:00",
+            "2025-06-01T20:45:00",
+            "Imported from previous app",
+            "",
+            _EXAMPLE_ORGASM_TAGS,
+        ]
+    )
+    writer.writerow(
+        [
+            example_name,
+            "no_orgasm",
+            "2025-06-15T21:00:00",
+            "2025-06-15T22:00:00",
+            "Play session without orgasm",
+            _EXAMPLE_PLAY_TAGS,
+            "",
+        ]
+    )
+    writer.writerow(
+        [
+            example_name,
+            "orgasm",
+            "2025-07-10 19:30",
+            "",
+            "Quick log — example tags: Full Orgasm, Ruined Orgasm, Denied, Milking, Partial-Milking, Dildo, Handjob, PiV, Finger, Oral, Vibrator, Masturbation, Cheated, Anal, Prostate",
+            "",
+            "ruined orgasm,oral",
+        ]
+    )
+    return buf.getvalue()
+
+
+def _parse_csv_datetime(raw: str) -> datetime | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+    ):
+        try:
+            return datetime.strptime(text.replace("Z", ""), fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _resolve_partner_for_csv(db: Session, dynamic_id: str, label: str) -> Membership:
+    memberships = db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
+    needle = (label or "").strip().lower()
+    if not needle:
+        raise ValueError("partner is required")
+    for m in memberships:
+        if m.display_name.strip().lower() == needle or m.id == label.strip():
+            return m
+    if len(memberships) == 1:
+        return memberships[0]
+    raise ValueError(f"Unknown partner “{label}”")
+
+
+@router.get("/{dynamic_id}/tracking/historical/csv-template")
+def download_tracking_historical_csv_template(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    membership = get_membership(dynamic_id, user, db)
+    example = membership.display_name or "Partner"
+    partner = (
+        db.query(Membership)
+        .filter(Membership.dynamic_id == dynamic_id, Membership.id != membership.id)
+        .first()
+    )
+    if partner is not None:
+        example = partner.display_name or example
+    body = _tracking_csv_template_body(example)
+    return Response(
+        content=body,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="ubetra-orgasm-history-template.csv"'
+        },
+    )
+
+
+@router.post("/{dynamic_id}/tracking/historical/import-csv")
+async def import_tracking_historical_csv(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    file: UploadFile = File(...),
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CSV must be UTF-8",
+        ) from exc
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty CSV")
+
+    field_map = {name.strip().lower(): name for name in reader.fieldnames if name}
+    required = {"partner", "event_type", "occurred_at"}
+    missing = required - set(field_map)
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Missing columns: {', '.join(sorted(missing))}",
+        )
+
+    created = 0
+    errors: list[str] = []
+    for idx, row in enumerate(reader, start=2):
+        try:
+            label = (row.get(field_map["partner"]) or "").strip()
+            target = _resolve_partner_for_csv(db, dynamic_id, label)
+            et_raw = (row.get(field_map["event_type"]) or "").strip().lower().replace(" ", "_")
+            if et_raw in ("play", "no orgasm", "no-orgasm"):
+                et_raw = "no_orgasm"
+            if et_raw not in ("orgasm", "no_orgasm"):
+                raise ValueError("event_type must be orgasm or no_orgasm")
+            event_type = OrgEventType(et_raw)
+            occurred_at = as_naive_utc(_parse_csv_datetime(row.get(field_map["occurred_at"]) or ""))
+            if occurred_at is None:
+                raise ValueError("occurred_at is required")
+            ended_raw = row.get(field_map.get("ended_at", "ended_at")) if "ended_at" in field_map else ""
+            ended_at = as_naive_utc(_parse_csv_datetime(ended_raw or ""))
+            notes = (row.get(field_map.get("notes", "notes")) or "").strip()[:2000] if "notes" in field_map else ""
+            tags_raw = (row.get(field_map.get("tags", "tags")) or "").strip() if "tags" in field_map else ""
+            tags = [t.strip() for t in tags_raw.replace(";", ",").split(",") if t.strip()]
+            orgasm_raw = (
+                (row.get(field_map.get("orgasm_tags", "orgasm_tags")) or "").strip()
+                if "orgasm_tags" in field_map
+                else ""
+            )
+            orgasm_tag_groups = [
+                [t.strip() for t in group.replace(";", ",").split(",") if t.strip()]
+                for group in orgasm_raw.split("|")
+                if group.strip()
+            ]
+            orgasms = [{"tags": group} for group in orgasm_tag_groups if group]
+            if event_type == OrgEventType.orgasm and not orgasms:
+                # Fall back: treat play tags column as a single orgasm if orgasm_tags empty
+                if tags:
+                    orgasms = [{"tags": tags}]
+                    tags = []
+                else:
+                    raise ValueError("orgasm events need orgasm_tags (comma-separated; use | for multiple orgasms)")
+            if event_type == OrgEventType.no_orgasm and orgasms:
+                raise ValueError("no_orgasm events cannot include orgasm_tags")
+
+            duration_minutes = None
+            if ended_at is not None and ended_at >= occurred_at:
+                secs = (ended_at - occurred_at).total_seconds()
+                duration_minutes = min(24 * 60, int(round(secs / 60)))
+
+            entry = OrgTrackingEntry(
+                dynamic_id=dynamic_id,
+                logged_by_membership_id=membership.id,
+                for_membership_id=target.id,
+                event_type=event_type,
+                notes=notes,
+                tags=tags_to_string(tags),
+                occurred_at=occurred_at,
+                ended_at=ended_at,
+                duration_minutes=duration_minutes,
+            )
+            if orgasms:
+                _apply_orgasms(entry, [OrgasmDetailCreate(tags=o["tags"]) for o in orgasms])
+            db.add(entry)
+            created += 1
+        except HTTPException as exc:
+            errors.append(f"Row {idx}: {exc.detail}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Row {idx}: {exc}")
+
+    if created:
+        post_system_event(
+            db,
+            dynamic_id,
+            membership,
+            f"imported {created} prior tracking entr{'y' if created == 1 else 'ies'} from CSV",
+        )
+        db.commit()
+    elif errors:
+        db.rollback()
+
+    return {
+        "created": created,
+        "error_count": len(errors),
+        "errors": errors[:25],
+    }
 

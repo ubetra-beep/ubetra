@@ -46,7 +46,10 @@ from ..schemas import (
     ChastitySubSetting,
     ChastitySubSettingUpdate,
     ChastityTimerExtend,
+    TagPresetsOut,
+    TagPresetsUpdate,
 )
+from ..services.features import is_feature_enabled
 from ..services.tags import tags_to_list, tags_to_string
 from ..services.chastity import (
     BREAK_TYPE_LABELS,
@@ -57,6 +60,7 @@ from ..services.chastity import (
     chastity_subs,
     effective_locked_seconds,
     is_dominant,
+    merge_chastity_tag_presets,
     partner_chastity_stats,
     partner_state,
     require_chastity_sub,
@@ -72,6 +76,18 @@ from ..services.chastity_goals import (
 )
 
 router = APIRouter(prefix="/dynamics", tags=["chastity"])
+
+
+def require_chastity_feature(db: Session, dynamic_id: str) -> Dynamic:
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    if not is_feature_enabled(dynamic, "chastity"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chastity is disabled for this dynamic. Turn it on in Menu → Features, or ask the keyholder.",
+        )
+    return dynamic
 
 
 def _membership_map(db: Session, dynamic_id: str) -> dict[str, Membership]:
@@ -228,12 +244,43 @@ def _summary_label(partners: list[ChastityPartnerOverview]) -> str:
     return "No lockup history yet"
 
 
+@router.get("/{dynamic_id}/chastity/tags", response_model=TagPresetsOut)
+def get_chastity_tag_presets(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TagPresetsOut:
+    require_chastity_feature(db, dynamic_id)
+    get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    assert dynamic is not None
+    return TagPresetsOut(presets=tags_to_list(getattr(dynamic, "chastity_tag_presets", "") or ""))
+
+
+@router.put("/{dynamic_id}/chastity/tags", response_model=TagPresetsOut)
+def update_chastity_tag_presets(
+    dynamic_id: str,
+    payload: TagPresetsUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TagPresetsOut:
+    """Either partner may update shared chastity tag presets (custom tags become permanent)."""
+    require_chastity_feature(db, dynamic_id)
+    get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    assert dynamic is not None
+    dynamic.chastity_tag_presets = tags_to_string(payload.presets)
+    db.commit()
+    return TagPresetsOut(presets=tags_to_list(dynamic.chastity_tag_presets or ""))
+
+
 @router.get("/{dynamic_id}/chastity/settings", response_model=ChastitySettingsOut)
 def get_chastity_settings(
     dynamic_id: str,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastitySettingsOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     return _settings_out(db, dynamic_id, membership)
 
@@ -245,6 +292,7 @@ def update_chastity_settings(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastitySettingsOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     target = (
         db.query(Membership)
@@ -257,18 +305,10 @@ def update_chastity_settings(
     if target is None or target.role != PartnerRole.submissive:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid submissive")
 
-    dom = is_dominant(membership)
-    self_update = membership.id == target.id
-
-    if not dom and not self_update:
+    if not is_dominant(membership):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only change chastity settings for yourself.",
-        )
-    if not dom:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the keyholder can enroll or change chastity settings. Submit an enrollment request from Ground rules.",
+            detail="Only the keyholder can enable or disable chastity for a submissive.",
         )
 
     allowed_hours = {preset["hours"] for preset in MAX_LOCK_PRESETS}
@@ -281,10 +321,18 @@ def update_chastity_settings(
             detail="End the active lockup before disabling chastity for this submissive.",
         )
 
+    was_enabled = bool(target.chastity_enabled)
     target.chastity_enabled = payload.chastity_enabled
     target.chastity_max_lock_hours = payload.chastity_max_lock_hours
-    if payload.chastity_enabled:
-        target.chastity_enrollment_requested = False
+    target.chastity_enrollment_requested = False
+    if was_enabled != payload.chastity_enabled:
+        action = "enabled" if payload.chastity_enabled else "disabled"
+        post_system_event(
+            db,
+            dynamic_id,
+            membership,
+            f"{action} chastity for {target.display_name}",
+        )
     db.commit()
     return _settings_out(db, dynamic_id, membership)
 
@@ -295,26 +343,11 @@ def request_chastity_enrollment(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastitySettingsOut:
-    """Submissive requests chastity enrollment; keyholder must approve (or demand-enable)."""
-    membership = get_membership(dynamic_id, user, db)
-    if membership.role != PartnerRole.submissive:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only a submissive can request chastity enrollment.",
-        )
-    if membership.chastity_enabled:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already enrolled")
-    membership.chastity_enrollment_requested = True
-    if membership.chastity_max_lock_hours is None:
-        membership.chastity_max_lock_hours = 72
-    post_system_event(
-        db,
-        dynamic_id,
-        membership,
-        "requested chastity enrollment",
+    """Removed: chastity no longer uses enrollment requests (410)."""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Chastity enrollment requests are no longer used. When the Chastity feature is on, tracking is available unless the keyholder disables it for you in Ground rules.",
     )
-    db.commit()
-    return _settings_out(db, dynamic_id, membership)
 
 
 @router.post("/{dynamic_id}/chastity/enrollment-request/cancel", response_model=ChastitySettingsOut)
@@ -323,12 +356,10 @@ def cancel_chastity_enrollment_request(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastitySettingsOut:
-    membership = get_membership(dynamic_id, user, db)
-    if membership.role != PartnerRole.submissive:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only a submissive can cancel their request.")
-    membership.chastity_enrollment_requested = False
-    db.commit()
-    return _settings_out(db, dynamic_id, membership)
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Chastity enrollment requests are no longer used.",
+    )
 
 
 @router.post("/{dynamic_id}/chastity/enrollment-request/{membership_id}/decline", response_model=ChastitySettingsOut)
@@ -338,20 +369,10 @@ def decline_chastity_enrollment_request(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastitySettingsOut:
-    membership = get_membership(dynamic_id, user, db)
-    if not is_dominant(membership):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can decline enrollment.")
-    target = (
-        db.query(Membership)
-        .filter(Membership.id == membership_id, Membership.dynamic_id == dynamic_id)
-        .first()
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Chastity enrollment requests are no longer used.",
     )
-    if target is None or target.role != PartnerRole.submissive:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid submissive")
-    target.chastity_enrollment_requested = False
-    post_system_event(db, dynamic_id, membership, f"declined chastity enrollment for {target.display_name}")
-    db.commit()
-    return _settings_out(db, dynamic_id, membership)
 
 
 @router.patch("/{dynamic_id}/chastity/policy", response_model=ChastitySettingsOut)
@@ -361,6 +382,7 @@ def update_chastity_policy(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastitySettingsOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     if not is_dominant(membership):
         raise HTTPException(
@@ -392,6 +414,7 @@ def chastity_overview(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityOverviewOut:
+    require_chastity_feature(db, dynamic_id)
     get_membership(dynamic_id, user, db)
     memberships = db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
     # Fire one-shot keyholder pushes for any overdue planned ends
@@ -423,6 +446,7 @@ def get_chastity_goals(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     dynamic = db.get(Dynamic, dynamic_id)
     if dynamic is None:
@@ -456,6 +480,7 @@ def put_chastity_goals(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     if not is_dominant(membership):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can edit goals")
@@ -509,6 +534,7 @@ def chastity_stats(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityStatsOut:
+    require_chastity_feature(db, dynamic_id)
     get_membership(dynamic_id, user, db)
     memberships = db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
     partners = [
@@ -531,6 +557,7 @@ def list_lockups(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ChastityLockupOut]:
+    require_chastity_feature(db, dynamic_id)
     get_membership(dynamic_id, user, db)
     from ..services.chastity_orgasm_repair import repair_missed_orgasm_releases
 
@@ -566,6 +593,7 @@ def start_lockup(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     target = (
         db.query(Membership)
@@ -617,6 +645,9 @@ def start_lockup(
         tags=tags_to_string(payload.tags),
     )
     db.add(lockup)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is not None:
+        merge_chastity_tag_presets(dynamic, payload.tags)
     post_system_event(
         db,
         dynamic_id,
@@ -639,6 +670,7 @@ def create_historical_lockup(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     target = (
         db.query(Membership)
@@ -680,6 +712,9 @@ def create_historical_lockup(
         tags=tags_to_string(payload.tags),
     )
     db.add(lockup)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is not None:
+        merge_chastity_tag_presets(dynamic, payload.tags)
     post_system_event(
         db,
         dynamic_id,
@@ -768,6 +803,7 @@ def download_historical_csv_template(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
+    require_chastity_feature(db, dynamic_id)
     get_membership(dynamic_id, user, db)
     subs = (
         db.query(Membership)
@@ -799,6 +835,7 @@ async def import_historical_csv(
     db: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
 ) -> dict:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     raw = await file.read()
     try:
@@ -873,6 +910,9 @@ async def import_historical_csv(
                     tags=tags_to_string(tags),
                 )
             )
+            dynamic = db.get(Dynamic, dynamic_id)
+            if dynamic is not None:
+                merge_chastity_tag_presets(dynamic, tags)
             created += 1
         except HTTPException as exc:
             errors.append(f"Row {idx}: {exc.detail}")
@@ -905,6 +945,7 @@ def end_lockup(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     lockup = _load_lockup(db, dynamic_id, lockup_id)
     if lockup.status != LockupStatus.active:
@@ -938,6 +979,8 @@ def end_lockup(
         existing = tags_to_list(getattr(lockup, "tags", "") or "")
         merged = list(dict.fromkeys([*existing, *payload.tags]))
         lockup.tags = tags_to_string(merged)
+        if dynamic is not None:
+            merge_chastity_tag_presets(dynamic, payload.tags)
     sub = db.get(Membership, lockup.for_membership_id)
     sub_name = sub.display_name if sub else "partner"
     from ..services.chat_events import post_activity_event
@@ -964,6 +1007,7 @@ def cancel_lockup(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     lockup = _load_lockup(db, dynamic_id, lockup_id)
     is_subject = membership.id == lockup.for_membership_id
@@ -1014,6 +1058,7 @@ def update_lockup_note(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
     get_membership(dynamic_id, user, db)
     lockup = _load_lockup(db, dynamic_id, lockup_id)
     lockup.device_notes = payload.note.strip()
@@ -1034,6 +1079,7 @@ def create_break(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     lockup = _load_lockup(db, dynamic_id, lockup_id)
     if lockup.status != LockupStatus.active:
@@ -1071,6 +1117,9 @@ def create_break(
         created_by_membership_id=membership.id,
     )
     db.add(brk)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is not None:
+        merge_chastity_tag_presets(dynamic, payload.tags)
     post_system_event(
         db,
         dynamic_id,
@@ -1094,6 +1143,7 @@ def finish_break(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     lockup = _load_lockup(db, dynamic_id, lockup_id)
     brk = next((b for b in lockup.breaks if b.id == break_id), None)
@@ -1141,6 +1191,7 @@ def update_lockup(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
     get_membership(dynamic_id, user, db)
     lockup = _load_lockup(db, dynamic_id, lockup_id)
     if lockup.status == LockupStatus.active and active_break(lockup):
@@ -1172,6 +1223,9 @@ def update_lockup(
         lockup.release_notes = payload.release_notes.strip()
     if payload.tags is not None:
         lockup.tags = tags_to_string(payload.tags)
+        dynamic = db.get(Dynamic, dynamic_id)
+        if dynamic is not None:
+            merge_chastity_tag_presets(dynamic, payload.tags)
     if payload.ended_kind is not None:
         lockup.ended_kind = payload.ended_kind
 
@@ -1205,6 +1259,7 @@ def extend_lock_timer(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     if not is_dominant(membership):
         raise HTTPException(
@@ -1245,6 +1300,7 @@ def confirm_timer_release(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     if not is_dominant(membership):
         raise HTTPException(
@@ -1297,6 +1353,7 @@ def delete_break(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     lockup = _load_lockup(db, dynamic_id, lockup_id)
     brk = next((b for b in lockup.breaks if b.id == break_id), None)
@@ -1351,6 +1408,7 @@ def update_break(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     lockup = _load_lockup(db, dynamic_id, lockup_id)
     brk = next((b for b in lockup.breaks if b.id == break_id), None)
@@ -1375,6 +1433,9 @@ def update_break(
         brk.break_type = _parse_break_type(payload.break_type)
     if payload.tags is not None:
         brk.tags = tags_to_string(payload.tags)
+        dynamic = db.get(Dynamic, dynamic_id)
+        if dynamic is not None:
+            merge_chastity_tag_presets(dynamic, payload.tags)
 
     from ..services.chastity import validate_break_times
 
@@ -1405,6 +1466,7 @@ def list_limit_proposals(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ChastityLimitProposalOut]:
+    require_chastity_feature(db, dynamic_id)
     get_membership(dynamic_id, user, db)
     memberships = _membership_map(db, dynamic_id)
     proposals = (
@@ -1428,6 +1490,7 @@ def create_limit_proposal(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLimitProposalOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     target = (
         db.query(Membership)
@@ -1494,6 +1557,7 @@ def approve_limit_proposal(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLimitProposalOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     if not is_dominant(membership):
         raise HTTPException(
@@ -1541,6 +1605,7 @@ def reject_limit_proposal(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLimitProposalOut:
+    require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     if not is_dominant(membership):
         raise HTTPException(

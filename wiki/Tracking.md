@@ -24,7 +24,7 @@ Reports, dashboards, and session logs for the dynamic.
 
 Route: `/#/dynamic/{id}/chastity`
 
-Lock/unlock, temporary breaks, timers, and goals. The Dom/keyholder enrolls and configures; the Sub may request enrollment or lock limits depending on policy.
+Lock/unlock, temporary breaks, timers, and goals. When the Chastity feature is on, Subs can track immediately unless the Dom force-disables them. Subs may propose lock limits depending on policy.
 
 ![Chastity](images/13-chastity.png)
 

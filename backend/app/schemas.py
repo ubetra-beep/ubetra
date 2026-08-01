@@ -898,19 +898,37 @@ class InterviewReplyIn(BaseModel):
 
 
 class ContextLinkCreate(BaseModel):
-    category: ContextLinkCategory
+    """Legacy Drive URL create — prefer multipart upload."""
+
+    category: ContextLinkCategory | None = None
+    subject: str = "other"
     title: str = Field(min_length=1, max_length=200)
-    url: str = Field(min_length=8, max_length=2000)
+    url: str = Field(default="", max_length=2000)
     notes: str = ""
+    use_for_ai: bool = True
+    text_content: str = ""
+
+
+class ContextLinkUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    subject: str | None = None
+    notes: str | None = None
+    use_for_ai: bool | None = None
 
 
 class ContextLinkOut(BaseModel):
     id: str
     category: ContextLinkCategory
+    subject: str = "other"
     title: str
-    url: str
+    url: str = ""
     notes: str
+    filename: str = ""
+    mime_type: str = ""
+    file_size: int = 0
+    use_for_ai: bool = True
     has_fetched_text: bool
+    text_preview: str = ""
     added_by_display_name: str
     created_at: datetime
 
@@ -921,6 +939,43 @@ class ContextLinkOut(BaseModel):
 class ContextLinkCategoryOut(BaseModel):
     id: str
     label: str
+
+
+class JournalEntryCreate(BaseModel):
+    title: str = Field(default="", max_length=200)
+    body: str = Field(default="", max_length=50000)
+    use_for_ai: bool = True
+    llm_assisted: bool = False
+
+
+class JournalEntryUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    body: str | None = Field(default=None, max_length=50000)
+    use_for_ai: bool | None = None
+
+
+class JournalEntryOut(BaseModel):
+    id: str
+    title: str
+    body: str
+    use_for_ai: bool
+    llm_assisted: bool
+    author_display_name: str
+    membership_id: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class JournalAssistRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=4000)
+    draft: str = Field(default="", max_length=50000)
+
+
+class JournalAssistOut(BaseModel):
+    text: str
 
 
 class OrgasmDetailCreate(BaseModel):

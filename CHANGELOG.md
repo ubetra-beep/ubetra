@@ -3,6 +3,22 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.76] — 2026-07-31
+
+### Changed
+- Chastity: no enrollment approval — feature on means Subs can track; Dom can force-disable a Sub or turn off the module
+- Chastity tags are empty by default and shared; custom tags become permanent presets
+- Chat/vault: Take photo camera capture; images encrypt with the shared chat key when Encrypted chat is on
+- New browsers default blurred photos to hold-to-view (existing installs keep their mode)
+- Context library: server file uploads + journaling replace Google Drive links; subject tags (stories / journals / scenes) and Use for AI
+- Playtime scenes can be saved into the context library
+
+### Added
+- Orgasm/play prior-history CSV template + import (with example default tags)
+
+### Changed
+- Service worker cache `ubetra-v76`
+
 ## [0.75] — 2026-07-31
 
 ### Changed

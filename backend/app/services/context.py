@@ -12,6 +12,7 @@ from ..models import (
     Interest,
     InterestResponse,
     InterestValue,
+    JournalEntry,
     LockupStatus,
     Membership,
     OrgEventType,
@@ -191,7 +192,7 @@ def _format_tracking_context(db: Session, dynamic_id: str, memberships: list[Mem
 
     if chastity_lines:
         lines.append("")
-        lines.append("Chastity / lockup tracking (enrolled submissives only):")
+        lines.append("Chastity / lockup tracking:")
         lines.extend(chastity_lines)
 
     recent_orgs = (
@@ -344,21 +345,49 @@ def build_dynamic_context(
 
     links = (
         db.query(ContextLink)
-        .filter(ContextLink.dynamic_id == dynamic.id)
+        .filter(
+            ContextLink.dynamic_id == dynamic.id,
+            ContextLink.use_for_ai.is_(True),
+        )
         .order_by(ContextLink.created_at.desc())
         .limit(20)
         .all()
     )
     if links:
-        lines.append("Context library (Google Drive & notes):")
+        from .context_files import CONTEXT_SUBJECTS, normalize_subject
+
+        lines.append("Context library (files & notes tagged for AI):")
         for link in links:
-            category = CONTEXT_CATEGORY_LABELS.get(link.category, link.category.value)
-            lines.append(f"  [{category}] {link.title}")
+            subject = normalize_subject(getattr(link, "subject", None) or link.category.value)
+            label = CONTEXT_SUBJECTS.get(subject, subject)
+            lines.append(f"  [{label}] {link.title}")
             if link.notes.strip():
                 lines.append(f"    Notes: {link.notes.strip()[:500]}")
             if link.fetched_text.strip():
                 snippet = link.fetched_text.strip()[:800]
                 lines.append(f"    Excerpt: {snippet}")
+        lines.append("")
+
+    journals = (
+        db.query(JournalEntry)
+        .filter(
+            JournalEntry.dynamic_id == dynamic.id,
+            JournalEntry.use_for_ai.is_(True),
+        )
+        .order_by(JournalEntry.updated_at.desc())
+        .limit(12)
+        .all()
+    )
+    if journals:
+        membership_map = {m.id: m for m in memberships}
+        lines.append("Journal entries (shared with AI):")
+        for entry in journals:
+            author = membership_map.get(entry.membership_id)
+            name = author.display_name if author else "Partner"
+            lines.append(f"  [{name}] {entry.title or 'Untitled'}")
+            body = (entry.body or "").strip()
+            if body:
+                lines.append(f"    {body[:600]}")
         lines.append("")
 
     if include_tracking:

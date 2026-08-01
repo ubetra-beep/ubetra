@@ -30,7 +30,7 @@ Yellow **Needed** badges mean that partner hasn’t finished interview or kink s
 |------|-------|---------|
 | **Core knowledge** | `/#/dynamic/{id}/knowledge` | Relationship context for AI |
 | **SPTI profile** | `/#/dynamic/{id}/knowledge/spti` | Personality inventory for AI |
-| **Context library** | `/#/dynamic/{id}/context` | Categorized Google Drive links |
+| **Context library** | `/#/dynamic/{id}/context` | Server file library + journaling (AI subject tags) |
 | **Gear** | `/#/dynamic/{id}/gear` | Toys, kink gear, outfits |
 
 Optional modules can be toggled under **Customize menu features** / Settings → Features.

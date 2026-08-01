@@ -10,11 +10,26 @@ from ..models import (
     ChastityBreakType,
     ChastityLockup,
     ChastityRecordType,
+    Dynamic,
     LockupStatus,
     Membership,
     PartnerRole,
 )
+from .tags import tags_to_list, tags_to_string
 from .tracking import format_duration, lockup_duration_seconds
+
+
+def merge_chastity_tag_presets(dynamic: Dynamic, new_tags: list[str] | None) -> None:
+    """Append any new custom tags to the dynamic's shared chastity presets (permanent for both partners)."""
+    if not new_tags:
+        return
+    existing = tags_to_list(getattr(dynamic, "chastity_tag_presets", "") or "")
+    cleaned = [str(t).strip() for t in new_tags if str(t).strip()]
+    if not cleaned:
+        return
+    merged = list(dict.fromkeys([*existing, *cleaned]))
+    if merged != existing:
+        dynamic.chastity_tag_presets = tags_to_string(merged)
 
 
 def as_naive_utc(dt: datetime | None) -> datetime | None:
@@ -79,7 +94,7 @@ def require_chastity_sub(target: Membership) -> None:
     if not target.chastity_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Chastity is not enabled for this submissive. Enable it in chastity settings first.",
+            detail="Chastity is disabled for this submissive. The keyholder can re-enable it in Ground rules.",
         )
 
 

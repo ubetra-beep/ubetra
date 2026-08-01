@@ -47,5 +47,6 @@ scripts/fix-server-ports.sh
 _tmp*
 *.log
 .wiki-clone/
+.wiki-official/
 wiki/capture-meta.json
 wiki/BOOTSTRAP_NEEDED.txt

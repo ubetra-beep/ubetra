@@ -24,6 +24,7 @@ from .routers import (
     google_tasks,
     interests,
     interview,
+    journals,
     onboarding,
     org_tracking,
     history_dashboard,
@@ -61,6 +62,7 @@ app.include_router(assistant.router, prefix="/api")
 app.include_router(interview.router, prefix="/api")
 app.include_router(onboarding.router, prefix="/api")
 app.include_router(context_links.router, prefix="/api")
+app.include_router(journals.router, prefix="/api")
 app.include_router(org_tracking.router, prefix="/api")
 app.include_router(feelings.router, prefix="/api")
 app.include_router(punishments.router, prefix="/api")

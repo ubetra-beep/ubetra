@@ -10,7 +10,7 @@ UBETRA assumes a **Dominant / keyholder** and a **Submissive** in each dynamic. 
 |------|----------|------------|
 | Dom-controlled settings | Apply immediately | **Submit settings change** → Dom approves in chat |
 | Ground rules | Approves | Proposes (pending) |
-| Chastity | Enroll, goals, timers | Request enrollment / limits; break deletes if allowed |
+| Chastity | Enable/disable per Sub, goals, timers | Propose lock limits; break deletes if allowed |
 | Tasks | Create / assign / approve | Request; complete approved |
 | Punishment | Assign / resolve | Confess |
 | Acts | Generate / review | Request after interview |

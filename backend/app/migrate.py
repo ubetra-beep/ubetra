@@ -71,6 +71,38 @@ def run_migrations() -> None:
       conn.execute(
         text("ALTER TABLE memberships ADD COLUMN chastity_enrollment_requested BOOLEAN DEFAULT 0")
       )
+    # One-time: no enrollment approval — enable chastity for all submissives; clear request flags.
+    try:
+      done = conn.execute(
+        text("SELECT 1 FROM ubetra_migrations WHERE name = 'chastity_no_enroll_v1' LIMIT 1")
+      ).fetchone()
+    except Exception:
+      conn.execute(
+        text(
+          "CREATE TABLE IF NOT EXISTS ubetra_migrations ("
+          "name VARCHAR(120) PRIMARY KEY, applied_at DATETIME)"
+        )
+      )
+      done = None
+    if not done:
+      try:
+        conn.execute(
+          text(
+            "UPDATE memberships SET chastity_enabled = 1 "
+            "WHERE role = 'submissive'"
+          )
+        )
+        conn.execute(
+          text("UPDATE memberships SET chastity_enrollment_requested = 0")
+        )
+        conn.execute(
+          text(
+            "INSERT OR IGNORE INTO ubetra_migrations (name, applied_at) "
+            "VALUES ('chastity_no_enroll_v1', CURRENT_TIMESTAMP)"
+          )
+        )
+      except Exception:
+        pass
 
     lockup_columns = {
       row[1]
@@ -203,6 +235,10 @@ def run_migrations() -> None:
             "'full orgasm,ruined orgasm,denied,milking,partial-milking,dildo,handjob,piv,"
             "finger,oral,vibrator,masturbation,cheated,anal,prostate'"
           )
+        )
+      if "chastity_tag_presets" not in dynamic_columns:
+        conn.execute(
+          text("ALTER TABLE dynamics ADD COLUMN chastity_tag_presets TEXT DEFAULT ''")
         )
       if "chat_retain_history" not in dynamic_columns:
         conn.execute(
@@ -796,3 +832,75 @@ def run_migrations() -> None:
         conn.execute(
           text("ALTER TABLE dynamics ADD COLUMN assistant_extra_instructions TEXT DEFAULT ''")
         )
+
+    # Context library: server files + AI subject tags
+    context_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(context_links)")).fetchall()
+    }
+    if context_cols:
+      if "subject" not in context_cols:
+        conn.execute(text("ALTER TABLE context_links ADD COLUMN subject VARCHAR(32) DEFAULT 'other'"))
+      if "filename" not in context_cols:
+        conn.execute(text("ALTER TABLE context_links ADD COLUMN filename VARCHAR(255) DEFAULT ''"))
+      if "mime_type" not in context_cols:
+        conn.execute(text("ALTER TABLE context_links ADD COLUMN mime_type VARCHAR(120) DEFAULT ''"))
+      if "file_size" not in context_cols:
+        conn.execute(text("ALTER TABLE context_links ADD COLUMN file_size INTEGER DEFAULT 0"))
+      if "use_for_ai" not in context_cols:
+        conn.execute(text("ALTER TABLE context_links ADD COLUMN use_for_ai BOOLEAN DEFAULT 1"))
+      # One-time backfill subject from legacy category
+      try:
+        conn.execute(
+          text(
+            "CREATE TABLE IF NOT EXISTS ubetra_migrations ("
+            "name VARCHAR(120) PRIMARY KEY, applied_at DATETIME)"
+          )
+        )
+        done = conn.execute(
+          text("SELECT 1 FROM ubetra_migrations WHERE name = 'context_subject_v1' LIMIT 1")
+        ).fetchone()
+        if not done:
+          conn.execute(
+            text(
+              "UPDATE context_links SET subject = CASE category "
+              "WHEN 'fictional_story' THEN 'stories' "
+              "WHEN 'scene_inspiration' THEN 'scenes' "
+              "ELSE 'other' END "
+              "WHERE subject IS NULL OR subject = '' OR subject = 'other'"
+            )
+          )
+          conn.execute(
+            text(
+              "INSERT OR IGNORE INTO ubetra_migrations (name, applied_at) "
+              "VALUES ('context_subject_v1', CURRENT_TIMESTAMP)"
+            )
+          )
+      except Exception:
+        pass
+
+    conn.execute(
+      text(
+        """
+        CREATE TABLE IF NOT EXISTS journal_entries (
+          id VARCHAR(36) PRIMARY KEY,
+          dynamic_id VARCHAR(36) NOT NULL,
+          membership_id VARCHAR(36) NOT NULL,
+          title VARCHAR(200) DEFAULT '',
+          body TEXT DEFAULT '',
+          use_for_ai BOOLEAN DEFAULT 1,
+          llm_assisted BOOLEAN DEFAULT 0,
+          created_at DATETIME,
+          updated_at DATETIME
+        )
+        """
+      )
+    )
+    conn.execute(
+      text("CREATE INDEX IF NOT EXISTS ix_journal_entries_dynamic_id ON journal_entries (dynamic_id)")
+    )
+    conn.execute(
+      text(
+        "CREATE INDEX IF NOT EXISTS ix_journal_entries_membership_id ON journal_entries (membership_id)"
+      )
+    )
