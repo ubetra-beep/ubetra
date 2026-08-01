@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_current_user, get_membership
@@ -124,13 +125,17 @@ def update_journal_entry(
     return _entry_out(entry)
 
 
-@router.delete("/{dynamic_id}/journal/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{dynamic_id}/journal/{entry_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
 def delete_journal_entry(
     dynamic_id: str,
     entry_id: str,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> None:
+) -> Response:
     membership = get_membership(dynamic_id, user, db)
     entry = (
         db.query(JournalEntry)
@@ -146,6 +151,7 @@ def delete_journal_entry(
         )
     db.delete(entry)
     db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{dynamic_id}/journal/assist", response_model=JournalAssistOut)

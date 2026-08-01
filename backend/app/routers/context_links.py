@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_current_user, get_membership
@@ -221,13 +222,17 @@ def update_context_link(
     return _link_out(link)
 
 
-@router.delete("/{dynamic_id}/context/{link_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{dynamic_id}/context/{link_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
 def delete_context_link(
     dynamic_id: str,
     link_id: str,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> None:
+) -> Response:
     get_membership(dynamic_id, user, db)
     link = (
         db.query(ContextLink)
@@ -238,3 +243,4 @@ def delete_context_link(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link not found")
     db.delete(link)
     db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
