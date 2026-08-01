@@ -32,23 +32,32 @@ def _subject_to_category(subject: str) -> ContextLinkCategory:
     return ContextLinkCategory.other
 
 
-def _link_out(link: ContextLink) -> ContextLinkOut:
+def _link_out(link: ContextLink, *, requesting_membership_id: str | None = None) -> ContextLinkOut:
     subject = normalize_subject(getattr(link, "subject", None) or link.category.value)
     text = (link.fetched_text or "").strip()
+    is_author = (
+        requesting_membership_id is not None
+        and link.added_by_membership_id == requesting_membership_id
+    )
+    partner_visible = bool(getattr(link, "partner_visible", True))
+    hidden = not is_author and not partner_visible
     return ContextLinkOut(
         id=link.id,
         category=link.category,
         subject=subject,
-        title=link.title,
-        url=link.url or "",
-        notes=link.notes or "",
-        filename=getattr(link, "filename", "") or "",
+        title="Private entry" if hidden else link.title,
+        url="" if hidden else (link.url or ""),
+        notes="" if hidden else (link.notes or ""),
+        filename="" if hidden else (getattr(link, "filename", "") or ""),
         mime_type=getattr(link, "mime_type", "") or "",
         file_size=int(getattr(link, "file_size", 0) or 0),
         use_for_ai=bool(getattr(link, "use_for_ai", True)),
+        partner_visible=partner_visible,
+        is_private_to_others=hidden,
         has_fetched_text=bool(text),
-        text_preview=text[:240],
+        text_preview="" if hidden else text[:240],
         added_by_display_name=link.added_by.display_name if link.added_by else "Partner",
+        added_by_membership_id=link.added_by_membership_id or "",
         created_at=link.created_at,
     )
 
@@ -80,7 +89,7 @@ def list_context_links(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ContextLinkOut]:
-    get_membership(dynamic_id, user, db)
+    membership = get_membership(dynamic_id, user, db)
     links = (
         db.query(ContextLink)
         .options(joinedload(ContextLink.added_by))
@@ -88,7 +97,7 @@ def list_context_links(
         .order_by(ContextLink.created_at.desc())
         .all()
     )
-    return [_link_out(link) for link in links]
+    return [_link_out(link, requesting_membership_id=membership.id) for link in links]
 
 
 @router.post(
@@ -105,6 +114,7 @@ async def upload_context_file(
     title: str = Form(""),
     notes: str = Form(""),
     use_for_ai: bool = Form(True),
+    partner_visible: bool = Form(True),
 ) -> ContextLinkOut:
     membership = get_membership(dynamic_id, user, db)
     data = await file.read()
@@ -128,6 +138,7 @@ async def upload_context_file(
         mime_type=(file.content_type or "")[:120],
         file_size=len(data),
         use_for_ai=bool(use_for_ai),
+        partner_visible=bool(partner_visible),
     )
     db.add(link)
     db.flush()
@@ -142,7 +153,7 @@ async def upload_context_file(
         .filter(ContextLink.id == link.id)
         .one()
     )
-    return _link_out(link)
+    return _link_out(link, requesting_membership_id=membership.id)
 
 
 @router.post(
@@ -178,6 +189,7 @@ def create_context_link(
         mime_type="text/plain",
         file_size=len((text or payload.notes).encode("utf-8")),
         use_for_ai=bool(payload.use_for_ai),
+        partner_visible=bool(payload.partner_visible),
     )
     db.add(link)
     db.commit()
@@ -187,7 +199,7 @@ def create_context_link(
         .filter(ContextLink.id == link.id)
         .one()
     )
-    return _link_out(link)
+    return _link_out(link, requesting_membership_id=membership.id)
 
 
 @router.patch("/{dynamic_id}/context/{link_id}", response_model=ContextLinkOut)
@@ -198,7 +210,7 @@ def update_context_link(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ContextLinkOut:
-    get_membership(dynamic_id, user, db)
+    membership = get_membership(dynamic_id, user, db)
     link = (
         db.query(ContextLink)
         .options(joinedload(ContextLink.added_by))
@@ -217,9 +229,11 @@ def update_context_link(
         link.notes = payload.notes.strip()
     if payload.use_for_ai is not None:
         link.use_for_ai = bool(payload.use_for_ai)
+    if payload.partner_visible is not None:
+        link.partner_visible = bool(payload.partner_visible)
     db.commit()
     db.refresh(link)
-    return _link_out(link)
+    return _link_out(link, requesting_membership_id=membership.id)
 
 
 @router.delete(

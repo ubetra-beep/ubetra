@@ -751,12 +751,21 @@ class PlaytimeSubjectsOut(BaseModel):
     subjects: list[PlaytimeSubjectOut]
 
 
+class JournalAssistContextFlags(BaseModel):
+    stories: bool = False
+    journals: bool = False
+    scenes: bool = False
+    agreements: bool = False
+    tracking: bool = False
+
+
 class PlaytimeSceneRequest(BaseModel):
     effort: str
     lean: str
     subject: str
     avoid_summary: str = ""
     note: str = ""
+    context_flags: JournalAssistContextFlags | None = None
 
 
 class PlaytimeSceneOut(BaseModel):
@@ -906,6 +915,7 @@ class ContextLinkCreate(BaseModel):
     url: str = Field(default="", max_length=2000)
     notes: str = ""
     use_for_ai: bool = True
+    partner_visible: bool = True
     text_content: str = ""
 
 
@@ -914,6 +924,7 @@ class ContextLinkUpdate(BaseModel):
     subject: str | None = None
     notes: str | None = None
     use_for_ai: bool | None = None
+    partner_visible: bool | None = None
 
 
 class ContextLinkOut(BaseModel):
@@ -927,9 +938,12 @@ class ContextLinkOut(BaseModel):
     mime_type: str = ""
     file_size: int = 0
     use_for_ai: bool = True
+    partner_visible: bool = True
+    is_private_to_others: bool = False
     has_fetched_text: bool
     text_preview: str = ""
     added_by_display_name: str
+    added_by_membership_id: str = ""
     created_at: datetime
 
     class Config:
@@ -946,12 +960,14 @@ class JournalEntryCreate(BaseModel):
     body: str = Field(default="", max_length=50000)
     use_for_ai: bool = True
     llm_assisted: bool = False
+    partner_visible: bool = True
 
 
 class JournalEntryUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     body: str | None = Field(default=None, max_length=50000)
     use_for_ai: bool | None = None
+    partner_visible: bool | None = None
 
 
 class JournalEntryOut(BaseModel):
@@ -960,6 +976,8 @@ class JournalEntryOut(BaseModel):
     body: str
     use_for_ai: bool
     llm_assisted: bool
+    partner_visible: bool = True
+    is_private_to_others: bool = False
     author_display_name: str
     membership_id: str
     created_at: datetime
@@ -972,10 +990,19 @@ class JournalEntryOut(BaseModel):
 class JournalAssistRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     draft: str = Field(default="", max_length=50000)
+    context_flags: JournalAssistContextFlags = Field(default_factory=JournalAssistContextFlags)
 
 
 class JournalAssistOut(BaseModel):
     text: str
+
+
+class JournalDommeReviewRequest(BaseModel):
+    post_system_event: bool = False
+
+
+class JournalDommeReviewOut(BaseModel):
+    summary: str
 
 
 class OrgasmDetailCreate(BaseModel):

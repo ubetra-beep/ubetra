@@ -849,6 +849,10 @@ def run_migrations() -> None:
         conn.execute(text("ALTER TABLE context_links ADD COLUMN file_size INTEGER DEFAULT 0"))
       if "use_for_ai" not in context_cols:
         conn.execute(text("ALTER TABLE context_links ADD COLUMN use_for_ai BOOLEAN DEFAULT 1"))
+      if "partner_visible" not in context_cols:
+        conn.execute(
+          text("ALTER TABLE context_links ADD COLUMN partner_visible BOOLEAN DEFAULT 1")
+        )
       # One-time backfill subject from legacy category
       try:
         conn.execute(
@@ -890,6 +894,7 @@ def run_migrations() -> None:
           body TEXT DEFAULT '',
           use_for_ai BOOLEAN DEFAULT 1,
           llm_assisted BOOLEAN DEFAULT 0,
+          partner_visible BOOLEAN DEFAULT 1,
           created_at DATETIME,
           updated_at DATETIME
         )
@@ -904,3 +909,12 @@ def run_migrations() -> None:
         "CREATE INDEX IF NOT EXISTS ix_journal_entries_membership_id ON journal_entries (membership_id)"
       )
     )
+
+    journal_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(journal_entries)")).fetchall()
+    }
+    if journal_cols and "partner_visible" not in journal_cols:
+      conn.execute(
+        text("ALTER TABLE journal_entries ADD COLUMN partner_visible BOOLEAN DEFAULT 1")
+      )

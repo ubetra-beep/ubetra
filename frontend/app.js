@@ -13,12 +13,11 @@ const state = {
 
 const NAV_TABS = [
   { id: "tracking", label: "Tracking", icon: "📈", enabled: true, requiresDynamic: true },
-  { id: "dynamic", label: "Dynamic", icon: "👥", enabled: true },
   { id: "workshop", label: "Playtime", icon: "✨", enabled: true, requiresDynamic: true },
   { id: "chat", label: "Chat", icon: "💬", enabled: true, requiresDynamic: true },
 ];
 
-/** Facets shown on the Dynamic overview. */
+/** Facets shown on the Dynamic overview / Setup section. */
 const FACET_SECTIONS = [
   {
     id: "essentials",
@@ -35,7 +34,7 @@ const FACET_SECTIONS = [
     items: [
       { id: "core_knowledge", icon: "🧠", title: "Core knowledge", subtitle: "Relationship context for AI", core: true, route: "knowledge" },
       { id: "spti", icon: "🧬", title: "SPTI profile", subtitle: "Personality test for AI", route: "knowledge/spti" },
-      { id: "context_library", icon: "📎", title: "Context library", subtitle: "Google Drive links by category", route: "context" },
+      { id: "context_library", icon: "📎", title: "Context library", subtitle: "Stories, scenes, and files for AI", route: "context" },
       { id: "gear", icon: "🧰", title: "Gear", subtitle: "Vanilla toys, kinky stuff, outfits", route: "gear" },
     ],
   },
@@ -63,6 +62,7 @@ const TRACKING_FACETS = [
     route: "tasks",
     alsoEnabledBy: ["acts"],
   },
+  { id: "journal", icon: "📓", title: "Journal", subtitle: "Private writing with optional AI assist", route: "journal" },
   { id: "image_vault", icon: "🖼", title: "Image vault", subtitle: "Encrypted private images from chat", route: "vault" },
 ];
 
@@ -507,6 +507,16 @@ function el(tag, attrs = {}, children = []) {
   return node;
 }
 
+function showToast(message, { duration = 3200 } = {}) {
+  const toast = el("div", { className: "ubetra-toast" }, message);
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("visible"));
+  setTimeout(() => {
+    toast.classList.remove("visible");
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
+
 const ORGASM_TYPE_PRESETS = [
   "Full Orgasm",
   "Ruined Orgasm",
@@ -842,8 +852,192 @@ function buildTrackingEntryEditCard(dynamicId, entry, partners, { onSaved, onCan
   return card;
 }
 
+/** Fixed accent hex per curated preset tag; unknown tags get a stable hash-based hue. */
+const TAG_ACCENT_COLORS = {
+  "full orgasm": "#ef4444",
+  "ruined orgasm": "#f97316",
+  "denied": "#6366f1",
+  "milking": "#ec4899",
+  "partial-milking": "#db2777",
+  "dildo": "#a855f7",
+  "handjob": "#0ea5e9",
+  "piv": "#e11d48",
+  "finger": "#14b8a6",
+  "oral": "#f59e0b",
+  "vibrator": "#8b5cf6",
+  "masturbation": "#22c55e",
+  "cheated": "#dc2626",
+  "anal": "#7c3aed",
+  "prostate": "#0891b2",
+  "edging": "#f97316",
+  "massage": "#22c55e",
+  "spanking": "#ef4444",
+  "foot rub": "#0ea5e9",
+};
+
+function hashColorForTag(tag) {
+  let hash = 0;
+  for (let i = 0; i < tag.length; i += 1) {
+    hash = (hash << 5) - hash + tag.charCodeAt(i);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 60%, 52%)`;
+}
+
+/** Up to 3 accent colors for a log card's left stripe, sorted alphabetically for stability. */
+function tagAccentColors(tags) {
+  const unique = [...new Set((tags || []).map((t) => (t || "").trim()).filter(Boolean))];
+  const sorted = unique.sort((a, b) => a.localeCompare(b));
+  return sorted
+    .slice(0, 3)
+    .map((tag) => TAG_ACCENT_COLORS[tag.toLowerCase()] || hashColorForTag(tag.toLowerCase()));
+}
+
+function tagAccentGradient(colors) {
+  if (!colors.length) return "";
+  if (colors.length === 1) return colors[0];
+  const step = 100 / colors.length;
+  const stops = colors.map(
+    (c, i) => `${c} ${(i * step).toFixed(1)}%, ${c} ${((i + 1) * step).toFixed(1)}%`
+  );
+  return `linear-gradient(to bottom, ${stops.join(", ")})`;
+}
+
+/** Relative, second-free timestamp: "3m ago", "Today 4:15 PM", "Yesterday 9:02 AM", "Tue 8:00 PM", "Jan 5". */
+function formatLogWhen(value) {
+  const d = parseServerDate(value);
+  if (!d) return "—";
+  const now = new Date();
+  const startOfDay = (dt) => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime();
+  const diffMs = now - d;
+  const timeStr = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (diffMs >= 0 && diffMs < 60 * 60 * 1000) {
+    const mins = Math.max(1, Math.round(diffMs / 60000));
+    return `${mins}m ago`;
+  }
+  if (startOfDay(d) === startOfDay(now)) return `Today ${timeStr}`;
+  const yesterday = new Date(startOfDay(now));
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (startOfDay(d) === yesterday.getTime()) return `Yesterday ${timeStr}`;
+  if (diffMs >= 0 && diffMs < 7 * 24 * 60 * 60 * 1000) {
+    return `${d.toLocaleDateString(undefined, { weekday: "short" })} ${timeStr}`;
+  }
+  return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${timeStr}`;
+}
+
+/** Close any open kebab menu when clicking elsewhere on the page. */
+document.addEventListener("click", () => {
+  document.querySelectorAll(".kebab-menu:not(.hidden)").forEach((menu) => menu.classList.add("hidden"));
+});
+
+function buildKebabMenu(actions) {
+  const menu = el("div", { className: "kebab-menu hidden" });
+  actions.forEach(({ label, onClick, danger }) => {
+    menu.appendChild(
+      el(
+        "button",
+        {
+          type: "button",
+          className: `kebab-menu-item ${danger ? "danger" : ""}`,
+          onClick: (e) => {
+            e.stopPropagation();
+            menu.classList.add("hidden");
+            onClick();
+          },
+        },
+        label
+      )
+    );
+  });
+  const btn = el(
+    "button",
+    {
+      type: "button",
+      className: "kebab-menu-btn",
+      title: "More actions",
+      "aria-label": "More actions",
+      onClick: (e) => {
+        e.stopPropagation();
+        document.querySelectorAll(".kebab-menu:not(.hidden)").forEach((m) => {
+          if (m !== menu) m.classList.add("hidden");
+        });
+        menu.classList.toggle("hidden");
+      },
+    },
+    "⋮"
+  );
+  return el("div", { className: "kebab-menu-wrap" }, [btn, menu]);
+}
+
 function renderTrackingEntrySummary(entry, { dynamicId, editable = false, onChanged } = {}) {
-  function buildCard() {
+  let expanded = false;
+
+  function buildCard(onEdit, onDelete) {
+    const allTags = entry.orgasms?.length
+      ? entry.orgasms.flatMap((o) => o.tags || [])
+      : entry.tags || [];
+    const accentColors = tagAccentColors(allTags);
+    const accentGradient = tagAccentGradient(accentColors);
+
+    const card = el("div", {
+      className: `card log-card ${accentGradient ? "log-card-accent" : ""} ${expanded ? "log-card-expanded" : "log-card-collapsed"}`,
+    });
+    if (accentGradient) card.style.setProperty("--log-card-accent", accentGradient);
+
+    const headerRow = el(
+      "button",
+      {
+        type: "button",
+        className: "log-card-toggle row wrap",
+        onClick: () => {
+          expanded = !expanded;
+          renderView();
+        },
+      },
+      [
+        el("div", { className: "stack log-card-main" }, [
+          el("strong", {}, entry.for_display_name),
+          el("span", { className: "muted log-card-when" }, formatLogWhen(entry.occurred_at)),
+        ]),
+        el("span", { className: "pill" }, formatTrackingEventType(entry.event_type)),
+      ]
+    );
+
+    const topRow = el("div", { className: "row log-card-top" }, [headerRow]);
+    if (onEdit || onDelete) {
+      topRow.appendChild(
+        buildKebabMenu(
+          [
+            onEdit ? { label: "Edit", onClick: onEdit } : null,
+            onDelete ? { label: "Delete", onClick: onDelete, danger: true } : null,
+          ].filter(Boolean)
+        )
+      );
+    }
+    card.appendChild(topRow);
+
+    if (entry.during_lockup) {
+      const lockLabel = entry.during_own_lockup
+        ? "During lockup"
+        : `Partner locked: ${(entry.locked_partner_names || []).join(", ") || "yes"}`;
+      card.appendChild(el("span", { className: "pill log-card-lockup" }, lockLabel));
+    }
+
+    if (allTags.length) {
+      const chipsRow = el("div", { className: "tag-filter-row log-card-chips" });
+      const sortedTags = [...allTags].sort((a, b) => a.localeCompare(b));
+      sortedTags.forEach((tag, idx) => {
+        chipsRow.appendChild(
+          el("span", { className: `tag-chip active ${idx < 2 ? "primary" : "secondary"}` }, tag)
+        );
+      });
+      card.appendChild(chipsRow);
+    }
+
+    if (!expanded) return card;
+
+    const details = el("div", { className: "stack log-card-details" });
     const bits = [formatLocalDateTime(entry.occurred_at)];
     if (entry.ended_at) bits.push(`end ${formatLocalDateTime(entry.ended_at)}`);
     if (entry.duration_minutes != null) bits.push(`${entry.duration_minutes}m`);
@@ -852,78 +1046,62 @@ function renderTrackingEntrySummary(entry, { dynamicId, editable = false, onChan
     if (entry.satisfaction != null) bits.push(`${entry.satisfaction}/5`);
     if (entry.edging_count != null) bits.push(`${entry.edging_count} edges`);
     if (entry.initiated_by_display_name) bits.push(`started by ${entry.initiated_by_display_name}`);
-    const header = el("div", { className: "row wrap" }, [
-      el("strong", {}, entry.for_display_name),
-      el("span", { className: "pill" }, formatTrackingEventType(entry.event_type)),
-    ]);
-    if (entry.during_lockup) {
-      const lockLabel = entry.during_own_lockup
-        ? "During lockup"
-        : `Partner locked: ${(entry.locked_partner_names || []).join(", ") || "yes"}`;
-      header.appendChild(el("span", { className: "pill" }, lockLabel));
-    }
-    const notesText = entry.notes_hidden ? "Private notes hidden" : (entry.notes || null);
-    const card = el("div", { className: "card stack" }, [
-      header,
-      el("p", { className: "muted" }, bits.join(" · ")),
-      notesText ? el("p", { className: entry.notes_hidden ? "muted" : "" }, notesText) : null,
-    ]);
+    details.appendChild(el("p", { className: "muted" }, bits.join(" · ")));
+
+    const notesText = entry.notes_hidden ? "Private notes hidden" : entry.notes || null;
+    if (notesText) details.appendChild(el("p", { className: entry.notes_hidden ? "muted" : "" }, notesText));
+
     if (entry.orgasms?.length) {
       entry.orgasms.forEach((orgasm, idx) => {
-        const tags = el("div", { className: "tag-filter-row" });
-        (orgasm.tags || []).forEach((tag) => tags.appendChild(el("span", { className: "tag-chip active" }, tag)));
-        card.appendChild(el("p", { className: "muted" }, `Orgasm ${idx + 1}`));
-        if (orgasm.tags?.length) card.appendChild(tags);
+        details.appendChild(el("p", { className: "muted" }, `Orgasm ${idx + 1}`));
       });
-    } else if (entry.tags?.length) {
-      const tags = el("div", { className: "tag-filter-row" });
-      entry.tags.forEach((tag) => tags.appendChild(el("span", { className: "tag-chip active" }, tag)));
-      card.appendChild(tags);
     }
     if (entry.session_id && entry.session_entry_count > 1 && dynamicId) {
-      card.appendChild(el("button", {
-        className: "link-btn",
-        type: "button",
-        onClick: () => navigate(`/dynamic/${dynamicId}/history/sessions/${entry.session_id}`),
-      }, "View linked session →"));
+      details.appendChild(
+        el(
+          "button",
+          {
+            className: "link-btn",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${dynamicId}/history/sessions/${entry.session_id}`),
+          },
+          "View linked session →"
+        )
+      );
     }
+    card.appendChild(details);
     return card;
   }
 
-  if (!editable || !dynamicId) return buildCard();
+  const host = el("div", { className: editable && dynamicId ? "stack tracking-entry-host" : "" });
 
-  const host = el("div", { className: "stack tracking-entry-host" });
-  const showSummary = () => {
-    const card = buildCard();
-    const partners = state.currentDynamic?.partners || [];
-    card.appendChild(el("div", { className: "row wrap" }, [
-      el("button", {
-        className: "ghost-btn",
-        type: "button",
-        onClick: () => {
-          host.replaceChildren(buildTrackingEntryEditCard(dynamicId, entry, partners, {
-            onSaved: () => onChanged?.(),
-            onCancel: () => showSummary(),
-          }));
-        },
-      }, "Edit"),
-      el("button", {
-        className: "ghost-btn",
-        type: "button",
-        onClick: async () => {
-          if (!confirm("Delete this entry?")) return;
-          try {
-            await api(`/dynamics/${dynamicId}/tracking/${entry.id}`, { method: "DELETE" });
-            onChanged?.();
-          } catch (err) {
-            alert(err.message);
-          }
-        },
-      }, "Delete"),
-    ]));
-    host.replaceChildren(card);
-  };
-  showSummary();
+  function renderView() {
+    if (!editable || !dynamicId) {
+      host.replaceChildren(buildCard());
+      return;
+    }
+    function showEdit() {
+      const partners = state.currentDynamic?.partners || [];
+      host.replaceChildren(
+        buildTrackingEntryEditCard(dynamicId, entry, partners, {
+          onSaved: () => onChanged?.(),
+          onCancel: () => renderView(),
+        })
+      );
+    }
+    async function doDelete() {
+      if (!confirm("Delete this entry?")) return;
+      try {
+        await api(`/dynamics/${dynamicId}/tracking/${entry.id}`, { method: "DELETE" });
+        onChanged?.();
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+    host.replaceChildren(buildCard(showEdit, doDelete));
+  }
+
+  renderView();
   return host;
 }
 
@@ -1690,22 +1868,15 @@ function updateBottomNav() {
   const playtimeOn =
     !enabledFeatures.length || enabledFeatures.includes("scene_workshop");
   const trackingRoutes = new Set([
-    "track",
-    "tracking",
-    "chastity",
-    "feelings",
-    "tasks",
-    "acts",
-    "punishment",
-    "history",
-    "vault",
+    "track", "tracking", "chastity", "feelings", "tasks", "acts", "punishment",
+    "history", "vault", "journal", "ground-rules", "interview", "survey",
+    "knowledge", "context", "gear", "features", "overlap",
   ]);
   const playtimeRoutes = new Set(["assistant"]);
   const activeTab =
     parts[0] === "chat" ? "chat"
     : parts[0] === "dynamic" && playtimeRoutes.has(parts[2]) ? "workshop"
-    : parts[0] === "dynamic" && trackingRoutes.has(parts[2]) ? "tracking"
-    : "dynamic";
+    : "tracking";
 
   bottomNavEl.replaceChildren(
     ...NAV_TABS.map((tab) => {
@@ -1714,11 +1885,10 @@ function updateBottomNav() {
       const btn = el("button", {
         className: `nav-tab ${activeTab === tab.id ? "active" : ""} ${disabled ? "disabled" : ""}`,
         type: "button",
-        title: featureOff ? "Playtime is turned off in Menu features" : "",
+        title: featureOff ? "Playtime is turned off in Application features" : "",
         onClick: () => {
           if (disabled) return;
           if (tab.id === "tracking" && dynamicId) navigate(`/dynamic/${dynamicId}/track`);
-          if (tab.id === "dynamic") navigate(dynamicId ? `/dynamic/${dynamicId}` : "/home");
           if (tab.id === "workshop" && dynamicId) navigate(`/dynamic/${dynamicId}/assistant`);
           if (tab.id === "chat" && dynamicId) navigate(`/chat/${dynamicId}`);
         },
@@ -1729,6 +1899,144 @@ function updateBottomNav() {
       return btn;
     })
   );
+}
+
+/** Hub title row with Application features hamburger. */
+function buildHubHeader(dynamicId, title, { subtitle = "", sectionFilter = "all" } = {}) {
+  const ham = el("button", {
+    type: "button",
+    className: "hub-features-btn",
+    title: "Application features",
+    "aria-label": "Application features",
+  }, "☰");
+  ham.addEventListener("click", () => openAppFeaturesPanel(dynamicId, sectionFilter));
+  return el("div", { className: "hub-header row" }, [
+    el("div", { className: "stack hub-header-copy" }, [
+      el("h1", {}, title),
+      subtitle ? el("p", { className: "muted" }, subtitle) : null,
+    ]),
+    ham,
+  ]);
+}
+
+function openAppFeaturesPanel(dynamicId, sectionFilter = "all") {
+  const backdrop = el("div", { className: "modal-backdrop app-features-backdrop" });
+  const error = el("p", { className: "error hidden" });
+  const status = el("p", { className: "muted" });
+  const body = el("div", { className: "card stack modal-card app-features-panel" }, [
+    el("h3", {}, "Application features"),
+    el("p", { className: "muted" }, "Turn optional tools on or off for this dynamic."),
+    status,
+    error,
+  ]);
+  backdrop.appendChild(body);
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+
+  Promise.all([
+    api(`/dynamics/${dynamicId}/features`),
+    api(`/dynamics/${dynamicId}/policy`).catch(() => null),
+    loadDynamic(dynamicId),
+  ])
+    .then(([features, policy]) => {
+      const youAreDominant = policy?.you_are_dominant === true;
+      const checks = {};
+      const list = el("div", { className: "stack" });
+      const optional = (features.optional || []).filter((f) => {
+        if (sectionFilter === "all") return true;
+        if (sectionFilter === "tracking") return f.section === "tracking" || f.section === "knowledge";
+        if (sectionFilter === "playtime") return f.section === "playtime";
+        if (sectionFilter === "chat") return f.id === "image_vault";
+        return true;
+      });
+      if (!optional.length) {
+        list.appendChild(el("p", { className: "muted" }, "No optional features for this menu."));
+      }
+      optional.forEach((feature) => {
+        const box = el("input", { type: "checkbox" });
+        box.checked = feature.enabled;
+        checks[feature.id] = box;
+        list.appendChild(el("label", { className: "checkbox-label" }, [box, ` ${feature.title}`]));
+      });
+      body.appendChild(list);
+      body.appendChild(el("div", { className: "row wrap" }, [
+        el("button", {
+          type: "button",
+          className: "primary-btn",
+          onClick: async () => {
+            error.classList.add("hidden");
+            try {
+              if (youAreDominant) {
+                const enabled_optional = [];
+                Object.entries(checks).forEach(([id, box]) => {
+                  if (!box.checked) return;
+                  enabled_optional.push(id);
+                  const meta = features.optional.find((f) => f.id === id);
+                  if (meta?.paired_with) enabled_optional.push(meta.paired_with);
+                });
+                (features.optional || []).forEach((f) => {
+                  if (optional.some((o) => o.id === f.id)) return;
+                  if (f.enabled) {
+                    enabled_optional.push(f.id);
+                    if (f.paired_with) enabled_optional.push(f.paired_with);
+                  }
+                });
+                const updated = await api(`/dynamics/${dynamicId}/features`, {
+                  method: "PUT",
+                  body: JSON.stringify({ enabled_optional: [...new Set(enabled_optional)] }),
+                });
+                if (state.currentDynamic?.id === dynamicId) {
+                  state.currentDynamic.enabled_features = updated.enabled;
+                }
+                status.textContent = "Saved.";
+                updateBottomNav();
+                setTimeout(() => backdrop.remove(), 400);
+              } else {
+                const dirty = [];
+                optional.forEach((feature) => {
+                  const box = checks[feature.id];
+                  if (!box || box.checked === feature.enabled) return;
+                  dirty.push({
+                    settingKey: `features.${feature.id}`,
+                    settingLabel: `Feature: ${feature.title}`,
+                    requestedValue: box.checked,
+                  });
+                });
+                if (!dirty.length) {
+                  status.textContent = "No changes.";
+                  return;
+                }
+                for (const d of dirty) {
+                  await postSettingsChangeRequest({
+                    dynamicId,
+                    settingKey: d.settingKey,
+                    settingLabel: d.settingLabel,
+                    requestedValue: d.requestedValue,
+                    note: "From Application features menu",
+                  });
+                }
+                status.textContent = "Request sent to keyholder.";
+                setTimeout(() => backdrop.remove(), 700);
+              }
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, youAreDominant ? "Save" : "Submit settings change"),
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => backdrop.remove(),
+        }, "Close"),
+      ]));
+    })
+    .catch((err) => {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    });
 }
 
 function isFacetEnabled(facet, enabledFeatures) {
@@ -3885,8 +4193,10 @@ function renderTrackingHub(dynamicId) {
       }
       const enabledFeatures = dynamic.enabled_features || [];
       const stack = el("div", { className: "stack" }, [
-        el("h1", {}, "Tracking"),
-        el("p", { className: "muted" }, "History, lockups, play, feelings, and tasks for this dynamic."),
+        buildHubHeader(dynamicId, "Tracking", {
+          subtitle: "History, lockups, play, feelings, and tasks for this dynamic.",
+          sectionFilter: "tracking",
+        }),
       ]);
       const list = el("div", { className: "facet-list" });
       TRACKING_FACETS.forEach((facet) => {
@@ -3901,16 +4211,35 @@ function renderTrackingHub(dynamicId) {
         list.appendChild(renderFacetRow(rowFacet, dynamicId, dynamic));
       });
       if (!list.childNodes.length) {
-        stack.appendChild(el("p", { className: "muted" }, "No tracking features enabled. Turn them on in Menu features."));
+        stack.appendChild(
+          el("div", { className: "stack" }, [
+            el("p", { className: "muted" }, "No tracking features enabled."),
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: () => navigate(`/dynamic/${dynamicId}/features`),
+            }, "Application features"),
+          ])
+        );
       } else {
         stack.appendChild(list);
       }
+
+      const setupItems = FACET_SECTIONS.flatMap((section) => section.items).filter((facet) =>
+        isFacetEnabled(facet, enabledFeatures)
+      );
+      const setupList = el("div", { className: "facet-list" });
+      setupItems.forEach((facet) => setupList.appendChild(renderFacetRow(facet, dynamicId, dynamic)));
       stack.appendChild(
-        el("button", {
-          className: "ghost-btn",
-          type: "button",
-          onClick: () => navigate(`/dynamic/${dynamicId}/features`),
-        }, "Menu features")
+        el("details", { className: "hub-setup-details" }, [
+          el("summary", {}, "Setup / Dynamic"),
+          setupList,
+          el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${dynamicId}/features`),
+          }, "Application features"),
+        ])
       );
       setViewContent(stack);
     })
@@ -4752,7 +5081,7 @@ function renderKnowledgeHub(dynamicId) {
             el("span", { className: "facet-icon" }, "📎"),
             el("span", { className: "facet-copy" }, [
               el("span", { className: "facet-title" }, "Context library"),
-              el("span", { className: "facet-subtitle" }, "Google Drive links by category"),
+              el("span", { className: "facet-subtitle" }, "Stories, scenes, and files for AI"),
             ]),
             el("span", { className: "facet-chevron" }, "›"),
           ])
@@ -4996,8 +5325,10 @@ function renderAssistant(dynamicId) {
   ])
     .then(([status]) => {
       const stack = el("div", { className: "stack" }, [
-        el("h1", {}, "Playtime"),
-        el("p", { className: "muted" }, "Tools for the domme / keyholder."),
+        buildHubHeader(dynamicId, "Playtime", {
+          subtitle: "Tools for the domme / keyholder.",
+          sectionFilter: "playtime",
+        }),
         el("p", { className: "muted" }, `Provider: ${status.llm_provider} · Model: ${status.llm_model}`),
       ]);
 
@@ -5107,46 +5438,14 @@ function renderAssistant(dynamicId) {
             },
           }, "Create task list"),
         ]));
-      } else if (you?.role === "submissive") {
-        const content = el("textarea", { rows: "3", placeholder: "Task you want to request…" });
-        stack.appendChild(el("div", { className: "card stack" }, [
-          el("h2", {}, "Request a task"),
-          el("p", { className: "muted" }, "Needs keyholder approval before you can complete it."),
-          content,
-          taskError,
-          el("button", {
-            className: "primary-btn",
-            type: "button",
-            onClick: async () => {
-              taskError.classList.add("hidden");
-              if (!content.value.trim()) {
-                taskError.textContent = "Describe the task.";
-                taskError.classList.remove("hidden");
-                return;
-              }
-              try {
-                await api(`/dynamics/${dynamicId}/tasks/items`, {
-                  method: "POST",
-                  body: JSON.stringify({ content: content.value.trim() }),
-                });
-                content.value = "";
-                taskError.textContent = "Submitted for approval.";
-                taskError.classList.remove("hidden");
-              } catch (err) {
-                taskError.textContent = err.message;
-                taskError.classList.remove("hidden");
-              }
-            },
-          }, "Submit for approval"),
-        ]));
       }
 
       stack.appendChild(
         el("button", {
           className: "ghost-btn",
           type: "button",
-          onClick: () => navigate(`/dynamic/${dynamicId}`),
-        }, "Back to dynamic")
+          onClick: () => navigate(`/dynamic/${dynamicId}/track`),
+        }, "Back to Tracking")
       );
       viewEl.replaceChildren(stack);
       updateBottomNav();
@@ -6877,7 +7176,9 @@ function renderPlaytimeScene(dynamicId) {
         subject: null,
         scene: null,
         busy: false,
+        contextFlags: { journals: true, stories: true, scenes: true, agreements: true, tracking: true },
       };
+      const { toggleBtn: contextToggleBtn, menu: contextMenu } = buildContextFlagsMenu(flow.contextFlags);
 
       const EFFORT_OPTIONS = [
         { id: "low", title: "Low", subtitle: "Under 5 minutes" },
@@ -6938,6 +7239,7 @@ function renderPlaytimeScene(dynamicId) {
               subject: flow.subject,
               note,
               avoid_summary: avoidSummary,
+              context_flags: flow.contextFlags,
             }),
           });
           flow.scene = result;
@@ -7024,6 +7326,8 @@ function renderPlaytimeScene(dynamicId) {
         body.appendChild(
           el("p", { className: "muted" }, "Quick scene builder for the domme / keyholder.")
         );
+        body.appendChild(el("div", { className: "row wrap" }, [contextToggleBtn]));
+        body.appendChild(contextMenu);
 
         if (!status.your_interview_completed) {
           body.appendChild(
@@ -7400,10 +7704,9 @@ function renderContext(dynamicId) {
   Promise.all([
     api(`/dynamics/${dynamicId}/context`),
     api(`/dynamics/${dynamicId}/context/categories`),
-    api(`/dynamics/${dynamicId}/journal`).catch(() => []),
     loadDynamic(dynamicId),
   ])
-    .then(([links, categories, journals]) => {
+    .then(([links, categories]) => {
       const error = el("div", { className: "error hidden" });
       const status = el("p", { className: "muted" });
       const title = el("input", { placeholder: "Title" });
@@ -7503,58 +7806,9 @@ function renderContext(dynamicId) {
         }
       });
 
-      const journalList = el("div", { className: "stack" });
-      const jTitle = el("input", { placeholder: "Journal title" });
-      const jBody = el("textarea", { placeholder: "Write freely…", rows: "5" });
-      const jAi = el("input", { type: "checkbox", checked: true });
-      const assistPrompt = el("input", { placeholder: "e.g. Expand this into a reflective entry" });
-
-      function paintJournals(items) {
-        journalList.replaceChildren();
-        if (!items.length) {
-          journalList.appendChild(el("p", { className: "muted" }, "No journal entries yet."));
-          return;
-        }
-        items.forEach((entry) => {
-          const toggle = el("input", { type: "checkbox" });
-          toggle.checked = entry.use_for_ai !== false;
-          toggle.addEventListener("change", async () => {
-            try {
-              await api(`/dynamics/${dynamicId}/journal/${entry.id}`, {
-                method: "PATCH",
-                body: JSON.stringify({ use_for_ai: toggle.checked }),
-              });
-            } catch (err) {
-              error.textContent = err.message;
-              error.classList.remove("hidden");
-              toggle.checked = !toggle.checked;
-            }
-          });
-          journalList.appendChild(
-            el("div", { className: "card stack" }, [
-              el("div", { className: "row wrap" }, [
-                el("strong", {}, entry.title || "Untitled"),
-                el("span", { className: "muted" }, entry.author_display_name),
-              ]),
-              el("p", {}, (entry.body || "").slice(0, 400) || "(empty)"),
-              entry.llm_assisted ? el("p", { className: "muted" }, "AI-assisted") : null,
-              el("label", { className: "checkbox-label" }, [toggle, " Use for AI"]),
-              el("button", {
-                className: "ghost-btn",
-                onClick: async () => {
-                  await api(`/dynamics/${dynamicId}/journal/${entry.id}`, { method: "DELETE" });
-                  renderContext(dynamicId);
-                },
-              }, "Delete"),
-            ])
-          );
-        });
-      }
-      paintJournals(journals || []);
-
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Knowledge & context"),
-        el("p", { className: "muted" }, "Upload text files for the assistant, journal privately, and toggle what is shared with AI. Subjects: stories, journals, scenes."),
+        el("p", { className: "muted" }, "Upload text files for the assistant and toggle what is shared with AI. Subjects: stories, scenes, and other."),
         status,
         el("div", { className: "card stack" }, [
           el("h2", {}, "File library"),
@@ -7600,12 +7854,187 @@ function renderContext(dynamicId) {
           fileInput,
         ]),
         list,
+        error,
+        el("button", {
+          className: "ghost-btn",
+          onClick: () => navigate(`/dynamic/${dynamicId}`),
+        }, "Back to dynamic"),
+      ]);
+      setViewContent(stack);
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+}
+
+/** Context flags used to scope what AI assist can see (journal assist / scene builder). */
+const JOURNAL_CONTEXT_FLAG_LABELS = {
+  journals: "My journal entries",
+  stories: "Stories",
+  scenes: "Scene inspiration",
+  agreements: "Ground rules & agreements",
+  tracking: "Tracking history",
+};
+
+function buildContextFlagsMenu(flags) {
+  const checks = {};
+  const menu = el("div", { className: "card stack context-flags-menu hidden" }, [
+    el("strong", {}, "AI context"),
+    el("p", { className: "muted" }, "Choose what this assist request can read."),
+  ]);
+  Object.entries(JOURNAL_CONTEXT_FLAG_LABELS).forEach(([key, label]) => {
+    const box = el("input", { type: "checkbox" });
+    box.checked = !!flags[key];
+    box.addEventListener("change", () => {
+      flags[key] = box.checked;
+    });
+    checks[key] = box;
+    menu.appendChild(el("label", { className: "checkbox-label" }, [box, ` ${label}`]));
+  });
+  const toggleBtn = el("button", {
+    type: "button",
+    className: "ghost-btn hub-features-btn",
+    title: "AI context",
+    "aria-label": "AI context",
+    onClick: () => menu.classList.toggle("hidden"),
+  }, "☰ AI context");
+  return { toggleBtn, menu, checks };
+}
+
+function renderJournal(dynamicId) {
+  setViewContent(el("p", { className: "muted" }, "Loading journal..."));
+  Promise.all([
+    api(`/dynamics/${dynamicId}/journal`).catch(() => []),
+    loadDynamic(dynamicId),
+  ])
+    .then(([journals]) => {
+      const dynamic = state.currentDynamic;
+      const you = dynamic?.partners?.find((p) => p.is_you);
+      const isDom = you?.role === "dominant";
+      const error = el("div", { className: "error hidden" });
+      const status = el("p", { className: "muted" });
+
+      const jTitle = el("input", { placeholder: "Journal title" });
+      const jBody = el("textarea", { placeholder: "Write freely…", rows: "6" });
+      const jAi = el("input", { type: "checkbox", checked: true });
+      const jVisible = el("input", { type: "checkbox", checked: true });
+      const assistPrompt = el("input", { placeholder: "e.g. Expand this into a reflective entry" });
+
+      const contextFlags = { journals: true, stories: false, scenes: false, agreements: false, tracking: false };
+      const { toggleBtn: contextToggleBtn, menu: contextMenu } = buildContextFlagsMenu(contextFlags);
+
+      const list = el("div", { className: "stack" });
+      function paintJournals(items) {
+        list.replaceChildren();
+        if (!items.length) {
+          list.appendChild(el("p", { className: "muted" }, "No journal entries yet."));
+          return;
+        }
+        items.forEach((entry) => {
+          const card = el("div", { className: "card stack" }, [
+            el("div", { className: "row wrap" }, [
+              el("strong", {}, entry.title || (entry.is_private_to_others ? "Private entry" : "Untitled")),
+              el("span", { className: "muted" }, entry.author_display_name),
+              entry.is_private_to_others ? el("span", { className: "pill" }, "🔒 Private") : null,
+            ]),
+          ]);
+          if (entry.is_private_to_others) {
+            card.appendChild(el("p", { className: "muted" }, "This entry is private to its author."));
+            list.appendChild(card);
+            return;
+          }
+
+          card.appendChild(el("p", {}, (entry.body || "").slice(0, 400) || "(empty)"));
+          if (entry.llm_assisted) card.appendChild(el("p", { className: "muted" }, "AI-assisted"));
+
+          const toggleAi = el("input", { type: "checkbox" });
+          toggleAi.checked = entry.use_for_ai !== false;
+          toggleAi.addEventListener("change", async () => {
+            try {
+              await api(`/dynamics/${dynamicId}/journal/${entry.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ use_for_ai: toggleAi.checked }),
+              });
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+              toggleAi.checked = !toggleAi.checked;
+            }
+          });
+          const toggleVisible = el("input", { type: "checkbox" });
+          toggleVisible.checked = entry.partner_visible !== false;
+          toggleVisible.addEventListener("change", async () => {
+            try {
+              await api(`/dynamics/${dynamicId}/journal/${entry.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ partner_visible: toggleVisible.checked }),
+              });
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+              toggleVisible.checked = !toggleVisible.checked;
+            }
+          });
+          card.appendChild(el("label", { className: "checkbox-label" }, [toggleAi, " Use for AI"]));
+          card.appendChild(el("label", { className: "checkbox-label" }, [toggleVisible, " Visible to partner"]));
+
+          const reviewOut = el("p", { className: "muted hidden" });
+          const rowBtns = el("div", { className: "row wrap" }, [
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: async () => {
+                error.classList.add("hidden");
+                try {
+                  await api(`/dynamics/${dynamicId}/journal/${entry.id}`, { method: "DELETE" });
+                  renderJournal(dynamicId);
+                } catch (err) {
+                  error.textContent = err.message;
+                  error.classList.remove("hidden");
+                }
+              },
+            }, "Delete"),
+          ]);
+          if (isDom) {
+            rowBtns.appendChild(el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: async () => {
+                error.classList.add("hidden");
+                reviewOut.classList.add("hidden");
+                try {
+                  const res = await api(`/dynamics/${dynamicId}/journal/${entry.id}/domme-review`, {
+                    method: "POST",
+                    body: JSON.stringify({ post_system_event: false }),
+                  });
+                  reviewOut.textContent = res.summary;
+                  reviewOut.classList.remove("hidden");
+                } catch (err) {
+                  error.textContent = err.message;
+                  error.classList.remove("hidden");
+                }
+              },
+            }, "Domme review"));
+          }
+          card.appendChild(rowBtns);
+          card.appendChild(reviewOut);
+          list.appendChild(card);
+        });
+      }
+      paintJournals(journals || []);
+
+      const stack = el("div", { className: "stack" }, [
+        buildHubHeader(dynamicId, "Journal", {
+          subtitle: "Private writing with optional AI assist.",
+          sectionFilter: "tracking",
+        }),
+        status,
         el("div", { className: "card stack" }, [
-          el("h2", {}, "Journal"),
-          el("p", { className: "muted" }, "Optional AI assist — you keep or edit the result before saving."),
+          el("h2", {}, "New entry"),
           el("label", {}, ["Title", jTitle]),
           el("label", {}, ["Entry", jBody]),
           el("label", { className: "checkbox-label" }, [jAi, " Use for AI"]),
+          el("label", { className: "checkbox-label" }, [jVisible, " Visible to partner"]),
+          el("div", { className: "row wrap" }, [contextToggleBtn]),
+          contextMenu,
           el("label", {}, ["Assist prompt (optional)", assistPrompt]),
           el("div", { className: "row wrap" }, [
             el("button", {
@@ -7620,6 +8049,7 @@ function renderContext(dynamicId) {
                     body: JSON.stringify({
                       prompt: assistPrompt.value.trim(),
                       draft: jBody.value,
+                      context_flags: contextFlags,
                     }),
                   });
                   if (res.text) jBody.value = res.text;
@@ -7642,13 +8072,14 @@ function renderContext(dynamicId) {
                       title: jTitle.value.trim() || "Journal entry",
                       body: jBody.value,
                       use_for_ai: jAi.checked,
+                      partner_visible: jVisible.checked,
                       llm_assisted: !!assistPrompt.value.trim() && !!jBody.value.trim(),
                     }),
                   });
                   jTitle.value = "";
                   jBody.value = "";
                   assistPrompt.value = "";
-                  renderContext(dynamicId);
+                  renderJournal(dynamicId);
                 } catch (err) {
                   error.textContent = err.message;
                   error.classList.remove("hidden");
@@ -7657,12 +8088,12 @@ function renderContext(dynamicId) {
             }, "Save journal entry"),
           ]),
         ]),
-        journalList,
+        list,
         error,
         el("button", {
           className: "ghost-btn",
-          onClick: () => navigate(`/dynamic/${dynamicId}`),
-        }, "Back to dynamic"),
+          onClick: () => navigate(`/dynamic/${dynamicId}/track`),
+        }, "Back to Tracking"),
       ]);
       setViewContent(stack);
     })
@@ -10866,7 +11297,6 @@ function renderFeatureSettings(dynamicId) {
       features.optional.forEach((feature) => {
         const box = el("input", { type: "checkbox" });
         box.checked = feature.enabled;
-        box.disabled = !youAreDominant;
         checks[feature.id] = box;
         optionalCard.appendChild(
           el("label", { className: "checkbox-label" }, [box, feature.title])
@@ -10875,7 +11305,7 @@ function renderFeatureSettings(dynamicId) {
       list.appendChild(optionalCard);
 
       const actions = [
-        el("h1", {}, "Menu features"),
+        el("h1", {}, "Application features"),
         list,
         status,
         error,
@@ -10909,7 +11339,42 @@ function renderFeatureSettings(dynamicId) {
           },
         }, "Save features"));
       } else {
-        actions.push(el("p", { className: "muted" }, "Only the keyholder can change menu features. Request changes from Settings."));
+        actions.push(el("p", { className: "muted" }, "Changes need keyholder approval — submit a request below."));
+        actions.push(el("button", {
+          className: "primary-btn",
+          onClick: async () => {
+            error.classList.add("hidden");
+            try {
+              const dirty = [];
+              features.optional.forEach((feature) => {
+                const box = checks[feature.id];
+                if (!box || box.checked === feature.enabled) return;
+                dirty.push({
+                  settingKey: `features.${feature.id}`,
+                  settingLabel: `Feature: ${feature.title}`,
+                  requestedValue: box.checked,
+                });
+              });
+              if (!dirty.length) {
+                status.textContent = "No changes.";
+                return;
+              }
+              for (const d of dirty) {
+                await postSettingsChangeRequest({
+                  dynamicId,
+                  settingKey: d.settingKey,
+                  settingLabel: d.settingLabel,
+                  requestedValue: d.requestedValue,
+                  note: "From Application features page",
+                });
+              }
+              status.textContent = "Request sent to keyholder.";
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, "Submit settings change"));
       }
       actions.push(el("button", {
         className: "ghost-btn",
@@ -11227,7 +11692,10 @@ function renderVault(dynamicId) {
         el("button", {
           className: "primary-btn",
           type: "button",
-          onClick: () => cameraInput.click(),
+          onClick: () => openInAppCamera({
+            onCapture: (file) => uploadVaultFile(file),
+            onFallback: () => cameraInput.click(),
+          }),
         }, "Take photo"),
         el("button", {
           className: "ghost-btn",
@@ -11253,6 +11721,67 @@ function renderVault(dynamicId) {
   }
 
   load();
+}
+
+/**
+ * In-app photo capture using getUserMedia — avoids handing off to the OS camera app.
+ * Falls back to onFallback() (typically a native file input with capture=environment)
+ * when getUserMedia is unavailable, denied, or errors out.
+ */
+async function openInAppCamera({ onCapture, onFallback } = {}) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    if (onFallback) onFallback();
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" },
+      audio: false,
+    });
+  } catch {
+    if (onFallback) onFallback();
+    return;
+  }
+
+  const video = el("video", { autoplay: true, playsinline: true, muted: true, className: "in-app-camera-video" });
+  video.srcObject = stream;
+  const captureBtn = el("button", { type: "button", className: "primary-btn" }, "📷 Capture");
+  const cancelBtn = el("button", { type: "button", className: "ghost-btn" }, "Cancel");
+  const backdrop = el("div", { className: "modal-backdrop in-app-camera-modal" });
+  const card = el("div", { className: "card stack in-app-camera-card" }, [
+    video,
+    el("div", { className: "row wrap" }, [captureBtn, cancelBtn]),
+  ]);
+  backdrop.appendChild(card);
+  document.body.appendChild(backdrop);
+
+  let done = false;
+  function cleanup() {
+    if (done) return;
+    done = true;
+    stream.getTracks().forEach((track) => track.stop());
+    backdrop.remove();
+  }
+
+  cancelBtn.addEventListener("click", cleanup);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) cleanup();
+  });
+
+  captureBtn.addEventListener("click", () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth || 720;
+    canvas.height = video.videoHeight || 960;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      cleanup();
+      if (!blob) return;
+      const file = new File([blob], `photo-${Date.now()}.jpg`, { type: "image/jpeg" });
+      if (onCapture) onCapture(file);
+    }, "image/jpeg", 0.92);
+  });
 }
 
 function parseChatActionBody(body, dynamicId) {
@@ -12039,27 +12568,28 @@ function renderChat(dynamicId) {
         }
       });
 
-      async function handlePickedImage(inputEl) {
-        const file = inputEl.files?.[0];
+      async function handleImageFile(file) {
         if (!file) return;
         error.classList.add("hidden");
         try {
           let locked = false;
           if (settings.you_are_dominant) {
             const choice = await askDomImageOptions(file);
-            if (!choice) {
-              inputEl.value = "";
-              return;
-            }
+            if (!choice) return;
             locked = !!choice.locked;
           }
           await sendImage(file, { locked });
-          inputEl.value = "";
           await refresh();
         } catch (err) {
           error.textContent = err.message;
           error.classList.remove("hidden");
         }
+      }
+
+      async function handlePickedImage(inputEl) {
+        const file = inputEl.files?.[0];
+        await handleImageFile(file);
+        inputEl.value = "";
       }
 
       attachBtn.addEventListener("click", () => {
@@ -12071,7 +12601,10 @@ function renderChat(dynamicId) {
             className: "primary-btn",
             onClick: () => {
               backdrop.remove();
-              cameraInput.click();
+              openInAppCamera({
+                onCapture: (file) => handleImageFile(file),
+                onFallback: () => cameraInput.click(),
+              });
             },
           }, "Take photo"),
           el("button", {
@@ -12218,6 +12751,43 @@ function renderChat(dynamicId) {
         );
       }
 
+      if (!isDom) {
+        const taskRequestBody = el("textarea", { rows: "3", placeholder: "Task you want to request…" });
+        const taskRequestError = el("div", { className: "error hidden" });
+        settingsPanel.append(
+          el("div", { className: "card stack" }, [
+            el("strong", {}, "Request a task"),
+            el("p", { className: "muted" }, "Needs keyholder approval before you can complete it."),
+            taskRequestBody,
+            taskRequestError,
+            el("button", {
+              className: "primary-btn",
+              type: "button",
+              onClick: async () => {
+                taskRequestError.classList.add("hidden");
+                const content = taskRequestBody.value.trim();
+                if (!content) {
+                  taskRequestError.textContent = "Describe the task.";
+                  taskRequestError.classList.remove("hidden");
+                  return;
+                }
+                try {
+                  await api(`/dynamics/${id}/tasks/items`, {
+                    method: "POST",
+                    body: JSON.stringify({ content }),
+                  });
+                  taskRequestBody.value = "";
+                  settingsPanel.classList.add("hidden");
+                  showToast("Task request sent to your keyholder.");
+                } catch (err) {
+                  taskRequestError.textContent = err.message;
+                  taskRequestError.classList.remove("hidden");
+                }
+              },
+            }, "Submit for approval"),
+          ])
+        );
+      }
       settingsPanel.append(
         el("h3", {}, "Chat settings"),
         el("label", { className: "checkbox-label" }, [panelLogsToggle, " Show activity logs"]),
@@ -13549,7 +14119,7 @@ function renderSettings() {
         const featureStatus = el("p", { className: "muted" });
         const featureError = el("div", { className: "error hidden" });
         const featureCard = el("div", { className: "card stack" }, [
-          el("h2", {}, "Menu features"),
+          el("h2", {}, "Application features"),
           el("p", { className: "muted" }, "Hide optional app areas you are not using. Core items stay available."),
           ...featureRows,
           featureStatus,
@@ -13864,7 +14434,7 @@ function renderSettings() {
         "Partner username": "Account",
         "Your dynamics": "Dynamics",
         "Start or join a dynamic": "Dynamics",
-        "Menu features": "Features",
+        "Application features": "Features",
         "Chastity policy": "Chastity",
         "Privacy & security": "Chat & privacy",
         "Assistant domme": "AI & assistant",
@@ -13953,7 +14523,7 @@ async function renderRoute() {
   }
   if (parts[0] === "chat") return renderChat(parts[1]);
   if (parts[0] === "home" || parts.length === 0) {
-    if (state.dynamics.length) return renderDynamicOverview(state.dynamics[0].id);
+    if (state.dynamics.length) return renderTrackingHub(state.dynamics[0].id);
     return renderHome();
   }
 
@@ -13981,6 +14551,7 @@ async function renderRoute() {
     }
     if (parts[2] === "interview") return renderInterview(dynamicId);
     if (parts[2] === "context") return renderContext(dynamicId);
+    if (parts[2] === "journal") return renderJournal(dynamicId);
     if (parts[2] === "track") return renderTrackingHub(dynamicId);
     if (parts[2] === "tracking") {
       if (parts[3] === "history") return renderOrgasmPriorHistory(dynamicId);

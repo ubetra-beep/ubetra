@@ -259,6 +259,15 @@ def _format_tracking_context(db: Session, dynamic_id: str, memberships: list[Mem
     return lines
 
 
+def _context_flag(context_flags, name: str, default: bool) -> bool:
+    """Read a boolean flag from a JournalAssistContextFlags-like object or dict."""
+    if context_flags is None:
+        return default
+    if isinstance(context_flags, dict):
+        return bool(context_flags.get(name, default))
+    return bool(getattr(context_flags, name, default))
+
+
 def build_dynamic_context(
     db: Session,
     dynamic: Dynamic,
@@ -266,6 +275,7 @@ def build_dynamic_context(
     requesting_membership_id: str | None = None,
     knowledge_focus_fields: list[str] | None = None,
     include_tracking: bool = True,
+    context_flags=None,
 ) -> str:
     memberships = get_memberships(db, dynamic.id)
     if not memberships:
@@ -284,6 +294,8 @@ def build_dynamic_context(
         .all()
     )
     approved_agreements = [a for a in agreements if a.approved_content.strip()]
+    if approved_agreements and not _context_flag(context_flags, "agreements", True):
+        approved_agreements = []
     if approved_agreements:
         lines.append("Approved ground rules and agreements:")
         for agreement in approved_agreements:
@@ -356,41 +368,59 @@ def build_dynamic_context(
     if links:
         from .context_files import CONTEXT_SUBJECTS, normalize_subject
 
-        lines.append("Context library (files & notes tagged for AI):")
+        allow_stories = _context_flag(context_flags, "stories", True)
+        allow_scenes = _context_flag(context_flags, "scenes", True)
+        filtered_links = []
         for link in links:
             subject = normalize_subject(getattr(link, "subject", None) or link.category.value)
-            label = CONTEXT_SUBJECTS.get(subject, subject)
-            lines.append(f"  [{label}] {link.title}")
-            if link.notes.strip():
-                lines.append(f"    Notes: {link.notes.strip()[:500]}")
-            if link.fetched_text.strip():
-                snippet = link.fetched_text.strip()[:800]
-                lines.append(f"    Excerpt: {snippet}")
-        lines.append("")
+            if subject == "stories" and not allow_stories:
+                continue
+            if subject == "scenes" and not allow_scenes:
+                continue
+            filtered_links.append((link, subject))
+        if filtered_links:
+            lines.append("Context library (files & notes tagged for AI):")
+            for link, subject in filtered_links:
+                label = CONTEXT_SUBJECTS.get(subject, subject)
+                lines.append(f"  [{label}] {link.title}")
+                if link.notes.strip():
+                    lines.append(f"    Notes: {link.notes.strip()[:500]}")
+                if link.fetched_text.strip():
+                    snippet = link.fetched_text.strip()[:800]
+                    lines.append(f"    Excerpt: {snippet}")
+            lines.append("")
 
-    journals = (
-        db.query(JournalEntry)
-        .filter(
-            JournalEntry.dynamic_id == dynamic.id,
-            JournalEntry.use_for_ai.is_(True),
+    if _context_flag(context_flags, "journals", True):
+        journals = (
+            db.query(JournalEntry)
+            .filter(
+                JournalEntry.dynamic_id == dynamic.id,
+                JournalEntry.use_for_ai.is_(True),
+            )
+            .order_by(JournalEntry.updated_at.desc())
+            .limit(12)
+            .all()
         )
-        .order_by(JournalEntry.updated_at.desc())
-        .limit(12)
-        .all()
-    )
-    if journals:
-        membership_map = {m.id: m for m in memberships}
-        lines.append("Journal entries (shared with AI):")
-        for entry in journals:
-            author = membership_map.get(entry.membership_id)
-            name = author.display_name if author else "Partner"
-            lines.append(f"  [{name}] {entry.title or 'Untitled'}")
-            body = (entry.body or "").strip()
-            if body:
-                lines.append(f"    {body[:600]}")
-        lines.append("")
+        # Only feed journals to the AI that are either shared with the partner
+        # or written by the person requesting this context (their own private journal).
+        journals = [
+            entry
+            for entry in journals
+            if entry.partner_visible or entry.membership_id == requesting_membership_id
+        ]
+        if journals:
+            membership_map = {m.id: m for m in memberships}
+            lines.append("Journal entries (shared with AI):")
+            for entry in journals:
+                author = membership_map.get(entry.membership_id)
+                name = author.display_name if author else "Partner"
+                lines.append(f"  [{name}] {entry.title or 'Untitled'}")
+                body = (entry.body or "").strip()
+                if body:
+                    lines.append(f"    {body[:600]}")
+            lines.append("")
 
-    if include_tracking:
+    if include_tracking and _context_flag(context_flags, "tracking", True):
         lines.append("Activity tracking:")
         lines.extend(_format_tracking_context(db, dynamic.id, memberships))
         lines.append("")

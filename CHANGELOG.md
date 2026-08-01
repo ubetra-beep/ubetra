@@ -3,6 +3,24 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.77] — 2026-08-01
+
+### Added
+- Journal gets its own page (Tracking → Journal) with a private/shared toggle, an AI-context hamburger (choose journals/stories/scenes/agreements/tracking), Assist with AI, and a Dom-only "Domme review"
+- Scene builder has the same AI-context hamburger so the keyholder controls what feeds each generated scene
+- In-app camera capture (getUserMedia) for Chat and the Image vault — falls back to the OS camera picker if unavailable
+- Chat settings menu: Sub can "Request a task" without leaving the conversation (removed from Playtime)
+- Tracking and Playtime hubs share a header with an "Application features" hamburger; Tracking has a collapsed Setup/Dynamic section for ground rules, interview, kink list, knowledge, context library, and gear
+- Log cards redesigned: collapsed by default (name, relative time, colored accent stripe, type pill), a kebab menu for Edit/Delete, and primary vs. secondary tag chips
+
+### Changed
+- Context library files and journal entries support a partner-visibility toggle; hidden entries show as "Private entry" to the other partner but still count for their own AI context
+- `renderFeatureSettings` renamed to "Application features"; a Sub can now submit a settings-change request from that page instead of only the hamburger
+- Signing in with a dynamic now opens Tracking directly instead of the Dynamic overview
+
+### Changed
+- Service worker cache `ubetra-v77`
+
 ## [0.76] — 2026-07-31
 
 ### Changed

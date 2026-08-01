@@ -27,6 +27,7 @@ OPTIONAL_FEATURES = {
     "acts": {"title": "Tasks & acts", "section": "tracking", "hidden": True, "paired_with": "tasks"},
     "image_vault": {"title": "Image vault", "section": "tracking"},
     "scene_workshop": {"title": "Playtime", "section": "playtime"},
+    "journal": {"title": "Journal", "section": "tracking"},
 }
 
 DEFAULT_OPTIONAL_ENABLED = set(OPTIONAL_FEATURES.keys())

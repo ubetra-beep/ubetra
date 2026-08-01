@@ -2571,3 +2571,242 @@ details[open] summary {
   }
 }
 
+/* --- Hub header (Tracking / Playtime) --- */
+.hub-header {
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.hub-header-copy {
+  gap: 0.25rem;
+}
+
+.hub-features-btn {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-radius: 999px;
+  width: 2.5rem;
+  height: 2.5rem;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.app-features-backdrop .app-features-panel {
+  width: min(420px, 100%);
+}
+
+.hub-setup-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+  background: var(--bg-card);
+}
+
+.hub-setup-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+  list-style: none;
+}
+
+.hub-setup-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.hub-setup-details summary::before {
+  content: "▸ ";
+  color: var(--muted);
+}
+
+.hub-setup-details[open] summary::before {
+  content: "▾ ";
+}
+
+.hub-setup-details .facet-list {
+  margin-top: 0.75rem;
+}
+
+/* --- AI context flags menu (journal / scene builder) --- */
+.context-flags-menu {
+  border: 1px solid var(--border);
+}
+
+/* --- Log cards (tracking entries) --- */
+.log-card {
+  position: relative;
+  padding-left: 1.15rem;
+  gap: 0.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-card-accent::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  width: 4px;
+  border-radius: 999px;
+  background: var(--log-card-accent, var(--accent));
+}
+
+.log-card-top {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.log-card-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.log-card-main {
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.log-card-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-card-when {
+  font-size: 0.82rem;
+}
+
+.log-card-lockup {
+  align-self: flex-start;
+}
+
+.log-card-chips {
+  margin-top: 0.1rem;
+}
+
+.log-card-collapsed .log-card-chips {
+  max-height: 2.4rem;
+  overflow: hidden;
+}
+
+.tag-chip.secondary {
+  opacity: 0.65;
+  font-size: 0.76rem;
+}
+
+.log-card-details {
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+  margin-top: 0.1rem;
+}
+
+/* --- Kebab menu --- */
+.kebab-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.kebab-menu-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.kebab-menu-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.kebab-menu {
+  position: absolute;
+  right: 0;
+  top: 2rem;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 8rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.kebab-menu-item {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 0.6rem 0.85rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.kebab-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.kebab-menu-item.danger {
+  color: var(--danger);
+}
+
+/* --- In-app camera --- */
+.in-app-camera-modal {
+  z-index: 120;
+}
+
+.in-app-camera-card {
+  width: min(480px, 100%);
+  align-items: center;
+}
+
+.in-app-camera-video {
+  width: 100%;
+  border-radius: 10px;
+  background: #000;
+  max-height: 70vh;
+}
+
+/* --- Toast --- */
+.ubetra-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.5rem;
+  transform: translate(-50%, 0.5rem);
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.7rem 1.25rem;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  z-index: 200;
+  max-width: min(90vw, 26rem);
+  text-align: center;
+}
+
+.ubetra-toast.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+

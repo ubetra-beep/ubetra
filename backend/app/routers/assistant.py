@@ -89,12 +89,19 @@ def _require_playtime_ready(membership, user: User, dynamic: Dynamic | None) -> 
         )
 
 
-def _playtime_context(db: Session, dynamic: Dynamic, membership, user: User) -> str:
+def _playtime_context(
+    db: Session,
+    dynamic: Dynamic,
+    membership,
+    user: User,
+    context_flags=None,
+) -> str:
     return build_dynamic_context(
         db,
         dynamic,
         requesting_membership_id=membership.id,
         include_tracking=bool(user.assistant_include_tracking),
+        context_flags=context_flags,
     )
 
 
@@ -199,7 +206,7 @@ def playtime_scene(
 
     scene = generate_playtime_scene(
         user=user,
-        dynamic_context=_playtime_context(db, dynamic, membership, user),
+        dynamic_context=_playtime_context(db, dynamic, membership, user, payload.context_flags),
         effort=payload.effort,
         lean=payload.lean,
         subject=payload.subject.strip(),

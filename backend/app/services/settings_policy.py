@@ -26,7 +26,7 @@ DOM_CONTROLLED_SETTING_KEYS = frozenset(
 def setting_label(key: str) -> str:
     labels = {
         "chastity.sub_can_delete_breaks": "Allow sub to delete temporary unlock logs",
-        "features": "Menu features",
+        "features": "Application features",
         "feelings.prompt_mode": "Feelings prompt mode",
         "feelings.require_end_of_day": "Require end-of-day feelings",
         "chat.system_events": "Post activity logs to chat",
@@ -151,7 +151,7 @@ def apply_setting(
             if pair:
                 selected.add(pair)
         dynamic.enabled_features = serialize_enabled_features(selected)
-        return "updated menu features"
+        return "updated application features"
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown setting key")
 

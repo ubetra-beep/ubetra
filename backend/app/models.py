@@ -641,6 +641,7 @@ class ContextLink(Base):
     mime_type: Mapped[str] = mapped_column(String(120), default="")
     file_size: Mapped[int] = mapped_column(Integer, default=0)
     use_for_ai: Mapped[bool] = mapped_column(Boolean, default=True)
+    partner_visible: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     dynamic: Mapped[Dynamic] = relationship(back_populates="context_links")
@@ -657,6 +658,7 @@ class JournalEntry(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     use_for_ai: Mapped[bool] = mapped_column(Boolean, default=True)
     llm_assisted: Mapped[bool] = mapped_column(Boolean, default=False)
+    partner_visible: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
