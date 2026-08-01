@@ -15,7 +15,14 @@ Partner messaging for the active dynamic.
 - Text messages and image attachments (`+`)
 - **Logs on/off** — system activity posts (tasks, tracking, chastity…)
 - **Images on/off** — show or hide image messages
-- **☰** — quick chat privacy settings (blur, retain, encryption, push)
+- **☰** — quick chat privacy settings (blur, retain, encryption, push); Subs also find **Request a task** here
+- The attach sheet's **Take photo** opens an in-app camera (device camera via the browser) and sends the capture directly; **Choose from library** still opens the file picker.
+
+---
+
+## Requesting a task (Sub)
+
+Subs can open the **☰** settings menu in Chat and choose **Request a task** to submit a task idea straight to the Dom's task list for approval — no need to leave the conversation. A toast confirms the request was sent.
 
 ---
 

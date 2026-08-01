@@ -2,7 +2,7 @@
 
 Route: `/#/dynamic/{id}`
 
-The **Dynamic** tab is the hub for agreements, interviews, kink lists, and knowledge the AI can use.
+Agreements, interviews, kink lists, and knowledge the AI can use. There is no separate **Dynamic** bottom-nav tab — these items live in the collapsed **Setup / Dynamic** section at the bottom of the [Tracking](Tracking) hub, alongside a link to **Application features**.
 
 ![Dynamic overview — Dom](images/10-dynamic-overview.png)
 
@@ -30,10 +30,13 @@ Yellow **Needed** badges mean that partner hasn’t finished interview or kink s
 |------|-------|---------|
 | **Core knowledge** | `/#/dynamic/{id}/knowledge` | Relationship context for AI |
 | **SPTI profile** | `/#/dynamic/{id}/knowledge/spti` | Personality inventory for AI |
-| **Context library** | `/#/dynamic/{id}/context` | Server file library + journaling (AI subject tags) |
+| **Context library** | `/#/dynamic/{id}/context` | Server file library for AI (subject tags) |
+| **Journal** | `/#/dynamic/{id}/journal` | Private writing with optional AI assist and Domme review (see [Tracking](Tracking)) |
 | **Gear** | `/#/dynamic/{id}/gear` | Toys, kink gear, outfits |
 
-Optional modules can be toggled under **Customize menu features** / Settings → Features.
+Files and journal entries each have an **Use for AI** toggle (include as AI context) and a **Visible to partner** toggle (hide contents from your partner while keeping it available to you). Non-authors see "Private entry" in place of hidden content.
+
+Optional modules can be toggled under **Application features** (Tracking hub → Setup / Dynamic → Application features, or Settings → Features).
 
 ---
 

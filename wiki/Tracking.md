@@ -2,11 +2,13 @@
 
 Route: `/#/dynamic/{id}/track`
 
-Hub for history, chastity, orgasm logging, feelings, punishment, tasks/acts, and the image vault.
+Hub for history, chastity, orgasm logging, feelings, punishment, tasks/acts, journaling, and the image vault. This is the app's home screen for an active dynamic.
 
 ![Tracking hub — Dom](images/11-tracking-hub.png)
 
 ![Tracking hub — Sub](images/35-sub-tracking.png)
+
+A collapsed **Setup / Dynamic** section at the bottom of the hub holds the less-frequently-used items — ground rules, dynamic interview, kink survey, knowledge, context library/journal library, and gear — plus a link to **Application features** (formerly "Menu features") for turning optional modules on/off.
 
 ---
 
@@ -77,9 +79,28 @@ Ordered task lists; optional Google Tasks sync. Acts of submission can be genera
 
 Route: `/#/dynamic/{id}/vault`
 
-Private images from chat. Stored encrypted when chat encryption is on.
+Private images from chat. Stored encrypted when chat encryption is on. **Take photo** opens an in-app camera (using your device camera directly) instead of handing off to the OS camera app, falling back to a file picker if camera access is unavailable.
 
 ![Vault](images/24-vault.png)
+
+---
+
+## Journal
+
+Route: `/#/dynamic/{id}/journal`
+
+Private writing with optional AI assist, split out from the Context library. Each entry has two independent toggles:
+
+- **Use for AI** — include this entry as context for AI assist and scene generation.
+- **Visible to partner** — when off, your partner sees the entry exists but its title/body is replaced with "Private entry."
+
+A hamburger menu lets you choose which context (stories, other journals, scenes, agreements, tracking) the AI should consider before you tap **Assist**. Doms also get a **Domme review** button that summarizes an entry using the assistant's Domme persona and can optionally post a system note to chat.
+
+---
+
+## Log cards
+
+Tracking history entries are collapsed by default, showing just the name, a relative timestamp (Today/Yesterday/hours), a type pill, and a colored accent stripe derived from the entry's tags. Tap a card to expand full details, or use the kebab (⋮) menu for **Edit** / **Delete**.
 
 ---
 

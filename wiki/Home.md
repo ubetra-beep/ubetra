@@ -14,8 +14,8 @@ This wiki covers features and day-to-day workflows. Screenshots were captured fr
 |------|----------------|
 | [Getting Started](Getting-Started) | Install, first login, PWA |
 | [Onboarding](Onboarding) | Create/join dynamic, AI key, SPTI, kink survey |
-| [Dynamics](Dynamics) | Overview, ground rules, interview, knowledge, gear |
-| [Tracking](Tracking) | History, chastity, orgasm log, feelings, punishment, tasks, vault |
+| [Dynamics](Dynamics) | Overview, ground rules, interview, knowledge, gear (now under Tracking → Setup) |
+| [Tracking](Tracking) | History, chastity, orgasm log, feelings, punishment, tasks, journal, vault |
 | [Chat](Chat) | Messaging, encryption, push, images |
 | [Playtime](Playtime) | Assistant, scene builder, spin game |
 | [Settings](Settings) | Account, privacy, AI, features, backup |
@@ -28,9 +28,9 @@ This wiki covers features and day-to-day workflows. Screenshots were captured fr
 
 1. You create an **account** (email + username + password).
 2. You create or join a **dynamic** (shared space for one Dom/Sub partnership).
-3. Bottom nav switches between **Tracking**, **Dynamic**, **Playtime**, and **Chat**.
+3. Bottom nav switches between **Tracking**, **Playtime**, and **Chat**. [Dynamics](Dynamics) content (ground rules, interviews, knowledge, gear) lives inside the Tracking hub's collapsed **Setup / Dynamic** section rather than its own tab.
 4. **Settings** is global; many couple preferences live on the dynamic.
-5. Some settings are **Dom-controlled** — a Sub submits a change request instead of applying it directly.
+5. Some settings are **Dom-controlled** — a Sub submits a change request instead of applying it directly, including **Application features**.
 
 ![Sign in](images/00-login.png)
 
@@ -38,4 +38,4 @@ This wiki covers features and day-to-day workflows. Screenshots were captured fr
 
 ## Version
 
-Docs match app **v0.75** (shared chat encryption key, web push fixes). See the [CHANGELOG](https://github.com/ubetra-beep/ubetra/blob/main/CHANGELOG.md) on GitHub.
+Docs match app **v0.77** (Tracking/Playtime hub redesign, private journals with AI context controls, in-app camera, redesigned log cards). See the [CHANGELOG](https://github.com/ubetra-beep/ubetra/blob/main/CHANGELOG.md) on GitHub.

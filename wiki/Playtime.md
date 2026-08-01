@@ -14,7 +14,7 @@ Needs a completed **dynamic interview** and a configured **LLM key** for full as
 
 Route: `/#/dynamic/{id}/assistant/scene`
 
-Guided flow: effort → lean (Dom/Sub desires) → subject → full scene draft.
+Guided flow: effort → lean (Dom/Sub desires) → subject → full scene draft. A context (☰) menu lets you choose which sources — stories, journals, scenes, agreements, tracking — the AI draws on when generating the scene.
 
 ---
 
@@ -31,4 +31,4 @@ Route: `/#/dynamic/{id}/assistant/games/spin`
 
 ## Tasks from Playtime
 
-Doms can create lists; Subs can request a task (pending approval).
+Doms can create task lists here. Subs requesting a task now do so from [Chat](Chat)'s **☰** menu rather than from Playtime.
