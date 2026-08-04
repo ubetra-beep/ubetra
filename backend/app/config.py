@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     smtp_tls: bool = True
     # Web Push VAPID contact (mailto: or https:). FCM rejects some placeholders.
     vapid_contact: str = "mailto:admin@example.com"
+    # Native Android APK push (FCM HTTP v1). Path to Firebase service-account JSON.
+    fcm_service_account_file: str = ""
+    fcm_project_id: str = ""
 
     class Config:
         env_prefix = "UBETRA_"

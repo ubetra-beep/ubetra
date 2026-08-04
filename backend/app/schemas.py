@@ -453,10 +453,18 @@ class PushSubscribeIn(BaseModel):
     expiration_time: int | None = None
 
 
+class NativePushSubscribeIn(BaseModel):
+    token: str = Field(min_length=32, max_length=512)
+    platform: str = Field(default="android", max_length=32)
+    app_id: str = Field(default="ubetra-android", max_length=64)
+
+
 class PushStatusOut(BaseModel):
     configured: bool
     push_enabled: bool
     subscription_count: int
+    native_configured: bool = False
+    native_subscription_count: int = 0
 
 
 class PushSettingsUpdate(BaseModel):

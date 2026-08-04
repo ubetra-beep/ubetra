@@ -17,6 +17,7 @@ backend/data/*.db
 backend/data/*.db-*
 backend/data/vapid.json
 backend/data/vapid_private.pem
+backend/data/fcm-service-account.json
 *.db
 
 # OS / editor

@@ -172,6 +172,7 @@ class User(Base):
 
     memberships: Mapped[list["Membership"]] = relationship(back_populates="user")
     push_subscriptions: Mapped[list["PushSubscription"]] = relationship(back_populates="user")
+    native_push_tokens: Mapped[list["NativePushToken"]] = relationship(back_populates="user")
     mfa_challenges: Mapped[list["MfaChallenge"]] = relationship(back_populates="user")
 
 
@@ -199,6 +200,22 @@ class PushSubscription(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped[User] = relationship(back_populates="push_subscriptions")
+
+
+class NativePushToken(Base):
+    """FCM device tokens from the Capacitor Android APK (not Web Push endpoints)."""
+
+    __tablename__ = "native_push_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    token: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    platform: Mapped[str] = mapped_column(String(32), default="android")
+    app_id: Mapped[str] = mapped_column(String(64), default="ubetra-android")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user: Mapped[User] = relationship(back_populates="native_push_tokens")
 
 
 class Dynamic(Base):

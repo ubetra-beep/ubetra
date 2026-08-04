@@ -1733,6 +1733,9 @@ async function getPushRegistration() {
 }
 
 async function subscribeChatPush() {
+  if (isNativeApp()) {
+    return subscribeNativePush();
+  }
   if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
     throw new Error(
       "Browsers only allow notifications on HTTPS (or localhost). Open this app over HTTPS — plain http:// LAN addresses cannot enable notifications."
@@ -1800,6 +1803,10 @@ async function subscribeChatPush() {
 }
 
 async function unsubscribeChatPush() {
+  if (isNativeApp()) {
+    await unsubscribeNativePush();
+    return;
+  }
   const reg = await getPushRegistration();
   if (!reg) return;
   const sub = await reg.pushManager.getSubscription();
@@ -1814,7 +1821,11 @@ async function ensureChatPushEnabled() {
   if (!state.token) return false;
   try {
     const status = await api("/push/status");
-    if (!status.configured) return false;
+    if (isNativeApp()) {
+      if (!status.native_configured) return false;
+    } else if (!status.configured) {
+      return false;
+    }
     if (typeof Notification !== "undefined" && Notification.permission === "denied") return false;
     // Re-subscribe even if push_enabled was previously false (e.g. old multi-device wipe),
     // so opening this device can restore notifications.
@@ -1823,6 +1834,101 @@ async function ensureChatPushEnabled() {
   } catch {
     return false;
   }
+}
+
+function isNativeApp() {
+  try {
+    return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform());
+  } catch {
+    return false;
+  }
+}
+
+function isAndroidBrowser() {
+  return /Android/i.test(navigator.userAgent || "");
+}
+
+/** Step-by-step Chrome / Edge Android settings so banners arrive while the PWA is closed. */
+function openAndroidPushSetupGuide() {
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const card = el("div", { className: "card stack modal-card push-setup-guide" }, [
+    el("h3", {}, "Android notification setup"),
+    el(
+      "p",
+      { className: "muted" },
+      "Browsers often delay PWA push until you open the app. Do these once per phone:"
+    ),
+    el("ol", { className: "push-setup-list" }, [
+      el("li", {}, "Install via Chrome/Edge ⋮ → Install app (not “Add to Home screen”)."),
+      el("li", {}, "Android Settings → Apps → Chrome (or Edge) → Notifications → Allowed."),
+      el("li", {}, "Same path → Battery → Unrestricted (or “Don’t optimize”)."),
+      el("li", {}, "Samsung/Xiaomi: also allow the app in “Never sleeping apps” / Autostart."),
+      el("li", {}, "Confirm Google Play Services is installed and up to date."),
+      el("li", {}, "In UBETRA: Settings → Privacy → Notify this device → Allow."),
+      el("li", {}, "Fully close the PWA, then send a test message from your partner."),
+    ]),
+    el(
+      "p",
+      { className: "muted" },
+      "For reliable rings while Do Not Disturb is on, install the Android APK (see mobile/README) — PWAs cannot bypass DND."
+    ),
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => backdrop.remove(),
+    }, "Got it"),
+  ]);
+  backdrop.appendChild(card);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+}
+
+async function subscribeNativePush() {
+  const PushNotifications = window.Capacitor?.Plugins?.PushNotifications;
+  if (!PushNotifications) {
+    throw new Error("Native push plugin is not available in this build");
+  }
+  let perm = await PushNotifications.checkPermissions();
+  if (perm.receive !== "granted") {
+    perm = await PushNotifications.requestPermissions();
+  }
+  if (perm.receive !== "granted") {
+    throw new Error("Notification permission denied — enable notifications for UBETRA in Android settings");
+  }
+  await PushNotifications.register();
+  const token = await new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("Timed out waiting for FCM token")), 20000);
+    PushNotifications.addListener("registration", (ev) => {
+      clearTimeout(t);
+      resolve(ev.value);
+    });
+    PushNotifications.addListener("registrationError", (err) => {
+      clearTimeout(t);
+      reject(new Error(err?.error || "FCM registration failed"));
+    });
+  });
+  await api("/push/native", {
+    method: "POST",
+    body: JSON.stringify({
+      token,
+      platform: "android",
+      app_id: "ubetra-android",
+    }),
+  });
+  await api("/push/settings", {
+    method: "PUT",
+    body: JSON.stringify({ push_enabled: true }),
+  });
+  return token;
+}
+
+async function unsubscribeNativePush() {
+  const status = await api("/push/status").catch(() => null);
+  // Best-effort: remove all native tokens for this user from server; plugin has no deleteToken on all platforms.
+  await api("/push/native", { method: "DELETE" }).catch(() => {});
+  return status;
 }
 
 function formatRole(role) {
@@ -13470,7 +13576,12 @@ function renderSettings() {
         try {
           if (pushDeviceEnabled.checked) {
             await subscribeChatPush();
-            pushDeviceStatus.textContent = "This device is subscribed for chat notifications.";
+            pushDeviceStatus.textContent = isNativeApp()
+              ? "This Android app is registered for FCM notifications."
+              : "This device is subscribed for chat notifications.";
+            if (isAndroidBrowser() && !isNativeApp()) {
+              openAndroidPushSetupGuide();
+            }
           } else {
             await unsubscribeChatPush();
             pushDeviceStatus.textContent = "Push notifications disabled on this device.";
@@ -14061,6 +14172,11 @@ function renderSettings() {
           el("label", { className: "checkbox-label" }, [e2eMode, " Encrypted chat (shared key)"]),
           el("label", { className: "checkbox-label" }, [chatPushEnabled, " Push notifications for this dynamic's chat"]),
           el("label", { className: "checkbox-label" }, [pushDeviceEnabled, " Notify this device when partner sends a chat message"]),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => openAndroidPushSetupGuide(),
+          }, "Android Chrome / Edge setup tips"),
           pushDeviceStatus,
           lockedSettingsWrap({
             locked: !!(policy && !policy.you_are_dominant),

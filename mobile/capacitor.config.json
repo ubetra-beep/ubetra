@@ -1,0 +1,19 @@
+{
+  "appId": "org.duckdns.ubeneeko.app",
+  "appName": "UBETRA",
+  "webDir": "www",
+  "server": {
+    "url": "https://ubeneeko.duckdns.org",
+    "cleartext": false,
+    "allowNavigation": ["ubeneeko.duckdns.org", "*.duckdns.org"]
+  },
+  "plugins": {
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    }
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#1a1a1a"
+  }
+}

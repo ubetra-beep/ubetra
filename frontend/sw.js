@@ -1,4 +1,4 @@
-const CACHE = "ubetra-v78";
+const CACHE = "ubetra-v79";
 const ASSETS = [
   "/",
   "/assets/styles.css",
@@ -66,14 +66,16 @@ self.addEventListener("push", (event) => {
   const url = payload.url || "/";
   const tag = payload.tag || "ubetra-chat";
   const dynamicId = payload.dynamic_id || "";
+  const kind = payload.kind || "chat";
 
   event.waitUntil(
     (async () => {
       const list = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
 
       // Ask open tabs whether this chat is already on-screen (skip OS banner if so).
+      // Never suppress call rings — those must always surface.
       let suppressBanner = false;
-      if (dynamicId && String(tag).startsWith("ubetra-chat")) {
+      if (kind !== "call" && dynamicId && String(tag).startsWith("ubetra-chat")) {
         const checks = await Promise.all(
           list.map(
             (client) =>
@@ -105,11 +107,14 @@ self.addEventListener("push", (event) => {
           self.registration.showNotification(title, {
             body,
             tag,
-            data: { url, dynamicId },
+            data: { url, dynamicId, kind },
             renotify: true,
+            // Keep banner until dismissed — helps Android not bury chat alerts.
+            requireInteraction: true,
+            silent: false,
             icon: "/icons/icon-192.png",
             badge: "/icons/icon-192.png",
-            vibrate: [120, 60, 120],
+            vibrate: kind === "call" ? [300, 120, 300, 120, 300] : [180, 80, 180],
           })
         );
       }
@@ -118,6 +123,7 @@ self.addEventListener("push", (event) => {
           type: "ubetra-chat-push",
           dynamicId,
           url,
+          kind,
         });
       });
       await Promise.all(tasks);

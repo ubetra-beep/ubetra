@@ -3,6 +3,17 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.79] — 2026-08-04
+
+### Added
+- In-app **Android Chrome / Edge setup tips** after enabling Notify this device
+- Capacitor Android APK scaffold (`mobile/`) with native FCM registration, `ubetra_chat` + `ubetra_calls` channels (DND bypass ready for calling)
+- Server support for native FCM tokens (`POST /api/push/native`) via Firebase service-account env
+
+### Changed
+- Web Push sends with `Urgency: high`; service worker uses `requireInteraction` and louder vibration
+- Service worker cache `ubetra-v79`
+
 ## [0.78] — 2026-08-04
 
 ### Fixed

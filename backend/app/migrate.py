@@ -918,3 +918,25 @@ def run_migrations() -> None:
       conn.execute(
         text("ALTER TABLE journal_entries ADD COLUMN partner_visible BOOLEAN DEFAULT 1")
       )
+
+    conn.execute(
+      text(
+        """
+        CREATE TABLE IF NOT EXISTS native_push_tokens (
+          id VARCHAR(36) PRIMARY KEY,
+          user_id VARCHAR(36) NOT NULL,
+          token VARCHAR(512) NOT NULL UNIQUE,
+          platform VARCHAR(32) DEFAULT 'android',
+          app_id VARCHAR(64) DEFAULT 'ubetra-android',
+          created_at DATETIME,
+          updated_at DATETIME
+        )
+        """
+      )
+    )
+    conn.execute(
+      text("CREATE INDEX IF NOT EXISTS ix_native_push_tokens_user_id ON native_push_tokens (user_id)")
+    )
+    conn.execute(
+      text("CREATE INDEX IF NOT EXISTS ix_native_push_tokens_token ON native_push_tokens (token)")
+    )

@@ -55,15 +55,22 @@ Legacy one-time share codes remain under Advanced for unusual migrations.
 3. On **each phone**, enable **Notify this device** and accept the browser/OS permission prompt.  
 4. Fully close the PWA and have your partner send a test message.
 
-### Android PWA tips
+### Android Chrome / Edge (PWA) setup
 
-The installed shortcut does **not** need to stay open — Chrome + Play Services deliver Web Push via FCM. If banners never appear:
+Settings → Privacy → **Android Chrome / Edge setup tips**, or:
 
-- Android Settings → Apps → **Chrome** (and/or the UBETRA PWA) → Notifications **Allowed**
-- Disable battery optimization / “sleeping apps” for Chrome on aggressive OEMs (Samsung, Xiaomi, etc.)
-- Confirm Google Play Services is present (required for Chrome push)
-- Re-open the PWA once after a server update so the service worker and subscription can re-sync
-- Turning off notify on one device only removes **that** phone — other devices keep their subscriptions
+1. Install via **⋮ → Install app** (not “Add to Home screen”).
+2. Android Settings → Apps → **Chrome** or **Edge** → Notifications → **Allowed**.
+3. Same path → Battery → **Unrestricted**.
+4. Samsung / Xiaomi: add Chrome/Edge to **Never sleeping apps** / allow Autostart.
+5. Confirm Google Play Services is present.
+6. Re-open UBETRA once after a server update so the service worker re-syncs.
+
+PWAs still cannot bypass **Do Not Disturb**. For that (and future calling), install the [Android APK](../mobile/README.md).
+
+### Android APK (recommended for phones)
+
+See [`mobile/README.md`](../mobile/README.md): Capacitor shell + native FCM, with a `ubetra_calls` channel that can ignore DND after you grant Notification Policy access.
 
 Banners are suppressed when that same chat is already open and visible; messages still refresh in-app.
 

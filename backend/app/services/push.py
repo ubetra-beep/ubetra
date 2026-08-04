@@ -8,7 +8,8 @@ from pywebpush import WebPushException, webpush
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
-from ..models import ChatMessageType, Dynamic, Membership, PushSubscription, User
+from ..models import ChatMessageType, Dynamic, Membership, NativePushToken, PushSubscription, User
+from .fcm import fcm_configured, send_fcm_data_message
 from .vapid import is_configured, vapid_contact, vapid_private_key
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ def send_web_push(subscription: PushSubscription, payload: dict[str, Any]) -> st
             vapid_claims={"sub": vapid_contact()},
             # Keep undelivered pushes so Android/FCM can wake the device later.
             ttl=86400,
+            # High urgency helps Android leave Doze sooner for chat/call alerts.
+            headers={"Urgency": "high", "Topic": str(payload.get("tag") or "ubetra")[:32]},
         )
         return "ok"
     except WebPushException as exc:
@@ -108,6 +111,7 @@ def notify_chat_push(
     }
 
     stale: list[PushSubscription] = []
+    stale_native: list[NativePushToken] = []
     for user_id in partner_user_ids:
         user = db.get(User, user_id)
         if user is None or not bool(getattr(user, "push_enabled", True)):
@@ -116,10 +120,78 @@ def notify_chat_push(
         for sub in subs:
             if send_web_push(sub, payload) == "stale":
                 stale.append(sub)
+        for native in db.query(NativePushToken).filter(NativePushToken.user_id == user_id).all():
+            result = send_fcm_data_message(
+                native.token,
+                title=title,
+                body=preview,
+                data={
+                    "url": payload["url"],
+                    "dynamic_id": dynamic_id,
+                    "tag": payload["tag"],
+                    "kind": "chat",
+                },
+                kind="chat",
+            )
+            if result == "stale":
+                stale_native.append(native)
 
     for sub in stale:
         db.delete(sub)
-    if stale:
+    for native in stale_native:
+        db.delete(native)
+    if stale or stale_native:
+        db.commit()
+
+
+def _notify_users_payload(
+    db: Session,
+    *,
+    user_ids: set[str],
+    title: str,
+    body: str,
+    url: str,
+    tag: str,
+    dynamic_id: str,
+    kind: str = "chat",
+) -> None:
+    stale: list[PushSubscription] = []
+    stale_native: list[NativePushToken] = []
+    payload = {
+        "title": title,
+        "body": body,
+        "url": url,
+        "dynamic_id": dynamic_id,
+        "tag": tag,
+        "kind": kind,
+    }
+    for user_id in user_ids:
+        user = db.get(User, user_id)
+        if user is None or not bool(getattr(user, "push_enabled", True)):
+            continue
+        for sub in db.query(PushSubscription).filter(PushSubscription.user_id == user_id).all():
+            if send_web_push(sub, payload) == "stale":
+                stale.append(sub)
+        for native in db.query(NativePushToken).filter(NativePushToken.user_id == user_id).all():
+            result = send_fcm_data_message(
+                native.token,
+                title=title,
+                body=body,
+                data={
+                    "url": url,
+                    "dynamic_id": dynamic_id,
+                    "tag": tag,
+                    "kind": kind,
+                },
+                kind=kind,
+            )
+            if result == "stale":
+                stale_native.append(native)
+    for sub in stale:
+        db.delete(sub)
+    for native in stale_native:
+        db.delete(native)
+    if stale or stale_native:
         db.commit()
 
 
@@ -167,28 +239,16 @@ def notify_playtime_push(
     if not partner_user_ids:
         return
 
-    payload = {
-        "title": title[:80] or "Playtime",
-        "body": (body or "")[:160],
-        "url": url or f"/#/dynamic/{dynamic_id}/assistant/games/spin",
-        "dynamic_id": dynamic_id,
-        "tag": f"ubetra-playtime-{dynamic_id}",
-    }
-
-    stale: list[PushSubscription] = []
-    for user_id in partner_user_ids:
-        user = db.get(User, user_id)
-        if user is None or not bool(getattr(user, "push_enabled", True)):
-            continue
-        subs = db.query(PushSubscription).filter(PushSubscription.user_id == user_id).all()
-        for sub in subs:
-            if send_web_push(sub, payload) == "stale":
-                stale.append(sub)
-
-    for sub in stale:
-        db.delete(sub)
-    if stale:
-        db.commit()
+    _notify_users_payload(
+        db,
+        user_ids=partner_user_ids,
+        title=title[:80] or "Playtime",
+        body=(body or "")[:160],
+        url=url or f"/#/dynamic/{dynamic_id}/assistant/games/spin",
+        tag=f"ubetra-playtime-{dynamic_id}",
+        dynamic_id=dynamic_id,
+        kind="chat",
+    )
 
 
 def notify_playtime_push_async(
@@ -237,25 +297,13 @@ def notify_keyholders_push(
     if not keyholder_user_ids:
         return
 
-    payload = {
-        "title": title[:80] or "Chastity",
-        "body": (body or "")[:160],
-        "url": url or f"/#/dynamic/{dynamic_id}/chastity",
-        "dynamic_id": dynamic_id,
-        "tag": tag or f"ubetra-chastity-timer-{dynamic_id}",
-    }
-
-    stale: list[PushSubscription] = []
-    for user_id in keyholder_user_ids:
-        user = db.get(User, user_id)
-        if user is None or not bool(getattr(user, "push_enabled", True)):
-            continue
-        subs = db.query(PushSubscription).filter(PushSubscription.user_id == user_id).all()
-        for sub in subs:
-            if send_web_push(sub, payload) == "stale":
-                stale.append(sub)
-
-    for sub in stale:
-        db.delete(sub)
-    if stale:
-        db.commit()
+    _notify_users_payload(
+        db,
+        user_ids=keyholder_user_ids,
+        title=title[:80] or "Chastity",
+        body=(body or "")[:160],
+        url=url or f"/#/dynamic/{dynamic_id}/chastity",
+        tag=tag or f"ubetra-chastity-timer-{dynamic_id}",
+        dynamic_id=dynamic_id,
+        kind="chat",
+    )

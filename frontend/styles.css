@@ -2775,7 +2775,18 @@ details[open] summary {
 }
 
 /* --- In-app camera --- */
-.in-app-camera-modal {
+.push-setup-guide ol.push-setup-list {
+  margin: 0.25rem 0 0.75rem;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.push-setup-guide li {
+  line-height: 1.35;
+}
+
   z-index: 120;
 }
 
