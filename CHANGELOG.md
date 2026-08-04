@@ -3,6 +3,20 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.78] — 2026-08-04
+
+### Fixed
+- Chat hub now has its own Application features hamburger (settings stay on ⋯)
+- Context library: Visible to partner toggle on create/edit (matched journals)
+- Turning off “Notify this device” no longer disables push / wipes subscriptions on every other phone
+- Push re-syncs on app resume and when FCM rotates the subscription (`pushsubscriptionchange`)
+- Domme journal review can optionally post a note to Chat
+- Log cards: tags/metadata only when expanded; clearer orgasm spacing
+
+### Changed
+- Service worker served with `Cache-Control: no-cache`; cache `ubetra-v78`
+- `.env.example` documents `UBETRA_VAPID_CONTACT`
+
 ## [0.77] — 2026-08-01
 
 ### Added

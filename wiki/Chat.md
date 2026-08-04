@@ -15,14 +15,15 @@ Partner messaging for the active dynamic.
 - Text messages and image attachments (`+`)
 - **Logs on/off** — system activity posts (tasks, tracking, chastity…)
 - **Images on/off** — show or hide image messages
-- **☰** — quick chat privacy settings (blur, retain, encryption, push); Subs also find **Request a task** here
+- **☰** — Application features for this hub (e.g. Image vault)
+- **⋯** — quick chat privacy settings (blur, retain, encryption, push); Subs also find **Request a task** here
 - The attach sheet's **Take photo** opens an in-app camera (device camera via the browser) and sends the capture directly; **Choose from library** still opens the file picker.
 
 ---
 
 ## Requesting a task (Sub)
 
-Subs can open the **☰** settings menu in Chat and choose **Request a task** to submit a task idea straight to the Dom's task list for approval — no need to leave the conversation. A toast confirms the request was sent.
+Subs can open the **⋯** settings menu in Chat and choose **Request a task** to submit a task idea straight to the Dom's task list for approval — no need to leave the conversation. A toast confirms the request was sent.
 
 ---
 
@@ -49,9 +50,20 @@ Legacy one-time share codes remain under Advanced for unusual migrations.
 
 ## Push notifications
 
-1. Enable chat push for the dynamic.  
-2. Enable **Notify this device** in Privacy settings (browser permission required).  
-3. Requires HTTPS (or localhost).
+1. Open the app over the **same HTTPS origin** you installed the PWA from (not a LAN `http://` URL).  
+2. Enable chat push for the dynamic (Chat ⋯ or Settings → Privacy).  
+3. On **each phone**, enable **Notify this device** and accept the browser/OS permission prompt.  
+4. Fully close the PWA and have your partner send a test message.
+
+### Android PWA tips
+
+The installed shortcut does **not** need to stay open — Chrome + Play Services deliver Web Push via FCM. If banners never appear:
+
+- Android Settings → Apps → **Chrome** (and/or the UBETRA PWA) → Notifications **Allowed**
+- Disable battery optimization / “sleeping apps” for Chrome on aggressive OEMs (Samsung, Xiaomi, etc.)
+- Confirm Google Play Services is present (required for Chrome push)
+- Re-open the PWA once after a server update so the service worker and subscription can re-sync
+- Turning off notify on one device only removes **that** phone — other devices keep their subscriptions
 
 Banners are suppressed when that same chat is already open and visible; messages still refresh in-app.
 

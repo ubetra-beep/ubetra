@@ -2715,6 +2715,11 @@ details[open] summary {
   margin-top: 0.1rem;
 }
 
+.log-card-orgasm + .log-card-orgasm,
+.log-card-details .log-card-orgasm {
+  margin-top: 0.55rem;
+}
+
 /* --- Kebab menu --- */
 .kebab-menu-wrap {
   position: relative;

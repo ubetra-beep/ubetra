@@ -47,11 +47,13 @@ def update_push_settings(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PushStatusOut:
+    """Toggle the account-level push preference.
+
+    Turning push off does **not** delete stored device endpoints — those are
+    removed per-device via DELETE /push/subscribe?endpoint=… so other phones/PWAs
+    keep working.
+    """
     user.push_enabled = payload.push_enabled
-    if not payload.push_enabled:
-        db.query(PushSubscription).filter(PushSubscription.user_id == user.id).delete(
-            synchronize_session=False
-        )
     db.commit()
     db.refresh(user)
     count = db.query(PushSubscription).filter(PushSubscription.user_id == user.id).count()

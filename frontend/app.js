@@ -1017,12 +1017,14 @@ function renderTrackingEntrySummary(entry, { dynamicId, editable = false, onChan
     }
     card.appendChild(topRow);
 
-    if (entry.during_lockup) {
+      if (entry.during_lockup) {
       const lockLabel = entry.during_own_lockup
         ? "During lockup"
         : `Partner locked: ${(entry.locked_partner_names || []).join(", ") || "yes"}`;
       card.appendChild(el("span", { className: "pill log-card-lockup" }, lockLabel));
     }
+
+    if (!expanded) return card;
 
     if (allTags.length) {
       const chipsRow = el("div", { className: "tag-filter-row log-card-chips" });
@@ -1035,25 +1037,35 @@ function renderTrackingEntrySummary(entry, { dynamicId, editable = false, onChan
       card.appendChild(chipsRow);
     }
 
-    if (!expanded) return card;
-
     const details = el("div", { className: "stack log-card-details" });
-    const bits = [formatLocalDateTime(entry.occurred_at)];
-    if (entry.ended_at) bits.push(`end ${formatLocalDateTime(entry.ended_at)}`);
-    if (entry.duration_minutes != null) bits.push(`${entry.duration_minutes}m`);
-    if (entry.location) bits.push(entry.location);
-    if (entry.protection) bits.push(String(entry.protection).replace(/_/g, " "));
-    if (entry.satisfaction != null) bits.push(`${entry.satisfaction}/5`);
-    if (entry.edging_count != null) bits.push(`${entry.edging_count} edges`);
-    if (entry.initiated_by_display_name) bits.push(`started by ${entry.initiated_by_display_name}`);
-    details.appendChild(el("p", { className: "muted" }, bits.join(" · ")));
+    const metaBits = [];
+    if (entry.ended_at || entry.duration_minutes != null) {
+      const range = [];
+      range.push(formatLogWhen(entry.occurred_at));
+      if (entry.ended_at) range.push(`→ ${formatLogWhen(entry.ended_at)}`);
+      if (entry.duration_minutes != null) range.push(`${entry.duration_minutes}m`);
+      metaBits.push(range.join(" "));
+    }
+    if (entry.location) metaBits.push(`📍 ${entry.location}`);
+    if (entry.protection) metaBits.push(String(entry.protection).replace(/_/g, " "));
+    if (entry.satisfaction != null) metaBits.push(`★ ${entry.satisfaction}/5`);
+    if (entry.edging_count != null) metaBits.push(`${entry.edging_count} edges`);
+    if (entry.initiated_by_display_name) metaBits.push(`↗ ${entry.initiated_by_display_name}`);
+    if (metaBits.length) details.appendChild(el("p", { className: "muted" }, metaBits.join(" · ")));
 
     const notesText = entry.notes_hidden ? "Private notes hidden" : entry.notes || null;
     if (notesText) details.appendChild(el("p", { className: entry.notes_hidden ? "muted" : "" }, notesText));
 
     if (entry.orgasms?.length) {
       entry.orgasms.forEach((orgasm, idx) => {
-        details.appendChild(el("p", { className: "muted" }, `Orgasm ${idx + 1}`));
+        const oTags = (orgasm.tags || []).join(", ");
+        details.appendChild(
+          el(
+            "p",
+            { className: "muted log-card-orgasm" },
+            `Orgasm ${idx + 1}${oTags ? ` · ${oTags}` : ""}`
+          )
+        );
       });
     }
     if (entry.session_id && entry.session_entry_count > 1 && dynamicId) {
@@ -1795,10 +1807,7 @@ async function unsubscribeChatPush() {
     await api(`/push/subscribe?endpoint=${encodeURIComponent(sub.endpoint)}`, { method: "DELETE" });
     await sub.unsubscribe();
   }
-  await api("/push/settings", {
-    method: "PUT",
-    body: JSON.stringify({ push_enabled: false }),
-  });
+  // Do not flip global push_enabled / wipe other devices — only this endpoint was removed.
 }
 
 async function ensureChatPushEnabled() {
@@ -1806,9 +1815,9 @@ async function ensureChatPushEnabled() {
   try {
     const status = await api("/push/status");
     if (!status.configured) return false;
-    if (status.push_enabled === false) return false;
-    if (Notification.permission === "denied") return false;
-    // Always re-sync so server has this browser's subscription (count alone can be stale).
+    if (typeof Notification !== "undefined" && Notification.permission === "denied") return false;
+    // Re-subscribe even if push_enabled was previously false (e.g. old multi-device wipe),
+    // so opening this device can restore notifications.
     await subscribeChatPush();
     return true;
   } catch {
@@ -2154,6 +2163,10 @@ async function bootstrap() {
         port.postMessage({ suppress: onThisChat && visible });
         return;
       }
+      if (event.data?.type === "ubetra-push-resync") {
+        ensureChatPushEnabled().catch(() => {});
+        return;
+      }
       if (event.data?.type === "ubetra-navigate" && event.data.url) {
         let path = event.data.url;
         if (path.startsWith("/#")) path = path.slice(2);
@@ -2170,6 +2183,12 @@ async function bootstrap() {
           })
         );
       }
+    });
+    // Re-sync FCM subscription when returning to the PWA (Android often rotates endpoints).
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible" || !state.token) return;
+      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+      ensureChatPushEnabled().catch(() => {});
     });
   }
 
@@ -4374,7 +4393,7 @@ function renderDynamicOverview(dynamicId) {
         el("button", {
           className: "ghost-btn",
           onClick: () => navigate(`/dynamic/${dynamicId}/features`),
-        }, "Customize menu features")
+        }, "Application features")
       );
       stack.appendChild(
         el("button", {
@@ -7719,6 +7738,7 @@ function renderContext(dynamicId) {
         subject.appendChild(el("option", { value: cat.id }, cat.label));
       });
       const useForAi = el("input", { type: "checkbox", checked: true });
+      const partnerVisible = el("input", { type: "checkbox", checked: true });
       const fileInput = el("input", {
         type: "file",
         accept: ".txt,.md,.csv,.json,.html,.htm,.pdf,.docx,text/plain,text/markdown,text/csv,application/json,text/html,application/pdf",
@@ -7737,6 +7757,18 @@ function renderContext(dynamicId) {
             categories.find((c) => c.id === (link.subject || link.category))?.label
             || link.subject
             || link.category;
+          if (link.is_private_to_others) {
+            list.appendChild(
+              el("div", { className: "card stack" }, [
+                el("div", { className: "row wrap" }, [
+                  el("strong", {}, link.title || "Private file"),
+                  el("span", { className: "pill" }, "🔒 Private"),
+                ]),
+                el("p", { className: "muted" }, "This file is private to its author."),
+              ])
+            );
+            return;
+          }
           const aiToggle = el("input", { type: "checkbox" });
           aiToggle.checked = link.use_for_ai !== false;
           aiToggle.addEventListener("change", async () => {
@@ -7752,6 +7784,21 @@ function renderContext(dynamicId) {
               aiToggle.checked = !aiToggle.checked;
             }
           });
+          const visibleToggle = el("input", { type: "checkbox" });
+          visibleToggle.checked = link.partner_visible !== false;
+          visibleToggle.addEventListener("change", async () => {
+            try {
+              await api(`/dynamics/${dynamicId}/context/${link.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ partner_visible: visibleToggle.checked }),
+              });
+              status.textContent = "Updated partner visibility.";
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+              visibleToggle.checked = !visibleToggle.checked;
+            }
+          });
           list.appendChild(
             el("div", { className: "card stack" }, [
               el("div", { className: "row wrap" }, [
@@ -7762,6 +7809,7 @@ function renderContext(dynamicId) {
               link.text_preview ? el("p", { className: "muted" }, link.text_preview) : null,
               link.notes ? el("p", { className: "muted" }, link.notes) : null,
               el("label", { className: "checkbox-label" }, [aiToggle, " Use for AI"]),
+              el("label", { className: "checkbox-label" }, [visibleToggle, " Visible to partner"]),
               el("button", {
                 className: "ghost-btn",
                 onClick: async () => {
@@ -7784,6 +7832,7 @@ function renderContext(dynamicId) {
         body.append("title", title.value || file.name || "Upload");
         body.append("notes", "");
         body.append("use_for_ai", useForAi.checked ? "true" : "false");
+        body.append("partner_visible", partnerVisible.checked ? "true" : "false");
         const token = state.token;
         const res = await fetch(`${API}/dynamics/${dynamicId}/context/upload`, {
           method: "POST",
@@ -7816,6 +7865,7 @@ function renderContext(dynamicId) {
           el("label", {}, ["Title", title]),
           el("label", {}, ["Paste text (optional)", textBody]),
           el("label", { className: "checkbox-label" }, [useForAi, " Use for AI"]),
+          el("label", { className: "checkbox-label" }, [partnerVisible, " Visible to partner"]),
           el("div", { className: "row wrap" }, [
             el("button", {
               className: "primary-btn",
@@ -7839,6 +7889,7 @@ function renderContext(dynamicId) {
                       text_content: textBody.value,
                       notes: "",
                       use_for_ai: useForAi.checked,
+                      partner_visible: partnerVisible.checked,
                     }),
                   });
                   title.value = "";
@@ -8001,12 +8052,16 @@ function renderJournal(dynamicId) {
                 error.classList.add("hidden");
                 reviewOut.classList.add("hidden");
                 try {
+                  const postToChat = confirm(
+                    "Also post a short note to Chat so your partner knows you reviewed?"
+                  );
                   const res = await api(`/dynamics/${dynamicId}/journal/${entry.id}/domme-review`, {
                     method: "POST",
-                    body: JSON.stringify({ post_system_event: false }),
+                    body: JSON.stringify({ post_system_event: postToChat }),
                   });
                   reviewOut.textContent = res.summary;
                   reviewOut.classList.remove("hidden");
+                  if (postToChat) status.textContent = "Review noted in Chat.";
                 } catch (err) {
                   error.textContent = err.message;
                   error.classList.remove("hidden");
@@ -12869,6 +12924,17 @@ function renderChat(dynamicId) {
         }, "Full settings…")
       );
 
+      const featuresBtnChat = el("button", {
+        className: "ghost-btn hub-features-btn chat-features-btn",
+        type: "button",
+        title: "Application features",
+        "aria-label": "Application features",
+        onClick: (e) => {
+          e.stopPropagation();
+          openAppFeaturesPanel(id, "chat");
+        },
+      }, "☰");
+
       const settingsBtnChat = el("button", {
         className: "ghost-btn chat-settings-link chat-hamburger",
         type: "button",
@@ -12878,14 +12944,14 @@ function renderChat(dynamicId) {
           e.stopPropagation();
           settingsPanel.classList.toggle("hidden");
         },
-      }, "☰");
+      }, "⋯");
 
       const header = el("div", { className: "chat-header row" }, [
         el("div", {}, [
           el("h1", {}, "Chat"),
           el("p", { className: "muted" }, formatDynamicTitle(state.currentDynamic)),
         ]),
-        el("div", { className: "chat-header-actions" }, [logsToggle, imagesToggle, settingsBtnChat]),
+        el("div", { className: "chat-header-actions" }, [logsToggle, imagesToggle, featuresBtnChat, settingsBtnChat]),
       ]);
 
       const headerWrap = el("div", { className: "chat-header-wrap" }, [header, settingsPanel]);
@@ -13366,8 +13432,15 @@ function renderSettings() {
       });
 
       api("/push/status")
-        .then((pushStatus) => {
-          pushDeviceEnabled.checked = pushStatus.push_enabled && pushStatus.subscription_count > 0;
+        .then(async (pushStatus) => {
+          let localSub = null;
+          try {
+            const reg = await getPushRegistration();
+            localSub = reg ? await reg.pushManager.getSubscription() : null;
+          } catch {
+            localSub = null;
+          }
+          pushDeviceEnabled.checked = !!localSub;
           const insecure =
             !window.isSecureContext &&
             location.hostname !== "localhost" &&
@@ -13379,9 +13452,9 @@ function renderSettings() {
           } else if (!pushStatus.configured) {
             pushDeviceStatus.textContent = "Push not available on this server.";
             pushDeviceEnabled.disabled = true;
-          } else if (pushStatus.subscription_count > 0) {
+          } else if (localSub) {
             pushDeviceStatus.textContent = "This device is subscribed for chat notifications.";
-          } else if (Notification.permission === "denied") {
+          } else if (typeof Notification !== "undefined" && Notification.permission === "denied") {
             pushDeviceStatus.textContent = "Notifications blocked in browser settings.";
             pushDeviceEnabled.disabled = true;
           } else {

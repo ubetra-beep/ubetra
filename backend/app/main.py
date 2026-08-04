@@ -117,7 +117,11 @@ if FRONTEND_DIR.exists():
 
     @app.get("/sw.js")
     def service_worker() -> FileResponse:
-        return FileResponse(FRONTEND_DIR / "sw.js")
+        return FileResponse(
+            FRONTEND_DIR / "sw.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     icons_dir = FRONTEND_DIR / "icons"
     if icons_dir.is_dir():

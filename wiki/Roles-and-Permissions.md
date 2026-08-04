@@ -23,7 +23,7 @@ UBETRA assumes a **Dominant / keyholder** and a **Submissive** in each dynamic. 
 
 ## Dom-controlled settings (examples)
 
-- Menu features  
+- Application features  
 - Chat system events / retain history  
 - Feelings prompt mode & end-of-day  
 - Assistant tone / extra instructions  

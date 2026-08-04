@@ -1,4 +1,4 @@
-const CACHE = "ubetra-v77";
+const CACHE = "ubetra-v78";
 const ASSETS = [
   "/",
   "/assets/styles.css",
@@ -18,6 +18,22 @@ self.addEventListener("activate", (event) => {
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
+  );
+});
+
+/** FCM can rotate push endpoints; ask open clients to re-POST /push/subscribe. */
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    (async () => {
+      const list = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      list.forEach((client) => {
+        try {
+          client.postMessage({ type: "ubetra-push-resync" });
+        } catch {
+          /* ignore */
+        }
+      });
+    })()
   );
 });
 
