@@ -27,29 +27,26 @@ UBETRA_FCM_PROJECT_ID=your-firebase-project-id
 
 Copy the JSON into the container data volume (same place as `ubetra.db` / `vapid.json`).
 
-## Build the project
+## Build on Docker-SVR (recommended)
 
-```powershell
-cd mobile
-npm install
-npx cap add android          # first time only
-npx cap sync android
+Full Android Studio GUI is not needed — the server uses Docker images:
+
+- `node:22-bookworm` for Capacitor CLI  
+- `mobiledevops/android-sdk-image:34.0.0` for Gradle / SDK  
+
+```bash
+cd ~/docker/ubetra
+bash mobile/scripts/build-apk.sh
+# → mobile/dist/ubetra-debug.apk
 ```
 
-Then:
-
-1. Copy `android-templates/MainActivity.kt` over  
-   `android/app/src/main/java/.../MainActivity.java` (convert package path; Capacitor 7 often uses Java — replace with the Kotlin file or port the channel code into Java).
-2. Merge permissions from `android-templates/AndroidManifest.permissions.xml` into `android/app/src/main/AndroidManifest.xml`.
-3. Ensure the Google Services plugin is applied (Capacitor Push Notifications docs).
-4. Put `google-services.json` in `android/app/`.
-5. Open Android Studio:
+Copy to your PC:
 
 ```powershell
-npx cap open android
+tsh scp james@docker-svr:docker/ubetra/mobile/dist/ubetra-debug.apk .
 ```
 
-6. Build → Build Bundle(s) / APK(s) → APK. Install on phones via USB or internal share.
+Install on a phone (allow unknown sources). Native FCM still needs a real Firebase `google-services.json` + server service account (placeholder ships for compile only).
 
 ## App behavior
 

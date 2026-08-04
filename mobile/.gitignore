@@ -1,6 +1,7 @@
 # Ignore local Capacitor/Android build artifacts
 node_modules/
 android/
+dist/
 .idea/
 *.iml
 .gradle/
@@ -8,3 +9,4 @@ local.properties
 google-services.json
 *.jks
 *.keystore
+*.apk
