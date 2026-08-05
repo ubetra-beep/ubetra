@@ -3,6 +3,14 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.81] — 2026-08-05
+
+### Fixed
+- Chat typing indicator: partner “three dots” now appears as a chat bubble (and above the composer), with a longer presence TTL and faster polling
+
+### Changed
+- Service worker cache `ubetra-v81`
+
 ## [0.80] — 2026-08-04
 
 ### Added

@@ -12878,6 +12878,23 @@ function renderChat(dynamicId) {
       }
     }
     chatLog.replaceChildren(...nodes);
+    if (typingPartners.length) {
+      const names = typingPartners.map((t) => t.display_name).filter(Boolean);
+      chatLog.appendChild(
+        el("div", {
+          id: "chat-typing-bubble",
+          className: "chat-bubble assistant chat-typing-bubble",
+          "aria-label": names.length ? `${names.join(", ")} typing` : "Partner typing",
+        }, [
+          el("span", { className: "muted chat-sender" }, names[0] || "Partner"),
+          el("span", { className: "chat-typing-dots", "aria-hidden": "true" }, [
+            el("span", { className: "chat-typing-dot" }),
+            el("span", { className: "chat-typing-dot" }),
+            el("span", { className: "chat-typing-dot" }),
+          ]),
+        ])
+      );
+    }
     requestAnimationFrame(() => {
       chatLog.scrollTop = chatLog.scrollHeight;
     });
@@ -13026,27 +13043,60 @@ function renderChat(dynamicId) {
       }, "➤");
 
       const typingEl = el("div", { className: "chat-typing hidden", "aria-live": "polite" }, [
-        el("span", { className: "chat-typing-dots" }, [
-          el("i"),
-          el("i"),
-          el("i"),
+        el("span", { className: "chat-typing-dots", "aria-hidden": "true" }, [
+          el("span", { className: "chat-typing-dot" }),
+          el("span", { className: "chat-typing-dot" }),
+          el("span", { className: "chat-typing-dot" }),
         ]),
+        el("span", { className: "chat-typing-label muted" }, "typing…"),
       ]);
 
-      const composer = el("div", { className: "stack chat-composer-wrap" }, [
+      const composer = el("div", { className: "chat-composer-wrap" }, [
         typingEl,
         el("div", { className: "chat-composer" }, [attachBtn, input, sendBtn]),
       ]);
 
+      function buildTypingDots() {
+        return el("span", { className: "chat-typing-dots", "aria-hidden": "true" }, [
+          el("span", { className: "chat-typing-dot" }),
+          el("span", { className: "chat-typing-dot" }),
+          el("span", { className: "chat-typing-dot" }),
+        ]);
+      }
+
       function paintTyping() {
+        const names = typingPartners.map((t) => t.display_name).filter(Boolean);
+        const label = names.length ? `${names.join(", ")} typing` : "Partner typing";
+        const labelEl = typingEl.querySelector(".chat-typing-label");
+        if (labelEl) labelEl.textContent = names.length === 1 ? `${names[0]} is typing…` : "typing…";
+        typingEl.title = label;
+        typingEl.classList.toggle("hidden", !typingPartners.length);
+
+        const chatLogEl = document.getElementById("partner-chat-log");
+        if (!chatLogEl) return;
+        let bubble = document.getElementById("chat-typing-bubble");
         if (!typingPartners.length) {
-          typingEl.classList.add("hidden");
+          bubble?.remove();
           return;
         }
-        typingEl.classList.remove("hidden");
-        const names = typingPartners.map((t) => t.display_name).filter(Boolean);
-        const label = names.length ? `${names.join(", ")} typing` : "typing";
-        typingEl.title = label;
+        if (!bubble) {
+          bubble = el("div", {
+            id: "chat-typing-bubble",
+            className: "chat-bubble assistant chat-typing-bubble",
+            "aria-label": label,
+          }, [
+            el("span", { className: "muted chat-sender" }, names[0] || "Partner"),
+            buildTypingDots(),
+          ]);
+          chatLogEl.appendChild(bubble);
+        } else {
+          const sender = bubble.querySelector(".chat-sender");
+          if (sender) sender.textContent = names[0] || "Partner";
+          bubble.setAttribute("aria-label", label);
+        }
+        requestAnimationFrame(() => {
+          chatLogEl.scrollTop = chatLogEl.scrollHeight;
+        });
       }
 
       async function handleSend() {
@@ -13147,11 +13197,16 @@ function renderChat(dynamicId) {
       cameraInput.addEventListener("change", () => handlePickedImage(cameraInput));
 
       let typingPingAt = 0;
-      input.addEventListener("input", () => {
+      function pingTyping() {
         const now = Date.now();
-        if (now - typingPingAt < 1200) return;
+        if (now - typingPingAt < 900) return;
         typingPingAt = now;
         api(`/dynamics/${id}/chat/typing`, { method: "POST", body: "{}" }).catch(() => {});
+      }
+      input.addEventListener("input", pingTyping);
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) return;
+        pingTyping();
       });
 
       function syncToggleLabels() {
@@ -13486,27 +13541,30 @@ function renderChat(dynamicId) {
 
       let liveSig = "";
       let alive = true;
+      let liveInFlight = false;
       async function liveTick() {
-        if (!alive) return;
+        if (!alive || liveInFlight) return;
+        liveInFlight = true;
         try {
           const [msgs, presence] = await Promise.all([
             api(`/dynamics/${id}/chat/messages`),
             api(`/dynamics/${id}/chat/presence`).catch(() => ({ typing: [] })),
           ]);
           typingPartners = presence.typing || [];
-          paintTyping();
           const sig = `${msgs.map((m) => m.id).join(",")}|${typingPartners.map((t) => t.membership_id).join(",")}`;
           if (sig !== liveSig) {
             liveSig = sig;
             await paintMessages(msgs);
-            paintTyping();
           }
+          paintTyping();
         } catch (_) {
           /* ignore transient poll errors */
+        } finally {
+          liveInFlight = false;
         }
       }
       liveSig = `${(messages || []).map((m) => m.id).join(",")}|`;
-      const liveTimer = setInterval(liveTick, 2200);
+      const liveTimer = setInterval(liveTick, 1200);
       const onPush = (ev) => {
         if (ev.detail?.dynamicId && ev.detail.dynamicId !== id) return;
         liveTick();

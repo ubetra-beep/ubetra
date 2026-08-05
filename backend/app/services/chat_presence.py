@@ -7,7 +7,7 @@ from threading import Lock
 _typing: dict[str, dict[str, float]] = {}
 _lock = Lock()
 
-_TYPING_TTL = 3.5
+_TYPING_TTL = 6.0
 
 
 def mark_typing(dynamic_id: str, membership_id: str, ttl: float = _TYPING_TTL) -> None:

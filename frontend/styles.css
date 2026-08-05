@@ -1836,13 +1836,20 @@ textarea {
   touch-action: none;
 }
 
+.chat-composer-wrap {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 .chat-typing {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  min-height: 1.25rem;
-  padding: 0 0.35rem 0.15rem;
-  color: #9a9a9a;
+  gap: 0.45rem;
+  min-height: 1.35rem;
+  padding: 0 0.35rem 0.1rem;
+  color: var(--muted);
   font-size: 0.78rem;
 }
 
@@ -1852,39 +1859,51 @@ textarea {
 
 .chat-typing-dots {
   display: inline-flex;
-  gap: 0.22rem;
+  gap: 0.28rem;
   align-items: center;
-  padding: 0.35rem 0.55rem;
+  padding: 0.4rem 0.65rem;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, var(--accent) 20%);
+  border: 1px solid var(--border);
 }
 
-.chat-typing-dots i {
-  width: 0.35rem;
-  height: 0.35rem;
+.chat-typing-dot {
+  width: 0.42rem;
+  height: 0.42rem;
   border-radius: 50%;
-  background: #bdbdbd;
+  background: var(--accent);
   display: block;
-  animation: chat-typing-bounce 1.2s infinite ease-in-out;
+  animation: chat-typing-wave 1.05s infinite ease-in-out;
 }
 
-.chat-typing-dots i:nth-child(2) {
+.chat-typing-dot:nth-child(2) {
   animation-delay: 0.15s;
 }
 
-.chat-typing-dots i:nth-child(3) {
+.chat-typing-dot:nth-child(3) {
   animation-delay: 0.3s;
 }
 
-@keyframes chat-typing-bounce {
+.chat-typing-bubble {
+  align-self: flex-start;
+  max-width: 70%;
+  gap: 0.35rem;
+}
+
+.chat-typing-bubble .chat-typing-dots {
+  margin-top: 0.15rem;
+  width: fit-content;
+}
+
+@keyframes chat-typing-wave {
   0%,
-  80%,
+  60%,
   100% {
     transform: translateY(0);
-    opacity: 0.45;
+    opacity: 0.35;
   }
-  40% {
-    transform: translateY(-0.28rem);
+  30% {
+    transform: translateY(-0.32rem);
     opacity: 1;
   }
 }
