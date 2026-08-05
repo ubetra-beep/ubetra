@@ -940,3 +940,58 @@ def run_migrations() -> None:
     conn.execute(
       text("CREATE INDEX IF NOT EXISTS ix_native_push_tokens_token ON native_push_tokens (token)")
     )
+
+    # Core knowledge table (create_all normally creates it; ensure for older DBs)
+    conn.execute(
+      text(
+        """
+        CREATE TABLE IF NOT EXISTS core_knowledge (
+          id VARCHAR(36) PRIMARY KEY,
+          membership_id VARCHAR(36) NOT NULL UNIQUE,
+          relationship_context TEXT DEFAULT '',
+          distance TEXT DEFAULT '',
+          space TEXT DEFAULT '',
+          budget TEXT DEFAULT '',
+          about_you TEXT DEFAULT '',
+          desires TEXT DEFAULT '',
+          submitted BOOLEAN DEFAULT 0,
+          updated_at DATETIME
+        )
+        """
+      )
+    )
+    conn.execute(
+      text(
+        "CREATE INDEX IF NOT EXISTS ix_core_knowledge_membership_id "
+        "ON core_knowledge (membership_id)"
+      )
+    )
+
+    dynamic_columns = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(dynamics)")).fetchall()
+    }
+    if "task_tag_presets" not in dynamic_columns:
+      conn.execute(
+        text(
+          "ALTER TABLE dynamics ADD COLUMN task_tag_presets TEXT DEFAULT "
+          "'Domestic,Health / Hygiene,Sensual,Sexual'"
+        )
+      )
+
+    task_columns = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(tasks)")).fetchall()
+    }
+    if "paused" not in task_columns:
+      conn.execute(text("ALTER TABLE tasks ADD COLUMN paused BOOLEAN DEFAULT 0"))
+    if "makeup_status" not in task_columns:
+      conn.execute(
+        text("ALTER TABLE tasks ADD COLUMN makeup_status VARCHAR(16) DEFAULT 'none'")
+      )
+    if "makeup_note" not in task_columns:
+      conn.execute(text("ALTER TABLE tasks ADD COLUMN makeup_note TEXT DEFAULT ''"))
+    if "makeup_requested_at" not in task_columns:
+      conn.execute(text("ALTER TABLE tasks ADD COLUMN makeup_requested_at DATETIME"))
+    if "makeup_granted_at" not in task_columns:
+      conn.execute(text("ALTER TABLE tasks ADD COLUMN makeup_granted_at DATETIME"))

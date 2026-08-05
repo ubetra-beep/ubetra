@@ -3,6 +3,24 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.80] — 2026-08-04
+
+### Added
+- Color themes (Midnight, Ember, Forest, Slate) in Settings → Appearance; stored on-device
+- Task make-up flow: Sub requests, Dom grants/denies, optional Domme assist note
+- Dom pause / edit / bulk actions for recurring tasks; task category tags (Domestic · Health / Hygiene · Sensual · Sexual)
+- Goals: optional tag filter on “Tasks completed” requirements
+
+### Changed
+- Top bar uses safe-area inset; Settings is an accent hamburger; Log out lives under Settings → Account
+- Install app hidden when already running as PWA or native Capacitor app
+- Tasks Tracking: expandable Open / Missed timelines; calendar card and Google Tasks UI hidden
+- Overdue bucketing uses `next_due_at || due_at`; daily series not shown as due for tomorrow
+- Service worker cache `ubetra-v80`
+
+### Fixed
+- Core Knowledge populate-from-interview 500 (missing imports + None-safe strips)
+
 ## [0.79] — 2026-08-04
 
 ### Added

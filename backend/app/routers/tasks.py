@@ -24,20 +24,27 @@ from ..schemas import (
     InboxOut,
     TagPresetsOut,
     TagPresetsUpdate,
+    TaskBulkActionIn,
     TaskCalendarItem,
     TaskCalendarOut,
     TaskItemCreate,
+    TaskItemUpdate,
     TaskListCreate,
     TaskListOut,
+    TaskMakeupAssistOut,
+    TaskMakeupRequestIn,
+    TaskMakeupReviewIn,
 )
 from ..services.tags import tags_to_list, tags_to_string
 from ..services.tasks_service import (
     ack_inbox,
     build_inbox,
     can_complete_task,
+    clear_makeup,
     resolve_due_at,
     schedule_next_occurrence,
     task_list_out,
+    task_needs_makeup,
     task_visible,
 )
 from ..services.chat_events import post_system_event, task_snippet
@@ -46,6 +53,8 @@ from ..services.google_tasks import (
     push_task_to_google,
     sync_target_user,
 )
+from ..services.llm import generate_text, is_llm_configured
+from ..services.context import build_dynamic_context
 
 
 def _maybe_push_task(db: Session, dynamic_id: str, actor: User, task: Task) -> None:
@@ -136,6 +145,10 @@ def get_tag_presets(
     if dynamic is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
     presets = tags_to_list(dynamic.tag_presets)
+    task_presets = tags_to_list(
+        getattr(dynamic, "task_tag_presets", None)
+        or "Domestic,Health / Hygiene,Sensual,Sexual"
+    )
     org_tags: set[str] = set()
     for row in db.query(OrgTrackingEntry.tags).filter(
         OrgTrackingEntry.dynamic_id == dynamic_id
@@ -149,7 +162,7 @@ def get_tag_presets(
     ):
         task_tags.update(tags_to_list(row[0] or ""))
     merged = list(dict.fromkeys([*presets, *sorted(org_tags | task_tags)]))
-    return TagPresetsOut(presets=merged)
+    return TagPresetsOut(presets=merged, task_presets=task_presets)
 
 
 @router.put("/dynamics/{dynamic_id}/tags", response_model=TagPresetsOut)
@@ -168,7 +181,10 @@ def update_tag_presets(
     dynamic = db.get(Dynamic, dynamic_id)
     if dynamic is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
-    dynamic.tag_presets = tags_to_string(payload.presets)
+    if payload.presets is not None:
+        dynamic.tag_presets = tags_to_string(payload.presets)
+    if payload.task_presets is not None:
+        dynamic.task_tag_presets = tags_to_string(payload.task_presets)
     db.commit()
     return get_tag_presets(dynamic_id, user, db)
 
@@ -489,6 +505,16 @@ def complete_task(
             detail="You are not assigned to complete this task",
         )
 
+    if task_needs_makeup(task) and membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This overdue task needs a make-up grant before it can be completed",
+        )
+    if task_needs_makeup(task) and membership.role == PartnerRole.dominant:
+        # Dom completing overdue counts as granting make-up.
+        task.makeup_status = "granted"
+        task.makeup_granted_at = datetime.utcnow()
+
     if not task_visible(task, tasks, membership):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Task is hidden")
 
@@ -496,9 +522,11 @@ def complete_task(
         completed_at = datetime.utcnow()
         if task.recurrence != TaskRecurrence.none:
             schedule_next_occurrence(task, from_time=task.next_due_at or task.due_at or completed_at)
+            clear_makeup(task)
             _maybe_push_task(db, task_list.dynamic_id, user, task)
         else:
             task.completed_at = completed_at
+            clear_makeup(task)
             _maybe_complete_google(db, task_list.dynamic_id, user, task)
         post_system_event(
             db,
@@ -589,3 +617,258 @@ def delete_task(
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _get_task_or_404(task_list: TaskList, task_id: str) -> Task:
+    task = next((t for t in task_list.tasks if t.id == task_id), None)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return task
+
+
+@router.patch("/tasks/{task_list_id}/items/{task_id}", response_model=TaskListOut)
+def update_task_item(
+    task_list_id: str,
+    task_id: str,
+    payload: TaskItemUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskListOut:
+    task_list = _task_list_query(db, task_list_id)
+    if task_list is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task list not found")
+    membership = get_membership(task_list.dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can edit tasks",
+        )
+    task = _get_task_or_404(task_list, task_id)
+    if payload.content is not None:
+        task.content = payload.content.strip()
+    if payload.tags is not None:
+        task.tags = tags_to_string(payload.tags)
+    if payload.paused is not None:
+        task.paused = bool(payload.paused)
+    if payload.recurrence is not None:
+        task.recurrence = payload.recurrence
+        if payload.recurrence == TaskRecurrence.none:
+            task.next_due_at = None
+        elif task.next_due_at is None:
+            task.next_due_at = task.due_at or datetime.utcnow()
+    post_system_event(
+        db,
+        task_list.dynamic_id,
+        membership,
+        f"updated task: {task_snippet(task.content)}",
+    )
+    db.commit()
+    task_list = _task_list_query(db, task_list_id)
+    return task_list_out(task_list, membership)
+
+
+@router.post("/tasks/{task_list_id}/items/{task_id}/makeup-request", response_model=TaskListOut)
+def request_task_makeup(
+    task_list_id: str,
+    task_id: str,
+    payload: TaskMakeupRequestIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskListOut:
+    task_list = _task_list_query(db, task_list_id)
+    if task_list is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task list not found")
+    membership = get_membership(task_list.dynamic_id, user, db)
+    task = _get_task_or_404(task_list, task_id)
+    if not can_complete_task(task, membership) and membership.role != PartnerRole.dominant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your task")
+    if task.completed_at:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Task already completed")
+    due = _effective_due(task)
+    if due is None or due > datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Make-up is only for overdue tasks",
+        )
+    task.makeup_status = "pending"
+    task.makeup_note = (payload.note or "").strip()
+    task.makeup_requested_at = datetime.utcnow()
+    task.makeup_granted_at = None
+    post_system_event(
+        db,
+        task_list.dynamic_id,
+        membership,
+        f"requested make-up for task: {task_snippet(task.content)}",
+    )
+    db.commit()
+    task_list = _task_list_query(db, task_list_id)
+    return task_list_out(task_list, membership)
+
+
+@router.post("/tasks/{task_list_id}/items/{task_id}/makeup-review", response_model=TaskListOut)
+def review_task_makeup(
+    task_list_id: str,
+    task_id: str,
+    payload: TaskMakeupReviewIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskListOut:
+    task_list = _task_list_query(db, task_list_id)
+    if task_list is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task list not found")
+    membership = get_membership(task_list.dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can review make-up requests",
+        )
+    task = _get_task_or_404(task_list, task_id)
+    note = (payload.note or "").strip()
+    if payload.approved:
+        task.makeup_status = "granted"
+        task.makeup_granted_at = datetime.utcnow()
+        if note:
+            task.makeup_note = note
+        verb = "granted make-up for"
+    else:
+        task.makeup_status = "denied"
+        task.makeup_granted_at = None
+        if note:
+            task.makeup_note = note
+        verb = "denied make-up for"
+    post_system_event(
+        db,
+        task_list.dynamic_id,
+        membership,
+        f"{verb} task: {task_snippet(task.content)}",
+    )
+    db.commit()
+    task_list = _task_list_query(db, task_list_id)
+    return task_list_out(task_list, membership)
+
+
+@router.post(
+    "/tasks/{task_list_id}/items/{task_id}/makeup-assist",
+    response_model=TaskMakeupAssistOut,
+)
+def assist_task_makeup_note(
+    task_list_id: str,
+    task_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskMakeupAssistOut:
+    task_list = _task_list_query(db, task_list_id)
+    if task_list is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task list not found")
+    membership = get_membership(task_list.dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can use make-up assist",
+        )
+    task = _get_task_or_404(task_list, task_id)
+    dynamic = db.get(Dynamic, task_list.dynamic_id)
+    if dynamic is None or not is_llm_configured(user, dynamic):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AI is not configured for this dynamic",
+        )
+    ctx = build_dynamic_context(
+        db,
+        dynamic,
+        requesting_membership_id=membership.id,
+        include_tracking=False,
+    )
+    prompt = f"""Draft a short Domme note for granting a make-up on a missed task.
+
+Task: {task.content}
+Sub request note: {(task.makeup_note or '').strip() or '(none)'}
+Recurrence: {task.recurrence.value if hasattr(task.recurrence, 'value') else task.recurrence}
+
+Write 2-4 sentences in assistant-domme tone: acknowledge the miss, set clear expectations for the make-up, and keep it firm but caring. Output only the note text."""
+    note = generate_text(
+        user=user,
+        user_prompt=prompt,
+        dynamic_context=ctx,
+        dynamic=dynamic,
+    )
+    return TaskMakeupAssistOut(note=(note or "").strip())
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/bulk", response_model=list[TaskListOut])
+def bulk_task_action(
+    dynamic_id: str,
+    payload: TaskBulkActionIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[TaskListOut]:
+    membership = get_membership(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can bulk-edit tasks",
+        )
+    lists = (
+        db.query(TaskList)
+        .options(
+            joinedload(TaskList.tasks).joinedload(Task.assigned_to),
+            joinedload(TaskList.dynamic).joinedload(Dynamic.memberships),
+        )
+        .filter(TaskList.dynamic_id == dynamic_id)
+        .all()
+    )
+    by_id: dict[str, tuple[TaskList, Task]] = {}
+    for task_list in lists:
+        for task in task_list.tasks:
+            by_id[task.id] = (task_list, task)
+
+    touched_list_ids: set[str] = set()
+    tag = (payload.tag or "").strip()
+    for task_id in payload.task_ids:
+        pair = by_id.get(task_id)
+        if not pair:
+            continue
+        task_list, task = pair
+        if payload.action == "pause":
+            task.paused = True
+        elif payload.action == "unpause":
+            task.paused = False
+        elif payload.action == "remove_future":
+            # Keep history of completed one-shots; stop recurring series.
+            if task.recurrence != TaskRecurrence.none:
+                task.recurrence = TaskRecurrence.none
+                task.next_due_at = None
+                task.paused = False
+                if not task.completed_at:
+                    # Cancel open future by marking done without rolling.
+                    task.completed_at = datetime.utcnow()
+                    clear_makeup(task)
+        elif payload.action == "apply_tag":
+            if not tag:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="tag is required for apply_tag",
+                )
+            existing = tags_to_list(task.tags)
+            if tag not in existing:
+                existing.append(tag)
+                task.tags = tags_to_string(existing)
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown action")
+        touched_list_ids.add(task_list.id)
+
+    if touched_list_ids:
+        post_system_event(
+            db,
+            dynamic_id,
+            membership,
+            f"bulk task action ({payload.action}) on {len(touched_list_ids)} list(s)",
+        )
+        db.commit()
+
+    out = []
+    for list_id in touched_list_ids:
+        refreshed = _task_list_query(db, list_id)
+        if refreshed:
+            out.append(task_list_out(refreshed, membership))
+    return out

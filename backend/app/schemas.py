@@ -351,9 +351,40 @@ class TaskOut(BaseModel):
     public_code_word: str = ""
     google_task_id: str = ""
     google_synced: bool = False
+    paused: bool = False
+    makeup_status: str = "none"
+    makeup_note: str = ""
+    makeup_requested_at: datetime | None = None
+    makeup_granted_at: datetime | None = None
 
     class Config:
         from_attributes = True
+
+
+class TaskItemUpdate(BaseModel):
+    content: str | None = Field(default=None, min_length=1, max_length=4000)
+    tags: list[str] | None = None
+    paused: bool | None = None
+    recurrence: TaskRecurrence | None = None
+
+
+class TaskMakeupRequestIn(BaseModel):
+    note: str = Field(default="", max_length=2000)
+
+
+class TaskMakeupReviewIn(BaseModel):
+    approved: bool
+    note: str = Field(default="", max_length=4000)
+
+
+class TaskMakeupAssistOut(BaseModel):
+    note: str
+
+
+class TaskBulkActionIn(BaseModel):
+    task_ids: list[str] = Field(min_length=1)
+    action: Literal["pause", "unpause", "remove_future", "apply_tag"]
+    tag: str | None = Field(default=None, max_length=80)
 
 
 class GoogleTasksStatusOut(BaseModel):
@@ -393,10 +424,12 @@ class ActToTaskCreate(BaseModel):
 
 class TagPresetsOut(BaseModel):
     presets: list[str]
+    task_presets: list[str] = Field(default_factory=list)
 
 
 class TagPresetsUpdate(BaseModel):
-    presets: list[str] = Field(default_factory=list)
+    presets: list[str] | None = None
+    task_presets: list[str] | None = None
 
 
 class ChatSettingsOut(BaseModel):

@@ -69,7 +69,13 @@ Route: `/#/dynamic/{id}/punishment`
 
 Route: `/#/dynamic/{id}/tasks` (acts nearby)
 
-Ordered task lists; optional Google Tasks sync. Acts of submission can be generated from interviews. Subs may **request** tasks; Dom approves.
+**Open tasks** and **Missed / Overdue** are expandable timelines with counts. Tap open items to complete when due today (or overdue with make-up granted). Daily recurring series are not shown as clickable for tomorrow’s occurrence.
+
+**Make-up:** Sub requests make-up on a missed task (optional note). Dom grants or denies (optional note; “Ask assistant for note” drafts Domme-tone text). After grant, the Sub can complete.
+
+**Dom controls:** edit content/tags, pause/unpause recurring series, multi-select bulk pause / remove future / apply category tag. Category presets: Domestic · Health / Hygiene · Sensual · Sexual (separate from orgasm tags). Create tasks from Playtime with optional category tags.
+
+Google Tasks sync UI is currently hidden (undeveloped).
 
 ![Tasks](images/17-tasks.png)
 

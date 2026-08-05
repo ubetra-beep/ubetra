@@ -31,4 +31,4 @@ Route: `/#/dynamic/{id}/assistant/games/spin`
 
 ## Tasks from Playtime
 
-Doms can create task lists here. Subs requesting a task now do so from [Chat](Chat)'s **☰** menu rather than from Playtime.
+Doms can create task lists here (optional category tags: Domestic · Health / Hygiene · Sensual · Sexual). Tracking overdue/open work and make-up lives under [Tracking → Tasks](Tracking). Subs requesting a task do so from [Chat](Chat)'s **☰** menu rather than from Playtime.

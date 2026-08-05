@@ -50,12 +50,12 @@ def save_my_core_knowledge(
 ) -> CoreKnowledgeOut:
     membership = get_membership(dynamic_id, user, db)
     record = get_or_create_core_knowledge(db, membership)
-    record.relationship_context = payload.relationship_context.strip()
-    record.distance = payload.distance.strip()
-    record.space = payload.space.strip()
-    record.budget = payload.budget.strip()
-    record.about_you = payload.about_you.strip()
-    record.desires = payload.desires.strip()
+    record.relationship_context = (payload.relationship_context or "").strip()
+    record.distance = (payload.distance or "").strip()
+    record.space = (payload.space or "").strip()
+    record.budget = (payload.budget or "").strip()
+    record.about_you = (payload.about_you or "").strip()
+    record.desires = (payload.desires or "").strip()
     record.submitted = False
     record.updated_at = datetime.utcnow()
     db.commit()
@@ -97,9 +97,9 @@ def submit_my_core_knowledge(
     record = get_or_create_core_knowledge(db, membership)
     if not any(
         [
-            record.relationship_context.strip(),
-            record.about_you.strip(),
-            record.desires.strip(),
+            (record.relationship_context or "").strip(),
+            (record.about_you or "").strip(),
+            (record.desires or "").strip(),
         ]
     ):
         raise HTTPException(
@@ -142,7 +142,7 @@ def save_my_spti(
         membership.spti_data = "__skipped__"
         membership.spti_completed_at = None
     else:
-        data = payload.results.strip()
+        data = (payload.results or "").strip()
         if not data:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -196,7 +196,7 @@ def get_act_focus_options(
     db.commit()
     options = []
     for key, label in CORE_KNOWLEDGE_FIELDS.items():
-        value = getattr(record, key, "").strip()
+        value = (getattr(record, key, None) or "").strip()
         if record.submitted and value:
             options.append(
                 CoreKnowledgeFieldOption(key=key, label=label, has_content=True)

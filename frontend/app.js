@@ -1,5 +1,12 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
+const THEME_KEY = "ubetra_theme";
+const THEME_OPTIONS = [
+  { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
+  { id: "ember", label: "Ember", themeColor: "#1c1410", swatchA: "#f0a060", swatchB: "#e07830" },
+  { id: "forest", label: "Forest", themeColor: "#121a16", swatchA: "#5dba8a", swatchB: "#3d9a6a" },
+  { id: "slate", label: "Slate", themeColor: "#16181d", swatchA: "#7eb0d8", swatchB: "#5a94c0" },
+];
 
 const state = {
   token: localStorage.getItem(TOKEN_KEY),
@@ -10,6 +17,21 @@ const state = {
   taskLists: [],
   activeDynamicId: null,
 };
+
+function applyTheme(themeId) {
+  const theme = THEME_OPTIONS.find((t) => t.id === themeId) || THEME_OPTIONS[0];
+  document.documentElement.dataset.theme = theme.id;
+  try {
+    localStorage.setItem(THEME_KEY, theme.id);
+  } catch {
+    /* ignore */
+  }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", theme.themeColor);
+  return theme.id;
+}
+
+applyTheme(localStorage.getItem(THEME_KEY) || "midnight");
 
 const NAV_TABS = [
   { id: "tracking", label: "Tracking", icon: "📈", enabled: true, requiresDynamic: true },
@@ -77,7 +99,6 @@ function allFacetItems() {
 }
 
 const viewEl = document.getElementById("view");
-const logoutBtn = document.getElementById("logout-btn");
 const settingsBtn = document.getElementById("settings-btn");
 const installPwaBtn = document.getElementById("install-pwa-btn");
 const bottomNavEl = document.getElementById("bottom-nav");
@@ -98,7 +119,7 @@ function isRunningAsPwa() {
 
 function updateInstallPwaButton() {
   if (!installPwaBtn) return;
-  const show = !isRunningAsPwa() && !!state.token;
+  const show = !!state.token && !isRunningAsPwa() && !isNativeApp();
   installPwaBtn.classList.toggle("hidden", !show);
   installPwaBtn.textContent = "Install app";
   installPwaBtn.title = deferredPwaPrompt
@@ -106,8 +127,15 @@ function updateInstallPwaButton() {
     : "Browser menu → Install app (not a home-screen shortcut)";
 }
 
+function doLogout() {
+  setToken(null);
+  state.user = null;
+  state.dynamics = [];
+  inboxCheckedDynamics.clear();
+  navigate("/login");
+}
+
 function setAuthVisible(visible) {
-  logoutBtn.classList.toggle("hidden", !visible);
   settingsBtn.classList.toggle("hidden", !visible);
   if (topBarEl) topBarEl.classList.toggle("hidden", !visible);
   document.body.classList.toggle("auth-screen", !visible);
@@ -457,13 +485,47 @@ function buildAssigneeSelect(partners, { includeDefault = true } = {}) {
 
 function canCompleteTask(task, you) {
   if (!you || task.completed_at || task.hidden || task.approval_status !== "approved") return false;
+  if (task.paused) return false;
+  if (taskNeedsMakeup(task) && you.role !== "dominant") return false;
+  if (you.role === "dominant") return true;
   if (task.assigned_to_membership_id) return task.assigned_to_membership_id === you.id;
   if (task.is_private) return true;
   return you.role === "submissive";
 }
 
+function taskEffectiveDue(task) {
+  return task.next_due_at || task.due_at || null;
+}
+
+function taskNeedsMakeup(task) {
+  if (task.completed_at || task.paused || task.approval_status !== "approved") return false;
+  const due = taskEffectiveDue(task);
+  if (!due) return false;
+  if (new Date(due).getTime() > Date.now()) return false;
+  return (task.makeup_status || "none") !== "granted";
+}
+
+function startOfLocalDay(d = new Date()) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function isDueTodayOrPast(dueIso) {
+  if (!dueIso) return false;
+  const due = new Date(dueIso);
+  const tomorrow = startOfLocalDay();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return due.getTime() < tomorrow.getTime();
+}
+
+function isDueInFutureBeyondToday(dueIso) {
+  if (!dueIso) return false;
+  return !isDueTodayOrPast(dueIso);
+}
+
+const DEFAULT_TASK_CATEGORY_TAGS = ["Domestic", "Health / Hygiene", "Sensual", "Sexual"];
+
 function formatTaskDue(task) {
-  const due = task.next_due_at || task.due_at;
+  const due = taskEffectiveDue(task);
   if (!due) return "";
   const d = new Date(due);
   const now = Date.now();
@@ -2203,17 +2265,10 @@ function setViewContent(node) {
 
 async function bootstrap() {
   setAuthVisible(!!state.token);
-  if (!logoutBtn || !settingsBtn || !viewEl || !bottomNavEl) {
+  if (!settingsBtn || !viewEl || !bottomNavEl) {
     console.error("UBETRA: required DOM elements missing");
     return;
   }
-  logoutBtn.addEventListener("click", () => {
-    setToken(null);
-    state.user = null;
-    state.dynamics = [];
-    inboxCheckedDynamics.clear();
-    navigate("/login");
-  });
   settingsBtn.addEventListener("click", () => navigate("/settings"));
   if (installPwaBtn) {
     window.addEventListener("beforeinstallprompt", (e) => {
@@ -4891,90 +4946,482 @@ function renderTasks(dynamicId) {
   viewEl.replaceChildren(el("p", { className: "muted" }, "Loading tasks..."));
   Promise.all([
     loadDynamic(dynamicId),
-    api(`/dynamics/${dynamicId}/tasks/calendar`),
-    api(`/dynamics/${dynamicId}/tags`).catch(() => ({ presets: [] })),
-    api("/google/status").catch(() => ({ configured: false, connected: false })),
+    api(`/dynamics/${dynamicId}/tags`).catch(() => ({ presets: [], task_presets: DEFAULT_TASK_CATEGORY_TAGS })),
   ])
-    .then(([, calendar, tagData, googleStatus]) => {
+    .then(([, tagData]) => {
       const dynamic = state.currentDynamic;
       const you = dynamic.partners.find((p) => p.is_you);
+      const isDom = you?.role === "dominant";
+      const taskCategoryPresets = (tagData.task_presets && tagData.task_presets.length)
+        ? tagData.task_presets
+        : DEFAULT_TASK_CATEGORY_TAGS;
       const error = el("div", { className: "error hidden" });
-      const syncStatus = el("p", { className: "muted" });
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Tasks & acts"),
         renderTasksActsSwitcher(dynamicId, "tasks"),
-        el("p", { className: "muted" }, "Track overdue and open work. Create and assign new tasks from Playtime."),
+        el("p", { className: "muted" }, "Open and missed work. Create tasks from Playtime."),
         error,
       ]);
 
-      const googleCard = el("div", { className: "card stack" }, [
-        el("h2", {}, "Google Tasks"),
-        el("p", { className: "muted" }, "Sync approved tasks to vanilla Google Tasks using G-rated code words. Completing a Google task marks it done here."),
-      ]);
-      if (!googleStatus.configured) {
-        googleCard.appendChild(el("p", { className: "muted" }, "Add UBETRA_GOOGLE_CLIENT_ID and UBETRA_GOOGLE_CLIENT_SECRET in .env to enable."));
-      } else if (!googleStatus.connected) {
-        googleCard.appendChild(el("p", { className: "muted" }, "Connect Google in Settings (submissive account recommended)."));
-        googleCard.appendChild(el("button", {
+      const now = Date.now();
+      const missed = [];
+      const pending = [];
+      const open = [];
+      const paused = [];
+      const selected = new Set();
+
+      (state.taskLists || []).forEach((list) => {
+        (list.tasks || []).forEach((task) => {
+          const row = { list, task };
+          if (task.approval_status === "pending") {
+            pending.push(row);
+            return;
+          }
+          if (task.paused) {
+            paused.push(row);
+            return;
+          }
+          if (task.completed_at) return;
+          const due = taskEffectiveDue(task);
+          if (due && new Date(due).getTime() < now) missed.push(row);
+          else if (!due || isDueTodayOrPast(due)) open.push(row);
+        });
+      });
+
+      function showError(msg) {
+        error.textContent = msg;
+        error.classList.remove("hidden");
+      }
+
+      function openSheet({ title, bodyNodes, primaryLabel, onPrimary }) {
+        const backdrop = el("div", { className: "modal-backdrop" });
+        const err = el("p", { className: "error hidden" });
+        const card = el("div", { className: "card stack modal-card" }, [
+          el("h3", {}, title),
+          ...bodyNodes,
+          err,
+          el("div", { className: "row" }, [
+            el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: () => backdrop.remove(),
+            }, "Cancel"),
+            el("button", {
+              type: "button",
+              className: "primary-btn",
+              onClick: async () => {
+                err.classList.add("hidden");
+                try {
+                  await onPrimary();
+                  backdrop.remove();
+                } catch (ex) {
+                  err.textContent = ex.message;
+                  err.classList.remove("hidden");
+                }
+              },
+            }, primaryLabel),
+          ]),
+        ]);
+        backdrop.appendChild(card);
+        backdrop.addEventListener("click", (ev) => {
+          if (ev.target === backdrop) backdrop.remove();
+        });
+        document.body.appendChild(backdrop);
+        return { backdrop, err };
+      }
+
+      function openMakeupRequestSheet(list, task) {
+        const note = el("textarea", {
+          rows: "3",
+          placeholder: "Optional note for your keyholder",
+        });
+        openSheet({
+          title: "Request make-up",
+          bodyNodes: [
+            el("p", {}, task.content),
+            el("p", { className: "muted" }, formatTaskDue(task) || "Overdue"),
+            el("label", { className: "stack" }, ["Note", note]),
+          ],
+          primaryLabel: "Send request",
+          onPrimary: async () => {
+            await api(`/tasks/${list.id}/items/${task.id}/makeup-request`, {
+              method: "POST",
+              body: JSON.stringify({ note: note.value.trim() }),
+            });
+            renderTasks(dynamicId);
+          },
+        });
+      }
+
+      function openMakeupReviewSheet(list, task) {
+        const note = el("textarea", {
+          rows: "4",
+          placeholder: "Note / requirements for the make-up",
+        });
+        note.value = task.makeup_note || "";
+        const assistBtn = el("button", {
+          type: "button",
           className: "ghost-btn",
-          type: "button",
-          onClick: () => navigate("/settings"),
-        }, "Open Settings"));
-      } else {
-        googleCard.appendChild(el("p", { className: "muted" }, `Connected · list ${googleStatus.list_id || "@default"}`));
-        googleCard.appendChild(el("button", {
-          className: "primary-btn",
-          type: "button",
           onClick: async () => {
-            error.classList.add("hidden");
-            syncStatus.textContent = "Syncing…";
             try {
-              const result = await api(`/google/dynamics/${dynamicId}/sync`, { method: "POST" });
-              syncStatus.textContent = `Pushed ${result.pushed}, completed from Google ${result.completed_from_google}.`;
-              if (result.errors?.length) {
-                error.textContent = result.errors.join(" ");
-                error.classList.remove("hidden");
-              }
-              if (result.completed_from_google || result.pushed) renderTasks(dynamicId);
-            } catch (err) {
-              syncStatus.textContent = "";
-              error.textContent = err.message;
-              error.classList.remove("hidden");
+              const out = await api(`/tasks/${list.id}/items/${task.id}/makeup-assist`, { method: "POST" });
+              if (out.note) note.value = out.note;
+            } catch (ex) {
+              showError(ex.message);
             }
           },
-        }, "Sync with Google Tasks"));
-        googleCard.appendChild(syncStatus);
+        }, "Ask assistant for note");
+        const backdrop = el("div", { className: "modal-backdrop" });
+        const err = el("p", { className: "error hidden" });
+        async function review(approved) {
+          err.classList.add("hidden");
+          try {
+            await api(`/tasks/${list.id}/items/${task.id}/makeup-review`, {
+              method: "POST",
+              body: JSON.stringify({ approved, note: note.value.trim() }),
+            });
+            backdrop.remove();
+            renderTasks(dynamicId);
+          } catch (ex) {
+            err.textContent = ex.message;
+            err.classList.remove("hidden");
+          }
+        }
+        const card = el("div", { className: "card stack modal-card" }, [
+          el("h3", {}, "Make-up review"),
+          el("p", {}, task.content),
+          task.makeup_note ? el("p", { className: "muted" }, `Sub note: ${task.makeup_note}`) : null,
+          el("label", { className: "stack" }, ["Your note", note]),
+          assistBtn,
+          err,
+          el("div", { className: "row" }, [
+            el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Cancel"),
+            el("button", { type: "button", className: "ghost-btn", onClick: () => review(false) }, "Deny"),
+            el("button", { type: "button", className: "primary-btn", onClick: () => review(true) }, "Grant make-up"),
+          ]),
+        ]);
+        backdrop.appendChild(card);
+        document.body.appendChild(backdrop);
       }
-      stack.appendChild(googleCard);
 
-      const calCard = el("div", { className: "card stack" }, [el("h2", {}, "Task calendar (repeating)")]);
-      if (!calendar.items.length) {
-        calCard.appendChild(el("p", { className: "muted" }, "No scheduled or repeating tasks yet."));
-      } else {
-        const cal = el("div", { className: "task-calendar" });
-        calendar.items.slice(0, 40).forEach((item) => {
-          const row = el("div", { className: "task-cal-row" }, [
-            el("span", { className: "task-cal-date" }, new Date(item.due_at).toLocaleDateString()),
-            el("span", { className: "task-cal-body" }, item.content),
-            el("span", { className: "pill" }, item.recurrence !== "none" ? item.recurrence : "once"),
+      function openEditTaskSheet(list, task) {
+        const content = el("textarea", { rows: "3" });
+        content.value = task.content || "";
+        const tagPicker = buildTagPicker(taskCategoryPresets, task.tags || []);
+        const pausedBox = el("input", { type: "checkbox" });
+        pausedBox.checked = !!task.paused;
+        openSheet({
+          title: "Edit task",
+          bodyNodes: [
+            el("label", { className: "stack" }, ["Content", content]),
+            el("p", { className: "muted" }, "Category tags"),
+            tagPicker.row,
+            tagPicker.custom,
+            el("label", { className: "checkbox-label" }, [pausedBox, " Paused (hidden from Open)"]),
+          ],
+          primaryLabel: "Save",
+          onPrimary: async () => {
+            await api(`/tasks/${list.id}/items/${task.id}`, {
+              method: "PATCH",
+              body: JSON.stringify({
+                content: content.value.trim(),
+                tags: tagPicker.getTags(),
+                paused: pausedBox.checked,
+              }),
+            });
+            renderTasks(dynamicId);
+          },
+        });
+      }
+
+      function paintTimelineSection(title, countLabel, rows, { openByDefault = false, mode }) {
+        const section = el("details", {
+          className: "task-timeline-section stack",
+          open: openByDefault || rows.length > 0,
+        }, [
+          el("summary", {}, [
+            el("span", {}, title),
+            el("span", { className: "task-timeline-count" }, countLabel),
+          ]),
+        ]);
+        if (!rows.length) {
+          section.appendChild(el("p", { className: "muted" }, mode === "missed" ? "No overdue tasks." : "No open tasks."));
+          return section;
+        }
+        rows.forEach(({ list, task }) => {
+          const meta = [];
+          if (task.recurrence && task.recurrence !== "none") meta.push(task.recurrence);
+          if (task.paused) meta.push("paused");
+          if (task.makeup_status && task.makeup_status !== "none") meta.push(`make-up: ${task.makeup_status}`);
+          const dueLabel = formatTaskDue(task);
+          if (dueLabel) meta.push(dueLabel);
+          if (task.assigned_to_display_name) meta.push(`for ${task.assigned_to_display_name}`);
+          const row = el("div", {
+            className: `task-item${(mode === "open" && canCompleteTask(task, you)) || mode === "missed" ? " task-actionable" : ""}`,
+          }, [
+            isDom && task.recurrence && task.recurrence !== "none"
+              ? el("label", { className: "checkbox-label" }, [
+                (() => {
+                  const cb = el("input", { type: "checkbox" });
+                  cb.addEventListener("change", () => {
+                    if (cb.checked) selected.add(task.id);
+                    else selected.delete(task.id);
+                    refreshBulkBar();
+                  });
+                  return cb;
+                })(),
+                " ",
+              ])
+              : null,
+            el("p", {}, task.content),
+            meta.length ? el("p", { className: "muted" }, `${list.title} · ${meta.join(" · ")}`) : el("p", { className: "muted" }, list.title),
           ]);
-          if (item.tags?.length) {
+          if (task.tags?.length) {
             const tags = el("div", { className: "tag-filter-row" });
-            item.tags.forEach((t) => tags.appendChild(el("span", { className: "tag-chip active" }, t)));
+            task.tags.forEach((t) => tags.appendChild(el("span", { className: "tag-chip active" }, t)));
             row.appendChild(tags);
           }
-          if (item.approval_status === "pending") {
-            row.appendChild(el("span", { className: "pill pending" }, "pending approval"));
+          const actions = el("div", { className: "row" });
+          if (mode === "open" && canCompleteTask(task, you)) {
+            actions.appendChild(el("button", {
+              className: "primary-btn",
+              type: "button",
+              onClick: async (ev) => {
+                ev.stopPropagation();
+                try {
+                  await api(`/tasks/${list.id}/items/${task.id}/complete`, { method: "PATCH" });
+                  renderTasks(dynamicId);
+                } catch (ex) {
+                  showError(ex.message);
+                }
+              },
+            }, "Mark complete"));
           }
-          cal.appendChild(row);
+          if (mode === "missed") {
+            const canAct = you?.role === "submissive" || task.assigned_to_membership_id === you?.id;
+            if (canAct) {
+              if (task.makeup_status === "pending") {
+                actions.appendChild(el("span", { className: "pill pending" }, "Make-up pending"));
+              } else if (task.makeup_status === "granted" && canCompleteTask(task, you)) {
+                actions.appendChild(el("button", {
+                  className: "primary-btn",
+                  type: "button",
+                  onClick: async (ev) => {
+                    ev.stopPropagation();
+                    try {
+                      await api(`/tasks/${list.id}/items/${task.id}/complete`, { method: "PATCH" });
+                      renderTasks(dynamicId);
+                    } catch (ex) {
+                      showError(ex.message);
+                    }
+                  },
+                }, "Complete make-up"));
+              } else if (task.makeup_status !== "granted") {
+                actions.appendChild(el("button", {
+                  className: "primary-btn",
+                  type: "button",
+                  onClick: (ev) => {
+                    ev.stopPropagation();
+                    openMakeupRequestSheet(list, task);
+                  },
+                }, task.makeup_status === "denied" ? "Request again" : "Request make-up"));
+              }
+            }
+            if (isDom) {
+              actions.appendChild(el("button", {
+                className: "ghost-btn",
+                type: "button",
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  openMakeupReviewSheet(list, task);
+                },
+              }, task.makeup_status === "pending" ? "Review make-up" : "Grant / deny make-up"));
+              actions.appendChild(el("button", {
+                className: "primary-btn",
+                type: "button",
+                onClick: async (ev) => {
+                  ev.stopPropagation();
+                  try {
+                    if (taskNeedsMakeup(task)) {
+                      await api(`/tasks/${list.id}/items/${task.id}/makeup-review`, {
+                        method: "POST",
+                        body: JSON.stringify({ approved: true, note: "" }),
+                      });
+                    }
+                    await api(`/tasks/${list.id}/items/${task.id}/complete`, { method: "PATCH" });
+                    renderTasks(dynamicId);
+                  } catch (ex) {
+                    showError(ex.message);
+                  }
+                },
+              }, "Mark complete"));
+            }
+          }
+          if (isDom) {
+            actions.appendChild(el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: (ev) => {
+                ev.stopPropagation();
+                openEditTaskSheet(list, task);
+              },
+            }, "Edit"));
+            if (task.recurrence && task.recurrence !== "none") {
+              actions.appendChild(el("button", {
+                className: "ghost-btn",
+                type: "button",
+                onClick: async (ev) => {
+                  ev.stopPropagation();
+                  try {
+                    await api(`/tasks/${list.id}/items/${task.id}`, {
+                      method: "PATCH",
+                      body: JSON.stringify({ paused: !task.paused }),
+                    });
+                    renderTasks(dynamicId);
+                  } catch (ex) {
+                    showError(ex.message);
+                  }
+                },
+              }, task.paused ? "Unpause" : "Pause"));
+            }
+          }
+          if (actions.childNodes.length) row.appendChild(actions);
+          if (mode === "missed" && you?.role === "submissive" && task.makeup_status !== "pending" && task.makeup_status !== "granted") {
+            row.addEventListener("click", () => openMakeupRequestSheet(list, task));
+          }
+          section.appendChild(row);
         });
-        calCard.appendChild(cal);
+        return section;
       }
-      stack.appendChild(calCard);
+
+      stack.appendChild(paintTimelineSection(
+        "Open tasks",
+        `${open.length} due`,
+        open,
+        { openByDefault: true, mode: "open" }
+      ));
+      stack.appendChild(paintTimelineSection(
+        "Missed / Overdue",
+        String(missed.length),
+        missed,
+        { openByDefault: missed.length > 0, mode: "missed" }
+      ));
+
+      if (pending.length) {
+        const card = el("div", { className: "card stack" }, [el("h2", {}, `Pending approval · ${pending.length}`)]);
+        pending.forEach(({ list, task }) => {
+          const row = el("div", { className: "task-item" }, [
+            el("p", {}, task.content),
+            el("p", { className: "muted" }, list.title),
+          ]);
+          if (isDom) {
+            row.appendChild(el("div", { className: "row" }, [
+              el("button", {
+                className: "primary-btn",
+                type: "button",
+                onClick: async () => {
+                  await api(`/tasks/${list.id}/items/${task.id}/approval?approved=true`, { method: "PATCH" });
+                  renderTasks(dynamicId);
+                },
+              }, "Approve"),
+              el("button", {
+                className: "ghost-btn",
+                type: "button",
+                onClick: async () => {
+                  await api(`/tasks/${list.id}/items/${task.id}/approval?approved=false`, { method: "PATCH" });
+                  renderTasks(dynamicId);
+                },
+              }, "Reject"),
+            ]));
+          }
+          card.appendChild(row);
+        });
+        stack.appendChild(card);
+      }
+
+      if (paused.length && isDom) {
+        const card = el("details", { className: "task-timeline-section stack" }, [
+          el("summary", {}, [
+            el("span", {}, "Paused"),
+            el("span", { className: "task-timeline-count" }, String(paused.length)),
+          ]),
+        ]);
+        paused.forEach(({ list, task }) => {
+          card.appendChild(el("div", { className: "task-item" }, [
+            el("p", {}, task.content),
+            el("p", { className: "muted" }, `${list.title} · paused`),
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: async () => {
+                await api(`/tasks/${list.id}/items/${task.id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ paused: false }),
+                });
+                renderTasks(dynamicId);
+              },
+            }, "Unpause"),
+          ]));
+        });
+        stack.appendChild(card);
+      }
+
+      const bulkBar = el("div", { className: "task-bulk-bar card stack hidden" });
+      function refreshBulkBar() {
+        bulkBar.classList.toggle("hidden", !isDom || selected.size === 0);
+        bulkBar.replaceChildren(
+          el("p", { className: "muted" }, `${selected.size} selected`),
+          el("div", { className: "row wrap" }, [
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: () => runBulk("pause"),
+            }, "Pause"),
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: () => runBulk("unpause"),
+            }, "Unpause"),
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: () => {
+                if (!confirm("Stop future occurrences for selected recurring tasks? Completed history is kept.")) return;
+                runBulk("remove_future");
+              },
+            }, "Remove future"),
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: () => {
+                const tag = window.prompt("Apply category tag:", taskCategoryPresets[0] || "Domestic");
+                if (!tag) return;
+                runBulk("apply_tag", tag.trim());
+              },
+            }, "Apply tag"),
+          ])
+        );
+      }
+      async function runBulk(action, tag = null) {
+        try {
+          await api(`/dynamics/${dynamicId}/tasks/bulk`, {
+            method: "POST",
+            body: JSON.stringify({
+              task_ids: [...selected],
+              action,
+              tag,
+            }),
+          });
+          renderTasks(dynamicId);
+        } catch (ex) {
+          showError(ex.message);
+        }
+      }
+      if (isDom) stack.appendChild(bulkBar);
 
       stack.appendChild(el("div", { className: "card stack" }, [
         el("h2", {}, "Create tasks in Playtime"),
-        el("p", { className: "muted" }, "Task creation lives under Playtime. This screen is for tracking overdue, pending, and completed work."),
+        el("p", { className: "muted" }, "Task creation lives under Playtime. This screen tracks open and overdue work."),
         el("button", {
           className: "primary-btn",
           type: "button",
@@ -4982,145 +5429,28 @@ function renderTasks(dynamicId) {
         }, "Open Playtime"),
       ]));
 
-      const now = Date.now();
-      const missed = [];
-      const pending = [];
-      const open = [];
-      (state.taskLists || []).forEach((list) => {
-        (list.tasks || []).forEach((task) => {
-          const row = { list, task };
-          if (task.approval_status === "pending") pending.push(row);
-          else if (!task.completed_at && task.due_at && new Date(task.due_at).getTime() < now) missed.push(row);
-          else if (!task.completed_at) open.push(row);
-        });
-      });
-
-      function paintTaskBucket(title, rows, emptyText) {
-        const card = el("div", { className: "card stack" }, [el("h2", {}, title)]);
-        if (!rows.length) {
-          card.appendChild(el("p", { className: "muted" }, emptyText));
-          return card;
-        }
-        rows.slice(0, 30).forEach(({ list, task }) => {
-          const meta = [];
-          if (task.approval_status === "pending") meta.push("pending");
-          if (task.due_at) meta.push(formatTaskDue(task) || new Date(task.due_at).toLocaleString());
-          if (task.assigned_to_display_name) meta.push(`for ${task.assigned_to_display_name}`);
-          const row = el("div", { className: "task-item" }, [
-            el("p", {}, task.content),
-            meta.length ? el("p", { className: "muted" }, `${list.title} · ${meta.join(" · ")}`) : el("p", { className: "muted" }, list.title),
-          ]);
-          const actions = el("div", { className: "row" });
-          if (canCompleteTask(task, you)) {
-            actions.appendChild(el("button", {
-              className: "primary-btn",
-              type: "button",
-              onClick: async () => {
-                await api(`/tasks/${list.id}/items/${task.id}/complete`, { method: "PATCH" });
-                renderTasks(dynamicId);
-              },
-            }, "Mark complete"));
-          }
-          if (you?.role === "dominant" && task.approval_status === "pending") {
-            actions.appendChild(el("button", {
-              className: "primary-btn",
-              type: "button",
-              onClick: async () => {
-                await api(`/tasks/${list.id}/items/${task.id}/approval?approved=true`, { method: "PATCH" });
-                renderTasks(dynamicId);
-              },
-            }, "Approve"));
-          }
-          if (actions.childNodes.length) row.appendChild(actions);
-          card.appendChild(row);
-        });
-        return card;
-      }
-
-      stack.appendChild(paintTaskBucket("Missed / overdue", missed, "No overdue tasks."));
-      stack.appendChild(paintTaskBucket("Pending approval", pending, "Nothing waiting on approval."));
-      stack.appendChild(paintTaskBucket("Open tasks", open, "No open tasks."));
-
-      if (!state.taskLists.length) {
-        stack.appendChild(el("div", { className: "card" }, "No task lists yet — create one in Playtime."));
-      } else {
+      if ((state.taskLists || []).length) {
+        const listsCard = el("details", { className: "task-timeline-section stack" }, [
+          el("summary", {}, [
+            el("span", {}, "All lists"),
+            el("span", { className: "task-timeline-count" }, String(state.taskLists.length)),
+          ]),
+        ]);
         state.taskLists.forEach((list) => {
-          const card = el("div", { className: "card stack" }, [
-            el("div", { className: "row" }, [
-              el("h2", {}, list.title),
-              el("span", { className: "pill" }, list.status),
-            ]),
-          ]);
-          list.tasks.forEach((task) => {
-            const meta = [];
-            if (task.source) meta.push(task.source);
-            if (task.recurrence && task.recurrence !== "none") meta.push(task.recurrence);
-            if (task.approval_status === "pending") meta.push("pending");
-            if (task.is_private) meta.push("private");
-            if (task.assigned_to_display_name) meta.push(`for ${task.assigned_to_display_name}`);
-            const dueLabel = formatTaskDue(task);
-            if (dueLabel) meta.push(dueLabel);
-            const row = el("div", { className: `task-item ${task.completed_at ? "done" : ""}` }, [
-              el("p", {}, `${task.position + 1}. ${task.content}`),
-              task.public_code_word
-                ? el("p", { className: "muted" }, `Google code word: ${task.public_code_word}${task.google_synced ? " · synced" : ""}`)
-                : null,
-              meta.length ? el("p", { className: "muted" }, meta.join(" · ")) : null,
-            ]);
-            if (task.tags?.length) {
-              const tags = el("div", { className: "tag-filter-row" });
-              task.tags.forEach((t) => tags.appendChild(el("span", { className: "tag-chip active" }, t)));
-              row.appendChild(tags);
-            }
-            const actions = el("div", { className: "row" });
-            if (canCompleteTask(task, you)) {
-              actions.appendChild(
-                el("button", {
-                  className: "primary-btn",
-                  onClick: async () => {
-                    await api(`/tasks/${list.id}/items/${task.id}/complete`, { method: "PATCH" });
-                    renderTasks(dynamicId);
-                  },
-                }, "Mark complete")
-              );
-            }
-            if (you?.role === "dominant" && task.approval_status === "pending") {
-              actions.appendChild(
-                el("button", {
-                  className: "primary-btn",
-                  onClick: async () => {
-                    await api(`/tasks/${list.id}/items/${task.id}/approval?approved=true`, { method: "PATCH" });
-                    renderTasks(dynamicId);
-                  },
-                }, "Approve")
-              );
-              actions.appendChild(
-                el("button", {
-                  className: "ghost-btn",
-                  onClick: async () => {
-                    await api(`/tasks/${list.id}/items/${task.id}/approval?approved=false`, { method: "PATCH" });
-                    renderTasks(dynamicId);
-                  },
-                }, "Reject")
-              );
-            }
-            if (you?.role === "dominant" || (task.is_private && you)) {
-              actions.appendChild(
-                el("button", {
-                  className: "ghost-btn",
-                  onClick: async () => {
-                    if (!confirm("Remove this task?")) return;
-                    await api(`/tasks/${list.id}/items/${task.id}`, { method: "DELETE" });
-                    renderTasks(dynamicId);
-                  },
-                }, "Remove")
-              );
-            }
-            if (actions.childNodes.length) row.appendChild(actions);
-            card.appendChild(row);
-          });
-          stack.appendChild(card);
+          listsCard.appendChild(el("div", { className: "stack" }, [
+            el("h3", {}, `${list.title} · ${list.status}`),
+            ...(list.tasks || []).slice(0, 20).map((task) => {
+              const bits = [];
+              if (task.completed_at) bits.push("done");
+              if (task.paused) bits.push("paused");
+              if (task.recurrence && task.recurrence !== "none") bits.push(task.recurrence);
+              const dueLabel = formatTaskDue(task);
+              if (dueLabel) bits.push(dueLabel);
+              return el("p", { className: "muted" }, `${task.content}${bits.length ? ` · ${bits.join(" · ")}` : ""}`);
+            }),
+          ]));
         });
+        stack.appendChild(listsCard);
       }
 
       stack.appendChild(
@@ -5519,6 +5849,7 @@ function renderAssistant(dynamicId) {
           recurrence.appendChild(el("option", { value: v }, l));
         });
         const assignee = buildAssigneeSelect(dynamic.partners);
+        const categoryPicker = buildTagPicker(DEFAULT_TASK_CATEGORY_TAGS, []);
         stack.appendChild(el("div", { className: "card stack" }, [
           el("h2", {}, "Create tasks"),
           el("p", { className: "muted" }, "Keep it light — tracking overdue work stays under Tracking → Tasks."),
@@ -5526,6 +5857,9 @@ function renderAssistant(dynamicId) {
           tasksBox,
           el("label", {}, ["Recurrence", recurrence]),
           el("label", {}, ["Assign to", assignee]),
+          el("p", { className: "muted" }, "Category tags"),
+          categoryPicker.row,
+          categoryPicker.custom,
           taskError,
           el("button", {
             className: "primary-btn",
@@ -5538,6 +5872,7 @@ function renderAssistant(dynamicId) {
                 taskError.classList.remove("hidden");
                 return;
               }
+              const tags = categoryPicker.getTags();
               try {
                 await api(`/dynamics/${dynamicId}/tasks`, {
                   method: "POST",
@@ -5548,6 +5883,7 @@ function renderAssistant(dynamicId) {
                       content,
                       visibility: index === 0 ? "visible" : "after_prior",
                       recurrence: recurrence.value,
+                      tags,
                     })),
                   }),
                 });
@@ -9929,12 +10265,30 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved }) {
         }
         typeSelect.addEventListener("change", () => {
           req.type = typeSelect.value;
-          syncPreview();
+          paintReqs();
         });
         valueInput.addEventListener("change", () => { req.value = Number(valueInput.value) || 1; });
         typeSelect.disabled = archived;
         valueInput.disabled = archived;
         syncPreview();
+        const tagRow = el("div", { className: "stack" });
+        if (req.type === "tasks_completed") {
+          const tagInput = el("input", {
+            type: "text",
+            placeholder: "Optional category tag (e.g. Domestic)",
+            value: req.tag || "",
+          });
+          tagInput.disabled = archived;
+          tagInput.addEventListener("change", () => {
+            const v = tagInput.value.trim();
+            if (v) req.tag = v;
+            else delete req.tag;
+          });
+          tagRow.appendChild(el("label", { className: "stack" }, [
+            "Count only tasks with tag (optional)",
+            tagInput,
+          ]));
+        }
         reqHost.appendChild(el("div", { className: "stack" }, [
           el("div", { className: "row wrap" }, [
             typeSelect,
@@ -9950,6 +10304,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved }) {
                 },
               }, "Remove"),
           ]),
+          tagRow,
           preview,
         ]));
       });
@@ -12054,7 +12409,7 @@ function buildSettingsSetupChecklist({ user, llmSettings, googleStatus, dynamics
       focus: "ai",
     });
   }
-  if (googleStatus?.configured && !googleStatus?.connected) {
+  if (false && googleStatus?.configured && !googleStatus?.connected) {
     items.push({
       id: "google",
       title: "Connect Google Tasks (optional)",
@@ -13688,6 +14043,34 @@ function renderSettings() {
         el("label", {}, ["Confirm with password", usernamePassword]),
         usernameError,
       ]));
+
+      const currentTheme = document.documentElement.dataset.theme || "midnight";
+      const themePicker = el("div", { className: "theme-picker" });
+      THEME_OPTIONS.forEach((theme) => {
+        const btn = el("button", {
+          type: "button",
+          className: `theme-option${theme.id === currentTheme ? " active" : ""}`,
+          onClick: () => {
+            applyTheme(theme.id);
+            themePicker.querySelectorAll(".theme-option").forEach((node) => {
+              node.classList.toggle("active", node.dataset.themeId === theme.id);
+            });
+          },
+        }, [
+          el("span", {
+            className: "theme-swatch",
+            style: `--swatch-a:${theme.swatchA};--swatch-b:${theme.swatchB}`,
+          }),
+          theme.label,
+        ]);
+        btn.dataset.themeId = theme.id;
+        themePicker.appendChild(btn);
+      });
+      stack.appendChild(el("div", { className: "card stack" }, [
+        el("h2", {}, "Appearance"),
+        el("p", { className: "muted" }, "Color theme for this device. Saved locally — not synced yet."),
+        themePicker,
+      ]));
       let usernameBaseline = state.user?.username || "";
       draft.register({
         isDirty: () => usernameInput.value.trim() !== usernameBaseline,
@@ -13896,6 +14279,22 @@ function renderSettings() {
         ]));
       }
 
+      stack.appendChild(el("div", { className: "card stack" }, [
+        el("h2", {}, "Log out"),
+        el("p", { className: "muted" }, "Sign out of this device. Your data stays on the server."),
+        el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: () => {
+            if (!confirm("Log out of UBETRA on this device?")) return;
+            doLogout();
+          },
+        }, "Log out"),
+      ]));
+
+      // Google Tasks integration is undeveloped — hidden until re-enabled.
+      const _googleTasksHidden = true;
+      if (!_googleTasksHidden) {
       const googleCard = el("div", { className: "card stack" }, [
         el("h2", {}, "Google Tasks"),
         el("p", { className: "muted" }, "Connect the account that should receive discreet, G-rated code-word tasks (usually the submissive). Completing them in Google marks them done in UBETRA."),
@@ -13928,6 +14327,7 @@ function renderSettings() {
         }, "Connect Google Tasks"));
       }
       stack.appendChild(googleCard);
+      }
 
       stack.appendChild(el("p", { className: "muted" }, "Saving updates your account and any shared dynamic keys. The assistant uses the shared key per relationship when one is set."));
       stack.appendChild(status);
@@ -14590,6 +14990,7 @@ function renderSettings() {
       const leftovers = [];
       const buckets = {
         Account: [],
+        Appearance: [],
         Dynamics: [],
         Features: [],
         Chastity: [],
@@ -14600,6 +15001,7 @@ function renderSettings() {
       };
       const bucketIds = {
         Account: "account",
+        Appearance: "appearance",
         Dynamics: "dynamics",
         Features: "features",
         Chastity: "chastity",
@@ -14609,18 +15011,21 @@ function renderSettings() {
         Support: "support",
       };
       const bucketHelp = {
+        Appearance: "Theme is stored on this device only.",
         "AI & assistant": "Gemini: open Google AI Studio → Create API key → paste here. OpenAI: platform.openai.com → API keys. Used by the assistant, suggested ground rules, acts, and interviews. Server default uses the host .env key.",
-        Integrations: "Google Tasks is optional. Connect the account that should receive discreet G-rated code-word tasks (usually the submissive).",
+        Integrations: "Optional third-party connections (currently none enabled).",
         Chastity: "Keyholder policy for whether the sub can delete their own break records.",
         "Chat & privacy": "History retention, end-to-end chat keys, and push notifications for this device.",
         Support: "Optional donations — the app stays free either way.",
       };
       const titleMap = {
         Username: "Account",
+        Appearance: "Appearance",
         "Biological sex": "Account",
         "Account email": "Account",
         "Backup & restore": "Account",
         "Partner username": "Account",
+        "Log out": "Account",
         "Your dynamics": "Dynamics",
         "Start or join a dynamic": "Dynamics",
         "Application features": "Features",

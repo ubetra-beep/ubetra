@@ -234,6 +234,11 @@ class Dynamic(Base):
     )
     # Shared chastity lockup tag chips — starts empty; custom tags become permanent for both partners.
     chastity_tag_presets: Mapped[str] = mapped_column(Text, default="")
+    # Task category chips (separate from orgasm tag_presets)
+    task_tag_presets: Mapped[str] = mapped_column(
+        Text,
+        default="Domestic,Health / Hygiene,Sensual,Sexual",
+    )
     chat_retain_history: Mapped[bool] = mapped_column(Boolean, default=False)
     chat_e2e_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # Shared AES key (base64) for encrypted chat — same model as shared_llm_api_key.
@@ -484,6 +489,12 @@ class Task(Base):
     is_private: Mapped[bool] = mapped_column(Boolean, default=False)
     public_code_word: Mapped[str] = mapped_column(String(200), default="")
     google_task_id: Mapped[str] = mapped_column(String(128), default="")
+    paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    # none | pending | granted | denied
+    makeup_status: Mapped[str] = mapped_column(String(16), default="none")
+    makeup_note: Mapped[str] = mapped_column(Text, default="")
+    makeup_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    makeup_granted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     task_list: Mapped[TaskList] = relationship(back_populates="tasks")
     assigned_to: Mapped["Membership | None"] = relationship(

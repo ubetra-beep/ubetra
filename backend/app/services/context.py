@@ -158,7 +158,7 @@ def _format_core_knowledge(
     for key in fields:
         if key not in CORE_KNOWLEDGE_FIELDS:
             continue
-        value = getattr(knowledge, key, "").strip()
+        value = (getattr(knowledge, key, None) or "").strip()
         if value:
             lines.append(f"    {CORE_KNOWLEDGE_FIELDS[key]}: {value}")
     return lines

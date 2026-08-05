@@ -44,7 +44,7 @@ REQUIREMENT_TYPES = {
     "tasks_completed": {
         "title": "Tasks completed",
         "kind": "count",
-        "hint": "Approved tasks completed since the goal was (re)set.",
+        "hint": "Approved tasks completed since the goal was (re)set. Optional tag filter counts only matching category tags.",
     },
     "orgasms_to_dominant": {
         "title": "Orgasms provided to keyholder",
@@ -240,10 +240,18 @@ def _active_or_last_lockup(db: Session, dynamic_id: str, sub_id: str) -> Chastit
     )
 
 
-def _count_tasks_completed(db: Session, dynamic_id: str, sub_id: str, since: datetime) -> int:
+def _count_tasks_completed(
+    db: Session,
+    dynamic_id: str,
+    sub_id: str,
+    since: datetime,
+    *,
+    tag: str | None = None,
+) -> int:
     from ..models import TaskList
+    from ..services.tags import tags_to_list
 
-    return (
+    rows = (
         db.query(Task)
         .join(TaskList, Task.task_list_id == TaskList.id)
         .filter(
@@ -252,8 +260,17 @@ def _count_tasks_completed(db: Session, dynamic_id: str, sub_id: str, since: dat
             Task.completed_at >= since,
             Task.approval_status == TaskApprovalStatus.approved,
         )
-        .count()
+        .all()
     )
+    if not tag:
+        return len(rows)
+    needle = tag.strip().lower()
+    count = 0
+    for task in rows:
+        tags = [t.lower() for t in tags_to_list(task.tags or "")]
+        if needle in tags:
+            count += 1
+    return count
 
 
 def _count_orgasms_for(db: Session, dynamic_id: str, membership_id: str, since: datetime) -> int:
@@ -402,7 +419,10 @@ def evaluate_requirement(
             need = target - current
             eta_at = now + timedelta(days=max(0, need)) if need > 0 else now
     elif rtype == "tasks_completed":
-        current = float(_count_tasks_completed(db, dynamic_id, sub_id, reset_at))
+        tag = (req.get("tag") or "").strip() or None
+        current = float(
+            _count_tasks_completed(db, dynamic_id, sub_id, reset_at, tag=tag)
+        )
     elif rtype == "orgasms_to_dominant":
         if dominant_id:
             current = float(_count_orgasms_for(db, dynamic_id, dominant_id, reset_at))

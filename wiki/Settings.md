@@ -14,7 +14,11 @@ One sticky **Save** appears when something changed. Subs see **Submit settings c
 
 ## Account
 
-Username, biological sex, email, password. Dom may rename a Sub’s username for the dynamic.
+Username, biological sex, email, password, and **Log out**. Dom may rename a Sub’s username for the dynamic.
+
+## Appearance
+
+Color theme for this device (Midnight, Ember, Forest, Slate). Stored in localStorage — not synced yet.
 
 ## Dynamics
 
@@ -44,7 +48,7 @@ e.g. whether the Sub may delete temporary unlock log entries.
 
 ## Integrations
 
-Optional Google Tasks (discreet code words).
+Google Tasks is currently hidden until the feature is ready.
 
 ## Backup
 

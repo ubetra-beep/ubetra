@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..models import Dynamic, Membership, User
@@ -45,7 +46,7 @@ def _parse_fielded_response(raw: str) -> dict[str, str]:
 
 
 def _core_knowledge_mostly_empty(record) -> bool:
-    filled = sum(1 for key in FIELD_ORDER if getattr(record, key, "").strip())
+    filled = sum(1 for key in FIELD_ORDER if (getattr(record, key, None) or "").strip())
     return filled <= 1
 
 
@@ -65,7 +66,7 @@ def populate_core_knowledge_from_interview(
         )
 
     record = get_or_create_core_knowledge(db, membership)
-    summary = membership.interview_summary.strip()
+    summary = (membership.interview_summary or "").strip()
     parsed: dict[str, str] = {}
 
     if is_llm_configured(user, dynamic):
@@ -86,7 +87,7 @@ Keep each section concise (1-4 sentences). Do not invent facts not implied by th
             dynamic_context=f"Dynamic: {dynamic.name}",
             dynamic=dynamic,
         )
-        parsed = _parse_fielded_response(raw)
+        parsed = _parse_fielded_response(raw or "")
 
     if not any(parsed.values()):
         parsed = {
@@ -96,10 +97,10 @@ Keep each section concise (1-4 sentences). Do not invent facts not implied by th
         }
 
     for key in FIELD_ORDER:
-        value = parsed.get(key, "").strip()
+        value = (parsed.get(key) or "").strip()
         if not value:
             continue
-        existing = getattr(record, key, "").strip()
+        existing = (getattr(record, key, None) or "").strip()
         if overwrite or not existing:
             setattr(record, key, value)
 

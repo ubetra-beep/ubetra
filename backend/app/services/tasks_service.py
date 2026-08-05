@@ -121,6 +121,11 @@ def task_out(
         public_code_word=task.public_code_word or "",
         google_task_id=task.google_task_id or "",
         google_synced=bool((task.google_task_id or "").strip()),
+        paused=bool(getattr(task, "paused", False)),
+        makeup_status=(getattr(task, "makeup_status", None) or "none"),
+        makeup_note=(getattr(task, "makeup_note", None) or ""),
+        makeup_requested_at=getattr(task, "makeup_requested_at", None),
+        makeup_granted_at=getattr(task, "makeup_granted_at", None),
     )
 
 
@@ -152,12 +157,39 @@ def task_list_out(task_list: TaskList, viewer: Membership) -> TaskListOut:
 
 
 def can_complete_task(task: Task, membership: Membership) -> bool:
+    if getattr(task, "paused", False):
+        return False
+    if membership.role == PartnerRole.dominant:
+        return True
     assignee = getattr(task, "assigned_to_membership_id", None)
     if assignee:
         return assignee == membership.id
     if getattr(task, "is_private", False):
         return task.created_by_membership_id == membership.id
     return membership.role == PartnerRole.submissive
+
+
+def task_needs_makeup(task: Task, *, now: datetime | None = None) -> bool:
+    """Overdue incomplete tasks require makeup grant before complete (unless already granted)."""
+    if task.completed_at or task.approval_status != TaskApprovalStatus.approved:
+        return False
+    if getattr(task, "paused", False):
+        return False
+    due = task.next_due_at or task.due_at
+    if due is None:
+        return False
+    now = now or datetime.utcnow()
+    if due > now:
+        return False
+    status = (getattr(task, "makeup_status", None) or "none").lower()
+    return status != "granted"
+
+
+def clear_makeup(task: Task) -> None:
+    task.makeup_status = "none"
+    task.makeup_note = ""
+    task.makeup_requested_at = None
+    task.makeup_granted_at = None
 
 
 def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
@@ -214,6 +246,8 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
         ordered = sorted(task_list.tasks, key=lambda t: t.position)
         for task in ordered:
             if task.completed_at:
+                continue
+            if getattr(task, "paused", False):
                 continue
             if task.approval_status != TaskApprovalStatus.approved:
                 continue
