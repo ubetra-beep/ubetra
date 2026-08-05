@@ -3,6 +3,14 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.82] — 2026-08-05
+
+### Changed
+- Bottom nav uses 3 equal columns (Tracking / Playtime / Chat) — no left cluster
+- Tasks & acts moved from Tracking to Playtime; Sub “Request a task” is on Playtime (removed from Chat menu)
+- Chat typing indicator shows once (bubble only)
+- Service worker cache `ubetra-v82`
+
 ## [0.81] — 2026-08-05
 
 ### Fixed

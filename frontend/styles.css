@@ -730,7 +730,7 @@ textarea {
   width: 100%;
   max-width: 720px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.25rem;
   padding: 0.5rem 0.75rem calc(0.65rem + env(safe-area-inset-bottom));
   background: rgba(20, 20, 20, 0.98);

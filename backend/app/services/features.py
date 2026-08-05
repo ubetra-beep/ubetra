@@ -23,8 +23,8 @@ OPTIONAL_FEATURES = {
     "feelings": {"title": "Feelings tracking", "section": "tracking"},
     "punishment": {"title": "Punishment self-report", "section": "tracking"},
     # tasks + acts are one Tracking menu item (merged UI); keep both keys for API gates
-    "tasks": {"title": "Tasks & acts", "section": "tracking", "paired_with": "acts"},
-    "acts": {"title": "Tasks & acts", "section": "tracking", "hidden": True, "paired_with": "tasks"},
+    "tasks": {"title": "Tasks & acts", "section": "playtime", "paired_with": "acts"},
+    "acts": {"title": "Tasks & acts", "section": "playtime", "hidden": True, "paired_with": "tasks"},
     "image_vault": {"title": "Image vault", "section": "tracking"},
     "scene_workshop": {"title": "Playtime", "section": "playtime"},
     "journal": {"title": "Journal", "section": "tracking"},

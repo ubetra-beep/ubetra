@@ -67,13 +67,13 @@ Route: `/#/dynamic/{id}/punishment`
 
 ## Tasks & acts
 
-Route: `/#/dynamic/{id}/tasks` (acts nearby)
+Route: `/#/dynamic/{id}/tasks` (from **Playtime**)
 
 **Open tasks** and **Missed / Overdue** are expandable timelines with counts. Tap open items to complete when due today (or overdue with make-up granted). Daily recurring series are not shown as clickable for tomorrow’s occurrence.
 
 **Make-up:** Sub requests make-up on a missed task (optional note). Dom grants or denies (optional note; “Ask assistant for note” drafts Domme-tone text). After grant, the Sub can complete.
 
-**Dom controls:** edit content/tags, pause/unpause recurring series, multi-select bulk pause / remove future / apply category tag. Category presets: Domestic · Health / Hygiene · Sensual · Sexual (separate from orgasm tags). Create tasks from Playtime with optional category tags.
+**Dom controls:** edit content/tags, pause/unpause recurring series, multi-select bulk pause / remove future / apply category tag. Category presets: Domestic · Health / Hygiene · Sensual · Sexual (separate from orgasm tags). Create tasks and **Request a task** (Sub) live on the Playtime hub.
 
 Google Tasks sync UI is currently hidden (undeveloped).
 

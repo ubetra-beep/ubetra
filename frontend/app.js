@@ -76,16 +76,20 @@ const TRACKING_FACETS = [
     route: "punishment",
     core: true,
   },
+  { id: "journal", icon: "📓", title: "Journal", subtitle: "Private writing with optional AI assist", route: "journal" },
+  { id: "image_vault", icon: "🖼", title: "Image vault", subtitle: "Encrypted private images from chat", route: "vault" },
+];
+
+/** Facets shown on the Playtime bottom-nav hub. */
+const PLAYTIME_FACETS = [
   {
     id: "tasks",
     icon: "✅",
     title: "Tasks & acts",
-    subtitle: "Task lists and acts of submission",
+    subtitle: "Open / missed work and acts of submission",
     route: "tasks",
     alsoEnabledBy: ["acts"],
   },
-  { id: "journal", icon: "📓", title: "Journal", subtitle: "Private writing with optional AI assist", route: "journal" },
-  { id: "image_vault", icon: "🖼", title: "Image vault", subtitle: "Encrypted private images from chat", route: "vault" },
 ];
 
 const PLAYTIME_EXTRA_FACETS = [];
@@ -94,6 +98,7 @@ function allFacetItems() {
   return [
     ...FACET_SECTIONS.flatMap((section) => section.items),
     ...TRACKING_FACETS,
+    ...PLAYTIME_FACETS,
     ...PLAYTIME_EXTRA_FACETS,
   ];
 }
@@ -2045,11 +2050,11 @@ function updateBottomNav() {
   const playtimeOn =
     !enabledFeatures.length || enabledFeatures.includes("scene_workshop");
   const trackingRoutes = new Set([
-    "track", "tracking", "chastity", "feelings", "tasks", "acts", "punishment",
+    "track", "tracking", "chastity", "feelings", "punishment",
     "history", "vault", "journal", "ground-rules", "interview", "survey",
     "knowledge", "context", "gear", "features", "overlap",
   ]);
-  const playtimeRoutes = new Set(["assistant"]);
+  const playtimeRoutes = new Set(["assistant", "tasks", "acts"]);
   const activeTab =
     parts[0] === "chat" ? "chat"
     : parts[0] === "dynamic" && playtimeRoutes.has(parts[2]) ? "workshop"
@@ -4360,21 +4365,17 @@ function renderTrackingHub(dynamicId) {
       const dynamic = state.currentDynamic;
       let trackingLabel = "";
       let chastityLabel = "";
-      let tasksLabel = "";
-      let actsLabel = "";
       try {
         const menuSummaries = await api(`/dynamics/${dynamicId}/menu-summaries`);
         trackingLabel = menuSummaries.org_tracking || "";
         chastityLabel = menuSummaries.chastity || "";
-        tasksLabel = menuSummaries.tasks || "";
-        actsLabel = menuSummaries.acts || "";
       } catch {
         /* ignore */
       }
       const enabledFeatures = dynamic.enabled_features || [];
       const stack = el("div", { className: "stack" }, [
         buildHubHeader(dynamicId, "Tracking", {
-          subtitle: "History, lockups, play, feelings, and tasks for this dynamic.",
+          subtitle: "History, lockups, play, and feelings for this dynamic.",
           sectionFilter: "tracking",
         }),
       ]);
@@ -4384,10 +4385,6 @@ function renderTrackingHub(dynamicId) {
         const rowFacet = { ...facet };
         if (facet.id === "org_tracking" && trackingLabel) rowFacet.subtitle = trackingLabel;
         if (facet.id === "chastity" && chastityLabel) rowFacet.subtitle = chastityLabel;
-        if (facet.id === "tasks") {
-          const bits = [tasksLabel, actsLabel].filter(Boolean);
-          if (bits.length) rowFacet.subtitle = bits.join(" · ");
-        }
         list.appendChild(renderFacetRow(rowFacet, dynamicId, dynamic));
       });
       if (!list.childNodes.length) {
@@ -5421,7 +5418,7 @@ function renderTasks(dynamicId) {
 
       stack.appendChild(el("div", { className: "card stack" }, [
         el("h2", {}, "Create tasks in Playtime"),
-        el("p", { className: "muted" }, "Task creation lives under Playtime. This screen tracks open and overdue work."),
+        el("p", { className: "muted" }, "Task creation and requests live under Playtime."),
         el("button", {
           className: "primary-btn",
           type: "button",
@@ -5456,8 +5453,8 @@ function renderTasks(dynamicId) {
       stack.appendChild(
         el("button", {
           className: "ghost-btn",
-          onClick: () => navigate(`/dynamic/${dynamicId}/track`),
-        }, "Back to tracking")
+          onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+        }, "Back to Playtime")
       );
       viewEl.replaceChildren(stack);
       updateBottomNav();
@@ -5777,15 +5774,67 @@ function renderAssistant(dynamicId) {
   Promise.all([
     api(`/dynamics/${dynamicId}/assistant/status`),
     loadDynamic(dynamicId),
+    api(`/dynamics/${dynamicId}/menu-summaries`).catch(() => ({})),
   ])
-    .then(([status]) => {
+    .then(([status, , menuSummaries]) => {
       const stack = el("div", { className: "stack" }, [
         buildHubHeader(dynamicId, "Playtime", {
-          subtitle: "Tools for the domme / keyholder.",
+          subtitle: "Tasks, scenes, and release tools.",
           sectionFilter: "playtime",
         }),
         el("p", { className: "muted" }, `Provider: ${status.llm_provider} · Model: ${status.llm_model}`),
       ]);
+
+      const dynamic = state.currentDynamic;
+      const you = dynamic?.partners?.find((p) => p.is_you);
+      const enabledFeatures = dynamic?.enabled_features || [];
+
+      if (you?.role === "submissive") {
+        const taskRequestBody = el("textarea", { rows: "3", placeholder: "Task you want to request…" });
+        const taskRequestError = el("div", { className: "error hidden" });
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Request a task"),
+          el("p", { className: "muted" }, "Needs keyholder approval before you can complete it."),
+          taskRequestBody,
+          taskRequestError,
+          el("button", {
+            className: "primary-btn",
+            type: "button",
+            onClick: async () => {
+              taskRequestError.classList.add("hidden");
+              const content = taskRequestBody.value.trim();
+              if (!content) {
+                taskRequestError.textContent = "Describe the task.";
+                taskRequestError.classList.remove("hidden");
+                return;
+              }
+              try {
+                await api(`/dynamics/${dynamicId}/tasks/items`, {
+                  method: "POST",
+                  body: JSON.stringify({ content }),
+                });
+                taskRequestBody.value = "";
+                showToast("Task request sent to your keyholder.");
+              } catch (err) {
+                taskRequestError.textContent = err.message;
+                taskRequestError.classList.remove("hidden");
+              }
+            },
+          }, "Submit for approval"),
+        ]));
+      }
+
+      const playtimeList = el("div", { className: "facet-list" });
+      PLAYTIME_FACETS.forEach((facet) => {
+        if (!isFacetEnabled(facet, enabledFeatures)) return;
+        const rowFacet = { ...facet };
+        if (facet.id === "tasks") {
+          const bits = [menuSummaries?.tasks, menuSummaries?.acts].filter(Boolean);
+          if (bits.length) rowFacet.subtitle = bits.join(" · ");
+        }
+        playtimeList.appendChild(renderFacetRow(rowFacet, dynamicId, dynamic));
+      });
+      if (playtimeList.childNodes.length) stack.appendChild(playtimeList);
 
       if (!status.your_interview_completed) {
         stack.appendChild(
@@ -5832,14 +5881,11 @@ function renderAssistant(dynamicId) {
         );
       }
 
-      const enabledFeatures = state.currentDynamic?.enabled_features || [];
       PLAYTIME_EXTRA_FACETS.forEach((facet) => {
         if (!isFacetEnabled(facet, enabledFeatures)) return;
         stack.appendChild(renderFacetRow(facet, dynamicId, state.currentDynamic));
       });
 
-      const dynamic = state.currentDynamic;
-      const you = dynamic?.partners?.find((p) => p.is_you);
       const taskError = el("div", { className: "error hidden" });
       if (you?.role === "dominant") {
         const title = el("input", { placeholder: "List title (e.g. Tonight)" });
@@ -5852,7 +5898,7 @@ function renderAssistant(dynamicId) {
         const categoryPicker = buildTagPicker(DEFAULT_TASK_CATEGORY_TAGS, []);
         stack.appendChild(el("div", { className: "card stack" }, [
           el("h2", {}, "Create tasks"),
-          el("p", { className: "muted" }, "Keep it light — tracking overdue work stays under Tracking → Tasks."),
+          el("p", { className: "muted" }, "Track open and overdue work under Playtime → Tasks & acts."),
           title,
           tasksBox,
           el("label", {}, ["Recurrence", recurrence]),
@@ -5890,7 +5936,7 @@ function renderAssistant(dynamicId) {
                 title.value = "";
                 tasksBox.value = "";
                 taskError.classList.add("hidden");
-                const ok = el("p", { className: "muted" }, "Created. Open Tracking → Tasks to follow progress.");
+                const ok = el("p", { className: "muted" }, "Created. Open Tasks & acts above to follow progress.");
                 taskError.replaceWith(ok);
               } catch (err) {
                 taskError.textContent = err.message;
@@ -11777,8 +11823,8 @@ function renderActs(dynamicId) {
       stack.appendChild(
         el("button", {
           className: "ghost-btn",
-          onClick: () => navigate(`/dynamic/${dynamicId}/track`),
-        }, "Back to tracking")
+          onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+        }, "Back to Playtime")
       );
       setViewContent(stack);
     })
@@ -13042,17 +13088,7 @@ function renderChat(dynamicId) {
         "aria-label": "Send message",
       }, "➤");
 
-      const typingEl = el("div", { className: "chat-typing hidden", "aria-live": "polite" }, [
-        el("span", { className: "chat-typing-dots", "aria-hidden": "true" }, [
-          el("span", { className: "chat-typing-dot" }),
-          el("span", { className: "chat-typing-dot" }),
-          el("span", { className: "chat-typing-dot" }),
-        ]),
-        el("span", { className: "chat-typing-label muted" }, "typing…"),
-      ]);
-
       const composer = el("div", { className: "chat-composer-wrap" }, [
-        typingEl,
         el("div", { className: "chat-composer" }, [attachBtn, input, sendBtn]),
       ]);
 
@@ -13067,11 +13103,6 @@ function renderChat(dynamicId) {
       function paintTyping() {
         const names = typingPartners.map((t) => t.display_name).filter(Boolean);
         const label = names.length ? `${names.join(", ")} typing` : "Partner typing";
-        const labelEl = typingEl.querySelector(".chat-typing-label");
-        if (labelEl) labelEl.textContent = names.length === 1 ? `${names[0]} is typing…` : "typing…";
-        typingEl.title = label;
-        typingEl.classList.toggle("hidden", !typingPartners.length);
-
         const chatLogEl = document.getElementById("partner-chat-log");
         if (!chatLogEl) return;
         let bubble = document.getElementById("chat-typing-bubble");
@@ -13322,43 +13353,6 @@ function renderChat(dynamicId) {
         );
       }
 
-      if (!isDom) {
-        const taskRequestBody = el("textarea", { rows: "3", placeholder: "Task you want to request…" });
-        const taskRequestError = el("div", { className: "error hidden" });
-        settingsPanel.append(
-          el("div", { className: "card stack" }, [
-            el("strong", {}, "Request a task"),
-            el("p", { className: "muted" }, "Needs keyholder approval before you can complete it."),
-            taskRequestBody,
-            taskRequestError,
-            el("button", {
-              className: "primary-btn",
-              type: "button",
-              onClick: async () => {
-                taskRequestError.classList.add("hidden");
-                const content = taskRequestBody.value.trim();
-                if (!content) {
-                  taskRequestError.textContent = "Describe the task.";
-                  taskRequestError.classList.remove("hidden");
-                  return;
-                }
-                try {
-                  await api(`/dynamics/${id}/tasks/items`, {
-                    method: "POST",
-                    body: JSON.stringify({ content }),
-                  });
-                  taskRequestBody.value = "";
-                  settingsPanel.classList.add("hidden");
-                  showToast("Task request sent to your keyholder.");
-                } catch (err) {
-                  taskRequestError.textContent = err.message;
-                  taskRequestError.classList.remove("hidden");
-                }
-              },
-            }, "Submit for approval"),
-          ])
-        );
-      }
       settingsPanel.append(
         el("h3", {}, "Chat settings"),
         el("label", { className: "checkbox-label" }, [panelLogsToggle, " Show activity logs"]),

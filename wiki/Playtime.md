@@ -29,6 +29,12 @@ Route: `/#/dynamic/{id}/assistant/games/spin`
 
 ---
 
-## Tasks from Playtime
+## Tasks & acts
 
-Doms can create task lists here (optional category tags: Domestic · Health / Hygiene · Sensual · Sexual). Tracking overdue/open work and make-up lives under [Tracking → Tasks](Tracking). Subs requesting a task do so from [Chat](Chat)'s **☰** menu rather than from Playtime.
+Route: `/#/dynamic/{id}/tasks`
+
+- **Tasks & acts** facet on this hub (moved from Tracking)
+- **Request a task** (Sub) at the top — needs keyholder approval
+- **Create tasks** (Dom) with optional category tags
+
+Open / missed timelines and make-up live on the Tasks screen. See [Tracking](Tracking) for the older screenshot reference until recaptured.
