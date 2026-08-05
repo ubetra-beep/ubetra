@@ -1350,55 +1350,69 @@ function buildTimeSelector({ label, defaultValue, shortcuts = true } = {}) {
 }
 
 function buildBreakTypePicker(settings, { selectedId, isDominant, allowUndecided = false } = {}) {
+  // Reasons are tags: one chip set (deduped by label). Dom prefers authorized_*; Sub gets emergency_*.
   const breakTypes = settings.break_types || [];
   const emergency = new Set(settings.emergency_break_types || []);
   const selected = { id: selectedId || "" };
   const customReason = el("input", {
-    placeholder: "Describe the reason",
+    placeholder: "Custom tag",
     className: "hidden",
   });
   const needsCustom = (id) => id === "authorized_other" || id === "emergency_other";
   const wrap = el("div", { className: "stack" });
-  const groups = [
-    { title: "Authorized", items: breakTypes.filter((t) => !emergency.has(t.id) && (allowUndecided || t.id !== "authorized_undecided")) },
-    { title: "Emergency", items: breakTypes.filter((t) => emergency.has(t.id)) },
-  ];
-  if (!isDominant) {
-    groups[0].items = [];
-  } else if (allowUndecided) {
-    const undecided = breakTypes.find((t) => t.id === "authorized_undecided");
-    if (undecided && !groups[0].items.some((t) => t.id === undecided.id)) {
-      groups[0].items.push(undecided);
-    }
-  }
-  groups.forEach((group) => {
-    if (!group.items.length) return;
-    wrap.appendChild(el("p", { className: "muted" }, group.title));
-    const row = el("div", { className: "tag-filter-row break-type-picker" });
-    group.items.forEach((type) => {
-      const btn = el("button", {
-        type: "button",
-        className: `tag-chip ${selected.id === type.id ? "active" : ""}`,
-        onClick: (e) => {
-          e.preventDefault();
-          selected.id = type.id;
-          row.querySelectorAll(".tag-chip").forEach((chip) => chip.classList.remove("active"));
-          btn.classList.add("active");
-          customReason.classList.toggle("hidden", !needsCustom(type.id));
-        },
-      }, type.label);
-      row.appendChild(btn);
-    });
-    wrap.appendChild(row);
+
+  const candidates = breakTypes.filter((type) => {
+    if (!type?.id || !type?.label) return false;
+    if (type.id === "authorized_undecided" && !allowUndecided) return false;
+    const isEmerg = emergency.has(type.id);
+    if (!isDominant && !isEmerg) return false;
+    return true;
   });
+  const byLabel = new Map();
+  candidates.forEach((type) => {
+    const existing = byLabel.get(type.label);
+    if (!existing) {
+      byLabel.set(type.label, type);
+      return;
+    }
+    // Prefer authorized when Dom sees both Hygiene / Sleep variants
+    if (emergency.has(existing.id) && !emergency.has(type.id)) {
+      byLabel.set(type.label, type);
+    }
+  });
+
+  const items = [...byLabel.values()];
+  wrap.appendChild(el("p", { className: "muted" }, "Tags"));
+  const row = el("div", { className: "tag-filter-row break-type-picker" });
+  items.forEach((type) => {
+    const btn = el("button", {
+      type: "button",
+      className: `tag-chip ${selected.id === type.id ? "active" : ""}`,
+      onClick: (e) => {
+        e.preventDefault();
+        selected.id = type.id;
+        row.querySelectorAll(".tag-chip").forEach((chip) => chip.classList.remove("active"));
+        btn.classList.add("active");
+        customReason.classList.toggle("hidden", !needsCustom(type.id));
+      },
+    }, type.label);
+    row.appendChild(btn);
+  });
+  wrap.appendChild(row);
   wrap.appendChild(customReason);
   return {
     wrap,
     getPayload() {
       if (!selected.id) return null;
-      const reason = needsCustom(selected.id) ? customReason.value.trim() : "";
-      if (needsCustom(selected.id) && !reason) return null;
-      return { break_type: selected.id, break_reason: reason };
+      const type = breakTypes.find((t) => t.id === selected.id) || items.find((t) => t.id === selected.id);
+      const custom = needsCustom(selected.id) ? customReason.value.trim() : "";
+      if (needsCustom(selected.id) && !custom) return null;
+      const label = custom || (type && type.label) || "";
+      return {
+        break_type: selected.id,
+        break_reason: custom,
+        tags: label ? [label] : [],
+      };
     },
   };
 }
@@ -3896,7 +3910,17 @@ function chastityEndTitle(lockup) {
   return "Unlocked";
 }
 
-function buildChastityTimelineEvents(lockups) {
+function chastityBreakTitle(brk) {
+  const tags = brk.tags || [];
+  if (tags.length) return tags[0];
+  const reason = (brk.break_reason || "").trim();
+  if (reason && reason !== "Hygiene (emergency)") return reason;
+  if (reason === "Hygiene (emergency)") return "Hygiene";
+  return "Temporary unlock";
+}
+
+function buildChastityTimelineEvents(lockups, opts = {}) {
+  const { youAreDominant = false } = opts;
   const events = [];
   (lockups || []).forEach((lockup) => {
     events.push({
@@ -3919,6 +3943,8 @@ function buildChastityTimelineEvents(lockups) {
       const unlockedMs = brk.ended_at
         ? new Date(brk.ended_at) - new Date(brk.started_at)
         : Date.now() - new Date(brk.started_at);
+      const title = chastityBreakTitle(brk);
+      const tags = (brk.tags || []).length ? brk.tags : (title ? [title] : []);
       events.push({
         id: "break-" + brk.id,
         kind: "temp_unlock",
@@ -3928,9 +3954,9 @@ function buildChastityTimelineEvents(lockups) {
         endAt: brk.ended_at || new Date().toISOString(),
         startValue: brk.started_at,
         endValue: brk.ended_at || "",
-        title: brk.break_reason || "Temporary unlock",
+        title,
         detail: brk.note || "",
-        tags: brk.tags || [],
+        tags,
         unlockedLabel: formatDurationMs(unlockedMs) + " unlocked",
         open: !brk.ended_at,
         noteKey: "note",
@@ -3952,19 +3978,55 @@ function buildChastityTimelineEvents(lockups) {
         noteKey: "release_notes",
         endedKind: lockup.ended_kind || "",
       });
+    } else {
+      // Active lockup — Eventual release at the top of the term
+      const planned = lockup.planned_end_at ? new Date(lockup.planned_end_at) : null;
+      const canSee =
+        youAreDominant || !!lockup.show_planned_end;
+      let value = "?";
+      if (planned && Number.isFinite(planned.getTime()) && canSee) {
+        const ms = planned.getTime() - Date.now();
+        if (ms <= 0) {
+          value = "overdue";
+        } else {
+          const days = Math.max(1, Math.ceil(ms / (24 * 60 * 60 * 1000)));
+          value = days === 1 ? "release in 1 day" : `release in ${days} days`;
+        }
+      }
+      events.push({
+        id: "eventual-" + lockup.id,
+        kind: "eventual_release",
+        lockupId: lockup.id,
+        at: new Date().toISOString(),
+        endAt: new Date().toISOString(),
+        startValue: lockup.planned_end_at || "",
+        endValue: lockup.planned_end_at || "",
+        title: "Eventual Release",
+        detail: canSee && planned
+          ? `Planned end ${formatLocalDateTime(lockup.planned_end_at)}`
+          : (youAreDominant
+            ? "Set a planned end and share the date to show a countdown to your partner."
+            : "Keyholder has not shared a release date."),
+        tags: [],
+        unlockedLabel: value,
+        open: false,
+        synthetic: true,
+        showPlannedEnd: !!lockup.show_planned_end,
+        plannedEndAt: lockup.planned_end_at || null,
+      });
     }
   });
   return events.sort((a, b) => new Date(b.at) - new Date(a.at));
 }
 
 /** Split timeline into terms: after Released!, or after unlocks longer than 18h. */
-function buildChastityTerms(lockups) {
-  const chrono = buildChastityTimelineEvents(lockups)
+function buildChastityTerms(lockups, opts = {}) {
+  const chrono = buildChastityTimelineEvents(lockups, opts)
     .slice()
     .sort((a, b) => {
       const dt = new Date(a.at) - new Date(b.at);
       if (dt !== 0) return dt;
-      const order = { lockup: 0, temp_unlock: 1, unlocked: 2, release: 3 };
+      const order = { lockup: 0, temp_unlock: 1, unlocked: 2, release: 3, eventual_release: 4 };
       return (order[a.kind] ?? 9) - (order[b.kind] ?? 9);
     });
 
@@ -4075,7 +4137,7 @@ function renderChastityTimeline(lockups, partnerName, opts = {}) {
     tagPresets = [],
     onSaved = null,
   } = opts;
-  const periods = buildChastityTerms(lockups);
+  const periods = buildChastityTerms(lockups, { youAreDominant });
   const body = el("div", { className: "chastity-timeline hidden" });
   const toggle = el("button", {
     type: "button",
@@ -4262,7 +4324,7 @@ function renderChastityTimeline(lockups, partnerName, opts = {}) {
           onClick: () => detail.classList.toggle("hidden"),
         }, event.title),
       ]);
-      if (canEdit && dynamicId && !event.synthetic) {
+      if (canEdit && dynamicId && !event.synthetic && event.kind !== "eventual_release") {
         header.appendChild(
           el("button", {
             type: "button",
@@ -4276,6 +4338,71 @@ function renderChastityTimeline(lockups, partnerName, opts = {}) {
           }, "\u270e")
         );
       }
+      if (youAreDominant && event.kind === "eventual_release" && dynamicId) {
+        header.appendChild(
+          el("button", {
+            type: "button",
+            className: "chastity-timeline-edit-btn",
+            title: event.showPlannedEnd ? "Hide release date from partner" : "Show release countdown to partner",
+            onClick: async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              try {
+                const turningOn = !event.showPlannedEnd;
+                const body = { show_planned_end: turningOn };
+                if (turningOn && !event.plannedEndAt) {
+                  const plannedInput = el("input", {
+                    type: "datetime-local",
+                    value: toLocalDatetimeValue(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()),
+                  });
+                  const ok = await new Promise((resolve) => {
+                    const overlay = el("div", { className: "card stack chastity-timeline-edit" }, [
+                      el("h3", {}, "Planned release"),
+                      el("p", { className: "muted" }, "Set a date to share a “release in N days” countdown with your partner."),
+                      el("label", { className: "stack" }, ["Planned end", plannedInput]),
+                      el("div", { className: "row" }, [
+                        el("button", {
+                          type: "button",
+                          className: "primary-btn",
+                          onClick: () => {
+                            if (!plannedInput.value) return;
+                            body.planned_end_at = datetimeLocalToIso(plannedInput.value);
+                            overlay.remove();
+                            resolve(true);
+                          },
+                        }, "Share countdown"),
+                        el("button", {
+                          type: "button",
+                          className: "ghost-btn",
+                          onClick: () => {
+                            overlay.remove();
+                            resolve(false);
+                          },
+                        }, "Cancel"),
+                      ]),
+                    ]);
+                    editHost.replaceChildren(overlay);
+                    editHost.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                  });
+                  if (!ok) return;
+                }
+                await api(`/dynamics/${dynamicId}/chastity/${event.lockupId}`, {
+                  method: "PATCH",
+                  body: JSON.stringify(body),
+                });
+                if (typeof onSaved === "function") onSaved();
+              } catch (err) {
+                showToast(err.message || "Could not update release visibility");
+              }
+            },
+          }, event.showPlannedEnd ? "Hide date" : "Share date")
+        );
+      }
+      const subLine = event.kind === "eventual_release"
+        ? el("p", { className: "chastity-timeline-sub" }, event.unlockedLabel || "?")
+        : event.unlockedLabel
+          ? el("p", { className: "chastity-timeline-sub" }, event.unlockedLabel)
+          : null;
       list.appendChild(
         el("div", { className: "chastity-timeline-item kind-" + event.kind }, [
           el("button", {
@@ -4286,17 +4413,17 @@ function renderChastityTimeline(lockups, partnerName, opts = {}) {
           }),
           el("div", { className: "chastity-timeline-main" }, [
             header,
-            event.unlockedLabel
-              ? el("p", { className: "chastity-timeline-sub" }, event.unlockedLabel)
-              : null,
-            el("p", { className: "muted chastity-timeline-when" }, formatLocalDateTime(event.at)),
+            subLine,
+            event.kind === "eventual_release"
+              ? null
+              : el("p", { className: "muted chastity-timeline-when" }, formatLocalDateTime(event.at)),
             detail,
           ]),
         ])
       );
 
       const older = events[index + 1];
-      if (older) {
+      if (older && event.kind !== "eventual_release" && older.kind !== "eventual_release") {
         const gapMs = new Date(event.at) - new Date(older.endAt || older.at);
         if (gapMs > 60 * 1000) {
           list.appendChild(el("div", { className: "chastity-timeline-gap" }, formatDurationMs(gapMs) + " locked"));
@@ -10937,7 +11064,6 @@ function renderChastity(dynamicId) {
             : null;
           const breakPicker = buildBreakTypePicker(settings, { isDominant: isDom });
           const note = el("input", { placeholder: "Optional note" });
-          const unlockTags = buildTagPicker(chastityTagPresets);
           const flowError = el("p", { className: "error hidden" });
           const nodes = [
             el("p", { className: "muted" }, completed
@@ -10947,10 +11073,8 @@ function renderChastity(dynamicId) {
           ];
           if (endTime) nodes.push(endTime.wrap);
           nodes.push(
-            el("p", { className: "muted" }, "Reason for unlock"),
             breakPicker.wrap,
             el("label", { className: "stack" }, ["Note", note]),
-            el("label", { className: "stack" }, ["Tags", unlockTags.row, unlockTags.custom]),
             flowError,
             el("button", {
               className: "primary-btn",
@@ -10958,7 +11082,7 @@ function renderChastity(dynamicId) {
               onClick: async () => {
                 const picked = breakPicker.getPayload();
                 if (!picked) {
-                  showFlowError(flowError, "Pick a reason for the unlock.");
+                  showFlowError(flowError, "Pick a tag for the unlock.");
                   return;
                 }
                 error.classList.add("hidden");
@@ -10972,7 +11096,7 @@ function renderChastity(dynamicId) {
                       started_at: startTime.getIso(),
                       ended_at: endTime ? endTime.getIso() : null,
                       note: note.value.trim(),
-                      tags: unlockTags.getTags(),
+                      tags: picked.tags || [],
                     }),
                   });
                   closeChastityFlow(flowHost);
@@ -11077,6 +11201,9 @@ function renderChastity(dynamicId) {
           const note = el("input", { placeholder: "Optional note" });
           const lockTags = buildTagPicker(chastityTagPresets);
           const plannedEnd = isDom ? el("input", { type: "datetime-local" }) : null;
+          const showPlannedEnd = isDom
+            ? el("input", { type: "checkbox", id: "chastity-show-planned-end" })
+            : null;
           const flowError = el("p", { className: "error hidden" });
           const nodes = [
             startTime.wrap,
@@ -11085,6 +11212,10 @@ function renderChastity(dynamicId) {
           ];
           if (plannedEnd) {
             nodes.splice(1, 0, el("label", { className: "stack" }, ["Planned end (optional)", plannedEnd]));
+            nodes.splice(2, 0, el("label", { className: "row wrap" }, [
+              showPlannedEnd,
+              "Show release countdown to partner (Eventual Release)",
+            ]));
           }
           nodes.push(
             flowError,
@@ -11102,6 +11233,7 @@ function renderChastity(dynamicId) {
                       device_notes: note.value.trim(),
                       started_at: startTime.getIso(),
                       planned_end_at: plannedEnd?.value ? datetimeLocalToIso(plannedEnd.value) : null,
+                      show_planned_end: !!(showPlannedEnd && showPlannedEnd.checked && plannedEnd?.value),
                       tags: lockTags.getTags(),
                     }),
                   });
@@ -11196,7 +11328,7 @@ function renderChastityPriorHistory(dynamicId) {
 
       const csvCard = el("div", { className: "card stack" }, [
         el("h2", {}, "CSV import"),
-        el("p", { className: "muted" }, "Download a template with example rows, edit in Excel or Google Sheets, then upload. Columns: submissive, started_at, ended_at, note, tags."),
+        el("p", { className: "muted" }, "Download a template with example rows, edit in Excel or Google Sheets, then upload. Columns: event (lock|unlock), submissive, started_at, ended_at, note, tags. Unlock rows become temporary unlocks inside the covering lock period."),
       ]);
       csvCard.appendChild(el("button", {
         type: "button",
@@ -11245,7 +11377,11 @@ function renderChastityPriorHistory(dynamicId) {
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.detail || data.message || "Import failed");
-          const bits = [`Imported ${data.created || 0} lockup(s).`];
+          const bits = [
+            `Imported ${(data.created_locks ?? data.created) || 0} lock period(s)`
+              + (data.created_unlocks != null ? ` and ${data.created_unlocks} unlock(s)` : "")
+              + ".",
+          ];
           if (data.error_count) bits.push(`${data.error_count} row error(s).`);
           status.textContent = bits.join(" ");
           if (data.errors?.length) {

@@ -134,6 +134,7 @@ class ChastityBreakType(str, enum.Enum):
     authorized_other = "authorized_other"
     authorized_undecided = "authorized_undecided"
     emergency_hygiene = "emergency_hygiene"
+    emergency_sleep = "emergency_sleep"
     emergency_medical = "emergency_medical"
     emergency_discomfort = "emergency_discomfort"
     emergency_security = "emergency_security"
@@ -798,6 +799,8 @@ class ChastityLockup(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     planned_end_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # When True, partners see "release in N days"; otherwise timeline shows Eventual Release · ?
+    show_planned_end: Mapped[bool] = mapped_column(Boolean, default=False)
     device_notes: Mapped[str] = mapped_column(Text, default="")
     release_notes: Mapped[str] = mapped_column(Text, default="")
     tags: Mapped[str] = mapped_column(String(500), default="")

@@ -1334,6 +1334,7 @@ class ChastityLockupStart(BaseModel):
     device_notes: str = Field(default="", max_length=500)
     started_at: datetime | None = None
     planned_end_at: datetime | None = None
+    show_planned_end: bool = False
     tags: list[str] = Field(default_factory=list)
 
 
@@ -1365,6 +1366,7 @@ class ChastityLockupUpdate(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     planned_end_at: datetime | None = None
+    show_planned_end: bool | None = None
     device_notes: str | None = None
     release_notes: str | None = None
     tags: list[str] | None = None
@@ -1420,6 +1422,7 @@ class ChastityLockupOut(BaseModel):
     started_at: datetime
     ended_at: datetime | None
     planned_end_at: datetime | None
+    show_planned_end: bool = False
     device_notes: str
     release_notes: str
     tags: list[str] = Field(default_factory=list)

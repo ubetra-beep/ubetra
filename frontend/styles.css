@@ -2529,6 +2529,15 @@ details[open] summary {
 .chastity-timeline-dot.kind-relock {
   background: #c9a227;
 }
+.chastity-timeline-dot.kind-eventual_release {
+  background: transparent;
+  border-color: #9aa3ad;
+  border-style: dashed;
+}
+.chastity-timeline-item.kind-eventual_release .chastity-timeline-sub {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
 
 .chastity-edit-notes summary {
   cursor: pointer;

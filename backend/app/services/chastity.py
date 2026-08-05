@@ -24,12 +24,21 @@ def merge_chastity_tag_presets(dynamic: Dynamic, new_tags: list[str] | None) -> 
     if not new_tags:
         return
     existing = tags_to_list(getattr(dynamic, "chastity_tag_presets", "") or "")
+    if not existing:
+        existing = list(DEFAULT_CHASTITY_TAG_PRESETS)
     cleaned = [str(t).strip() for t in new_tags if str(t).strip()]
     if not cleaned:
         return
     merged = list(dict.fromkeys([*existing, *cleaned]))
     if merged != existing:
         dynamic.chastity_tag_presets = tags_to_string(merged)
+
+
+def effective_chastity_tag_presets(dynamic: Dynamic | None) -> list[str]:
+    raw = tags_to_list(getattr(dynamic, "chastity_tag_presets", "") or "") if dynamic else []
+    if raw:
+        return raw
+    return list(DEFAULT_CHASTITY_TAG_PRESETS)
 
 
 def as_naive_utc(dt: datetime | None) -> datetime | None:
@@ -59,7 +68,8 @@ BREAK_TYPE_LABELS: dict[str, str] = {
     ChastityBreakType.authorized_ruin.value: "Ruined orgasm",
     ChastityBreakType.authorized_other.value: "Other (authorized)",
     ChastityBreakType.authorized_undecided.value: "Undecided",
-    ChastityBreakType.emergency_hygiene.value: "Hygiene (emergency)",
+    ChastityBreakType.emergency_hygiene.value: "Hygiene",
+    ChastityBreakType.emergency_sleep.value: "Sleep",
     ChastityBreakType.emergency_medical.value: "Medical emergency",
     ChastityBreakType.emergency_discomfort.value: "Discomfort",
     ChastityBreakType.emergency_security.value: "Security / safety",
@@ -67,8 +77,21 @@ BREAK_TYPE_LABELS: dict[str, str] = {
     ChastityBreakType.unauthorized_misbehavior.value: "Misbehavior",
 }
 
+# Reason chips are also chastity tags (same vocabulary on the timeline).
+DEFAULT_CHASTITY_TAG_PRESETS = [
+    "Hygiene",
+    "Sleep",
+    "Discomfort",
+    "Play",
+    "Denial / edging",
+    "Ruined orgasm",
+    "Medical emergency",
+    "Security / safety",
+]
+
 EMERGENCY_BREAK_TYPES = {
     ChastityBreakType.emergency_hygiene,
+    ChastityBreakType.emergency_sleep,
     ChastityBreakType.emergency_medical,
     ChastityBreakType.emergency_discomfort,
     ChastityBreakType.emergency_security,

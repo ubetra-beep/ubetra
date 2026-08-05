@@ -140,6 +140,7 @@ def _lockup_out(lockup: ChastityLockup, memberships: dict[str, Membership]) -> C
         started_at=lockup.started_at,
         ended_at=lockup.ended_at,
         planned_end_at=lockup.planned_end_at,
+        show_planned_end=bool(getattr(lockup, "show_planned_end", False)),
         device_notes=lockup.device_notes,
         release_notes=lockup.release_notes,
         tags=tags_to_list(getattr(lockup, "tags", "") or ""),
@@ -254,7 +255,9 @@ def get_chastity_tag_presets(
     get_membership(dynamic_id, user, db)
     dynamic = db.get(Dynamic, dynamic_id)
     assert dynamic is not None
-    return TagPresetsOut(presets=tags_to_list(getattr(dynamic, "chastity_tag_presets", "") or ""))
+    from ..services.chastity import effective_chastity_tag_presets
+
+    return TagPresetsOut(presets=effective_chastity_tag_presets(dynamic))
 
 
 @router.put("/{dynamic_id}/chastity/tags", response_model=TagPresetsOut)
@@ -640,6 +643,7 @@ def start_lockup(
         device_notes=payload.device_notes.strip(),
         started_at=started_at,
         planned_end_at=planned_end_at,
+        show_planned_end=bool(payload.show_planned_end) if planned_end_at else False,
         status=LockupStatus.active,
         record_type=ChastityRecordType.normal,
         tags=tags_to_string(payload.tags),
@@ -726,7 +730,7 @@ def create_historical_lockup(
     return _lockup_out(lockup, _membership_map(db, dynamic_id))
 
 
-HISTORICAL_CSV_HEADERS = ["submissive", "started_at", "ended_at", "note", "tags"]
+HISTORICAL_CSV_HEADERS = ["event", "submissive", "started_at", "ended_at", "note", "tags"]
 
 
 def _historical_csv_template_body(example_name: str = "Prince") -> str:
@@ -735,29 +739,52 @@ def _historical_csv_template_body(example_name: str = "Prince") -> str:
     writer.writerow(HISTORICAL_CSV_HEADERS)
     writer.writerow(
         [
+            "lock",
             example_name,
-            "2025-06-01T08:00:00",
-            "2025-06-04T20:30:00",
-            "Imported from previous app",
-            "cage, overnight",
+            "2026-06-20T10:20:00",
+            "2026-07-21T06:22:00",
+            "Imported lock period — unlock rows below become temporary unlocks",
+            "artebu",
         ]
     )
     writer.writerow(
         [
+            "unlock",
             example_name,
-            "2025-07-10 09:00",
-            "2025-07-12 18:00",
-            "Weekend lock",
+            "2026-06-26T00:30:00",
+            "2026-06-26T06:31:00",
             "",
+            "Discomfort",
         ]
     )
     writer.writerow(
         [
+            "unlock",
             example_name,
-            "2025-08-01T22:00:00Z",
-            "2025-08-08T22:00:00Z",
-            "Week-long historical lock",
-            "chaster",
+            "2026-06-27T22:23:00",
+            "2026-06-28T07:11:00",
+            "",
+            "Sleep",
+        ]
+    )
+    writer.writerow(
+        [
+            "lock",
+            example_name,
+            "2026-07-21T08:00:00",
+            "2026-07-22T12:00:00",
+            "Short follow-up lock",
+            "artebu",
+        ]
+    )
+    writer.writerow(
+        [
+            "unlock",
+            example_name,
+            "2026-07-21T22:20:00",
+            "2026-07-22T06:38:00",
+            "",
+            "Sleep",
         ]
     )
     return buf.getvalue()
@@ -873,10 +900,26 @@ async def import_historical_csv(
 
     from ..services.chastity import as_naive_utc, assert_no_lockup_overlap
 
-    created = 0
+    rows = list(reader)
+    created_locks = 0
+    created_unlocks = 0
     errors: list[str] = []
-    for idx, row in enumerate(reader, start=2):
+    # Pass 1 — lock periods (legacy rows without event= are treated as lock)
+    for idx, row in enumerate(rows, start=2):
         try:
+            event_raw = (
+                (row.get(headers["event"]) or "").strip().lower()
+                if "event" in headers
+                else "lock"
+            )
+            if event_raw in ("", "lock", "lockup", "locked"):
+                event_kind = "lock"
+            elif event_raw in ("unlock", "break", "pause", "temp_unlock"):
+                event_kind = "unlock"
+            else:
+                raise ValueError(f"Unknown event “{event_raw}” (use lock or unlock)")
+            if event_kind != "lock":
+                continue
             label = (row.get(headers["submissive"]) or "").strip()
             target = _resolve_sub_for_csv(db, dynamic_id, label, enrolled)
             if target is None:
@@ -913,18 +956,95 @@ async def import_historical_csv(
             dynamic = db.get(Dynamic, dynamic_id)
             if dynamic is not None:
                 merge_chastity_tag_presets(dynamic, tags)
-            created += 1
+            created_locks += 1
         except HTTPException as exc:
             errors.append(f"Row {idx}: {exc.detail}")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"Row {idx}: {exc}")
 
+    if created_locks:
+        db.flush()
+
+    # Pass 2 — unlock / pause rows → ChastityBreak inside the covering lockup
+    for idx, row in enumerate(rows, start=2):
+        try:
+            event_raw = (
+                (row.get(headers["event"]) or "").strip().lower()
+                if "event" in headers
+                else "lock"
+            )
+            if event_raw not in ("unlock", "break", "pause", "temp_unlock"):
+                continue
+            label = (row.get(headers["submissive"]) or "").strip()
+            target = _resolve_sub_for_csv(db, dynamic_id, label, enrolled)
+            if target is None:
+                raise ValueError(f"Unknown submissive “{label}”")
+            started_at = as_naive_utc(_parse_csv_datetime(row.get(headers["started_at"]) or ""))
+            ended_at = as_naive_utc(_parse_csv_datetime(row.get(headers["ended_at"]) or ""))
+            if started_at is None or ended_at is None or ended_at <= started_at:
+                raise ValueError("ended_at must be after started_at")
+            note = (row.get(headers.get("note", "note")) or "").strip()[:500]
+            tags_raw = (row.get(headers.get("tags", "tags")) or "").strip()
+            tags = [t.strip() for t in tags_raw.replace(";", ",").split(",") if t.strip()]
+            reason = tags[0] if tags else "Temporary unlock"
+            lockup = (
+                db.query(ChastityLockup)
+                .filter(
+                    ChastityLockup.dynamic_id == dynamic_id,
+                    ChastityLockup.for_membership_id == target.id,
+                    ChastityLockup.started_at <= started_at,
+                    ChastityLockup.ended_at.isnot(None),
+                    ChastityLockup.ended_at >= ended_at,
+                )
+                .order_by(ChastityLockup.started_at.desc())
+                .first()
+            )
+            if lockup is None:
+                raise ValueError(
+                    "No lock period covers this unlock — add a lock row first "
+                    f"({started_at.isoformat()}–{ended_at.isoformat()})"
+                )
+            # Prefer emergency_sleep / emergency_hygiene when tags match; else other.
+            break_type = ChastityBreakType.emergency_other
+            reason_l = reason.lower()
+            if "sleep" in reason_l:
+                break_type = ChastityBreakType.emergency_sleep
+            elif "hygiene" in reason_l:
+                break_type = ChastityBreakType.emergency_hygiene
+            elif "discomfort" in reason_l:
+                break_type = ChastityBreakType.emergency_discomfort
+            elif "medical" in reason_l:
+                break_type = ChastityBreakType.emergency_medical
+            if reason not in tags:
+                tags = [reason, *tags]
+            db.add(
+                ChastityBreak(
+                    lockup_id=lockup.id,
+                    break_type=break_type,
+                    break_reason=reason,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    note=note,
+                    tags=tags_to_string(tags),
+                    created_by_membership_id=membership.id,
+                )
+            )
+            dynamic = db.get(Dynamic, dynamic_id)
+            if dynamic is not None:
+                merge_chastity_tag_presets(dynamic, tags)
+            created_unlocks += 1
+        except HTTPException as exc:
+            errors.append(f"Row {idx}: {exc.detail}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Row {idx}: {exc}")
+
+    created = created_locks + created_unlocks
     if created:
         post_system_event(
             db,
             dynamic_id,
             membership,
-            f"imported {created} past chastity lockup(s) from CSV",
+            f"imported {created_locks} lock period(s) and {created_unlocks} unlock(s) from CSV",
         )
         db.commit()
     elif errors:
@@ -932,6 +1052,8 @@ async def import_historical_csv(
 
     return {
         "created": created,
+        "created_locks": created_locks,
+        "created_unlocks": created_unlocks,
         "error_count": len(errors),
         "errors": errors[:25],
     }
@@ -1106,6 +1228,10 @@ def create_break(
     from ..services.chastity import validate_break_times
 
     validate_break_times(lockup, started_at=started_at, ended_at=payload.ended_at)
+    # Reasons are tags — always include the reason label as a tag.
+    tag_list = [t for t in (payload.tags or []) if str(t).strip()]
+    if reason and reason not in tag_list:
+        tag_list = [reason, *tag_list]
     brk = ChastityBreak(
         lockup_id=lockup.id,
         break_type=break_type,
@@ -1113,13 +1239,13 @@ def create_break(
         started_at=started_at,
         ended_at=payload.ended_at,
         note=payload.note.strip(),
-        tags=tags_to_string(payload.tags),
+        tags=tags_to_string(tag_list),
         created_by_membership_id=membership.id,
     )
     db.add(brk)
     dynamic = db.get(Dynamic, dynamic_id)
     if dynamic is not None:
-        merge_chastity_tag_presets(dynamic, payload.tags)
+        merge_chastity_tag_presets(dynamic, tag_list)
     post_system_event(
         db,
         dynamic_id,
@@ -1217,6 +1343,13 @@ def update_lockup(
         lockup.planned_end_at = payload.planned_end_at
         if lockup.planned_end_at and lockup.planned_end_at > datetime.utcnow():
             lockup.timer_notified_at = None
+    if payload.show_planned_end is not None:
+        if not is_dominant(membership):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the keyholder can grant release-date visibility.",
+            )
+        lockup.show_planned_end = bool(payload.show_planned_end)
     if payload.device_notes is not None:
         lockup.device_notes = payload.device_notes.strip()
     if payload.release_notes is not None:

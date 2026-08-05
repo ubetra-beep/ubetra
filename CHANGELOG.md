@@ -3,6 +3,17 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.84] — 2026-08-05
+
+### Added
+- Chastity timeline: **Eventual Release** on active terms (`?` by default; Dom can share planned end → “release in N days”)
+- Historical CSV: `event` column with **lock** and **unlock** rows (pauses with tags), matching Artebu-style history
+- Sleep unlock tag / break type; Hygiene label no longer says “(emergency)”
+
+### Changed
+- Unlock reasons are tags (same chips on the timeline; no separate reason vs tags fields)
+- Service worker cache `ubetra-v84`
+
 ## [0.83] — 2026-08-05
 
 ### Added

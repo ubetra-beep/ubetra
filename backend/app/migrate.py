@@ -996,6 +996,15 @@ def run_migrations() -> None:
     if "makeup_granted_at" not in task_columns:
       conn.execute(text("ALTER TABLE tasks ADD COLUMN makeup_granted_at DATETIME"))
 
+    lockup_columns = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(chastity_lockups)")).fetchall()
+    }
+    if "show_planned_end" not in lockup_columns:
+      conn.execute(
+        text("ALTER TABLE chastity_lockups ADD COLUMN show_planned_end BOOLEAN DEFAULT 0")
+      )
+
     user_columns = {
       row[1]
       for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()
