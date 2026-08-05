@@ -206,6 +206,8 @@ def assist_journal(
         dynamic_context=ctx,
         system_instruction=JOURNAL_SYSTEM_INSTRUCTION,
         dynamic=dynamic,
+        tool_id="journals",
+        db=db,
     )
     return JournalAssistOut(text=(text or "").strip())
 
@@ -252,7 +254,14 @@ def domme_review_journal(
         "Write a short, in-character review as their dominant: what stands out about their headspace, "
         "and 1-2 concrete follow-up prompts, tasks, or reactions you could give them. Keep it under 180 words."
     )
-    text = generate_text(user=user, user_prompt=prompt, dynamic_context=ctx, dynamic=dynamic)
+    text = generate_text(
+        user=user,
+        user_prompt=prompt,
+        dynamic_context=ctx,
+        dynamic=dynamic,
+        tool_id="journals",
+        db=db,
+    )
     summary = (text or "").strip()
     if payload.post_system_event:
         post_system_event(

@@ -385,15 +385,15 @@ def build_system_instruction(user: User, dynamic: Dynamic | None = None) -> str:
     return "\n\n".join(parts)
 
 
-def generate_text(
+def generate_text_with_config(
     *,
+    config: ResolvedLlmConfig,
     user: User,
     user_prompt: str,
     dynamic_context: str,
     system_instruction: str | None = None,
     dynamic: Dynamic | None = None,
 ) -> str:
-    config = resolve_llm_config(user, dynamic)
     if not config.api_key:
         if config.using_server_default:
             raise HTTPException(
@@ -448,6 +448,39 @@ def generate_text(
     )
 
 
+def generate_text(
+    *,
+    user: User,
+    user_prompt: str,
+    dynamic_context: str,
+    system_instruction: str | None = None,
+    dynamic: Dynamic | None = None,
+    tool_id: str | None = None,
+    db: Session | None = None,
+) -> str:
+    config = resolve_llm_config(user, dynamic)
+    if tool_id and db is not None:
+        from .ai_services import resolve_config_for_tool, tool_status
+
+        st = tool_status(db, user, dynamic, tool_id)
+        if st.configured:
+            config, _svc = resolve_config_for_tool(db, user, dynamic, tool_id)
+        elif not is_llm_configured(user, dynamic):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=st.issue or f"AI tool “{tool_id}” is not configured.",
+            )
+
+    return generate_text_with_config(
+        config=config,
+        user=user,
+        user_prompt=user_prompt,
+        dynamic_context=dynamic_context,
+        system_instruction=system_instruction,
+        dynamic=dynamic,
+    )
+
+
 def generate_act_of_submission(
     *,
     user: User,
@@ -455,6 +488,7 @@ def generate_act_of_submission(
     submissive_name: str,
     dynamic: Dynamic | None = None,
     act_type: dict | None = None,
+    db: Session | None = None,
 ) -> str:
     type_block = ""
     if act_type:
@@ -475,11 +509,23 @@ Return:
 The act MUST fit the chosen act category and align with interview summaries and shared context.
 Avoid requiring purchases, third parties, or public exposure unless context strongly supports it.
 """
-    return generate_text(user=user, user_prompt=prompt, dynamic_context=dynamic_context, dynamic=dynamic)
+    return generate_text(
+        user=user,
+        user_prompt=prompt,
+        dynamic_context=dynamic_context,
+        dynamic=dynamic,
+        tool_id="acts",
+        db=db,
+    )
 
 
 def generate_recommendation(
-    *, user: User, dynamic_context: str, focus: str = "", dynamic: Dynamic | None = None
+    *,
+    user: User,
+    dynamic_context: str,
+    focus: str = "",
+    dynamic: Dynamic | None = None,
+    db: Session | None = None,
 ) -> str:
     extra = f"\nFocus area requested: {focus}" if focus.strip() else ""
     prompt = f"""Suggest ONE scene idea or technique this couple could try next.{extra}
@@ -491,4 +537,11 @@ Category: <short category name>
 Idea: <2-3 sentence recommendation>
 Why it fits: <1 sentence>
 """
-    return generate_text(user=user, user_prompt=prompt, dynamic_context=dynamic_context, dynamic=dynamic)
+    return generate_text(
+        user=user,
+        user_prompt=prompt,
+        dynamic_context=dynamic_context,
+        dynamic=dynamic,
+        tool_id="assistant",
+        db=db,
+    )

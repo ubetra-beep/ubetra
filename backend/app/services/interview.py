@@ -159,6 +159,7 @@ def _generate_summary(
     context: str,
     history: str,
     extra_note: str = "",
+    db: Session | None = None,
 ) -> str:
     prompt = f"""Based on this interview, write only:
 SUMMARY: <2-4 paragraphs capturing what this partner wants, boundaries, and tone>
@@ -172,6 +173,8 @@ Interview:
         dynamic_context=context,
         system_instruction=INTERVIEW_SYSTEM,
         dynamic=dynamic,
+        tool_id="interview",
+        db=db,
     )
     _, summary = _parse_completion(f"{INTERVIEW_COMPLETE}\n{summary_raw}")
     if summary:
@@ -225,6 +228,8 @@ Do not include INTERVIEW_COMPLETE yet."""
         dynamic_context=context,
         system_instruction=INTERVIEW_SYSTEM,
         dynamic=dynamic,
+        tool_id="interview",
+        db=db,
     )
     visible, summary = _parse_completion(raw)
     message = InterviewMessage(
@@ -295,6 +300,8 @@ SUMMARY: <2-4 paragraph summary>"""
         dynamic_context=context,
         system_instruction=INTERVIEW_SYSTEM,
         dynamic=dynamic,
+        tool_id="interview",
+        db=db,
     )
     visible, summary = _parse_completion(raw)
     force_complete = (
@@ -311,6 +318,7 @@ SUMMARY: <2-4 paragraph summary>"""
             context=context,
             history=history,
             extra_note=f"Assistant draft reply:\n{visible or raw}",
+            db=db,
         )
 
     assistant_msg = InterviewMessage(
@@ -356,6 +364,7 @@ def complete_interview(
         dynamic=dynamic,
         context=context,
         history=history,
+        db=db,
     )
     note = InterviewMessage(
         membership_id=membership.id,

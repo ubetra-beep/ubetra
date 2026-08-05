@@ -132,6 +132,7 @@ def generate_public_code_word(
     user: User,
     dynamic: Dynamic,
     content: str,
+    db=None,
 ) -> str:
     if not is_llm_configured(user, dynamic):
         words = [w for w in content.split() if w.isalpha()]
@@ -157,6 +158,8 @@ Private task:
             "You invent innocent code words for private tasks. "
             "Never include adult or kink content. Reply with only the code phrase."
         ),
+        tool_id="tasks",
+        db=db,
     )
     line = (raw or "").strip().splitlines()[0].strip().strip("\"'")
     return line[:200] or "Personal errand"
@@ -182,6 +185,7 @@ def push_task_to_google(
             user=actor,
             dynamic=dynamic,
             content=task.content,
+            db=db,
         )
 
     access = refresh_access_token(owner)

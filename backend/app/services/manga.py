@@ -8,9 +8,10 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from ..models import Dynamic, MangaComic, MangaPanel, Membership, User
+from .ai_services import resolve_config_for_tool, tool_status
 from .context import build_dynamic_context
 from .features import is_feature_enabled
-from .llm import generate_text, is_llm_configured, resolve_llm_config_for_dynamic
+from .llm import generate_text, is_llm_configured
 from .openai_client import generate_image_openai_compatible
 
 MODE_WARNINGS = {
@@ -85,8 +86,12 @@ def generate_manga(
         raise HTTPException(status_code=403, detail="Monthly manga is not enabled for this dynamic.")
     if mode not in MODE_WARNINGS:
         raise HTTPException(status_code=400, detail="Unknown manga mode")
-    if not is_llm_configured(user, dynamic):
-        raise HTTPException(status_code=400, detail="Configure an AI provider first.")
+    script_st = tool_status(db, user, dynamic, "manga_script")
+    if not script_st.configured and not is_llm_configured(user, dynamic):
+        raise HTTPException(
+            status_code=400,
+            detail=script_st.issue or "Configure an AI provider for manga scripts first.",
+        )
 
     ym = year_month_now()
     existing = get_month_comic(db, dynamic.id, ym)
@@ -132,6 +137,8 @@ Rules:
         user_prompt=prompt,
         dynamic_context=context,
         dynamic=dynamic,
+        tool_id="manga_script",
+        db=db,
     )
     try:
         data = _extract_json(raw)
@@ -147,8 +154,12 @@ Rules:
         raise HTTPException(status_code=502, detail="Manga had no panels")
 
     warnings = [MODE_WARNINGS[mode]]
-    config = resolve_llm_config_for_dynamic(user, dynamic)
+    image_cfg, image_svc = resolve_config_for_tool(db, user, dynamic, "manga_image")
     want_images = mode in ("hybrid", "full")
+    image_st = tool_status(db, user, dynamic, "manga_image")
+    if want_images and not image_st.configured:
+        warnings.append(image_st.issue or "No image AI service assigned — using captioned frames.")
+        want_images = False
 
     if existing:
         for panel in list(existing.panels):
@@ -172,6 +183,12 @@ Rules:
         db.add(comic)
         db.flush()
 
+    img_model = "dall-e-3"
+    if image_svc and (image_svc.image_model or "").strip():
+        img_model = image_svc.image_model.strip()
+    elif image_cfg.model:
+        img_model = image_cfg.model
+
     for idx, panel in enumerate(panels_in[:8]):
         if not isinstance(panel, dict):
             continue
@@ -182,21 +199,19 @@ Rules:
         image_error = ""
         if want_images:
             try:
-                # Prefer OpenAI-compatible image endpoints when base_url/key exist.
                 image_data = generate_image_openai_compatible(
-                    api_key=config.api_key if config.api_key != "local" else "",
+                    api_key=image_cfg.api_key if image_cfg.api_key != "local" else "",
                     prompt=(
                         "Manga panel, black and white ink, adult consensual couple, "
                         f"{visual}"
                     )[:1000],
-                    model="dall-e-3",
-                    base_url=config.base_url or "https://api.openai.com/v1",
+                    model=img_model,
+                    base_url=image_cfg.base_url or "https://api.openai.com/v1",
                 )
             except HTTPException as exc:
                 image_error = str(exc.detail)
                 warnings.append(f"Panel {idx + 1} image refused/failed: {image_error}")
                 if mode == "full":
-                    # Keep going; UI shows captioned frame
                     pass
         row = MangaPanel(
             comic_id=comic.id,

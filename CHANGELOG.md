@@ -3,6 +3,16 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.85] — 2026-08-05
+
+### Added
+- Multiple AI connections (text / adult / images) with Batch test probes (text, NSFW text, image, NSFW image)
+- Advanced AI routing: assign services per tool; red labels + recommendations when unassigned
+- Circled (!) badges on AI tools that need configuration (tap for fix summary)
+
+### Changed
+- Service worker cache `ubetra-v85`
+
 ## [0.84] — 2026-08-05
 
 ### Added

@@ -85,7 +85,7 @@ Return ONLY valid JSON — an array of objects:
 
 No markdown fences, no commentary outside the JSON array."""
 
-    raw = generate_text(user=user, user_prompt=prompt, dynamic_context=context, dynamic=dynamic)
+    raw = generate_text(user=user, user_prompt=prompt, dynamic_context=context, dynamic=dynamic, tool_id="acts", db=db)
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)

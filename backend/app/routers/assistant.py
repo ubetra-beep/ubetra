@@ -182,6 +182,7 @@ def playtime_subjects(
         dynamic=dynamic,
         exclude_subjects=payload.exclude_subjects,
         note=payload.note,
+        db=db,
     )
     return PlaytimeSubjectsOut(
         effort=payload.effort,
@@ -213,6 +214,7 @@ def playtime_scene(
         dynamic=dynamic,
         avoid_summary=payload.avoid_summary,
         note=payload.note,
+        db=db,
     )
     return PlaytimeSceneOut(
         effort=payload.effort,
@@ -250,6 +252,7 @@ def playtime_feedback(
             dynamic=dynamic,
             avoid_summary=avoid,
             note=payload.note,
+            db=db,
         )
         return PlaytimeFeedbackOut(
             recorded=True,
@@ -306,6 +309,7 @@ def playtime_spin_suggestions(
             faces=payload.faces,
             dominant_name=dominant_name,
             submissive_name=submissive_name,
+            db=db,
         )
         options.extend(extras)
     except HTTPException:
@@ -338,6 +342,7 @@ def playtime_spin_post_orgasm_tasks(
             dynamic=dynamic,
             dominant_name=dominant_name,
             submissive_name=submissive_name,
+            db=db,
         )
     except HTTPException:
         from ..services.spin_wheel import POST_ORGASM_PRESETS
@@ -586,7 +591,7 @@ def create_recommendation(
         requesting_membership_id=membership.id,
         include_tracking=bool(user.assistant_include_tracking),
     )
-    raw = generate_recommendation(user=user, dynamic_context=context, focus=focus, dynamic=dynamic)
+    raw = generate_recommendation(user=user, dynamic_context=context, focus=focus, dynamic=dynamic, db=db)
 
     category = "Recommendation"
     hint = ""

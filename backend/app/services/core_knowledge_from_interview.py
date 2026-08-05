@@ -86,6 +86,8 @@ Keep each section concise (1-4 sentences). Do not invent facts not implied by th
             user_prompt=prompt,
             dynamic_context=f"Dynamic: {dynamic.name}",
             dynamic=dynamic,
+            tool_id="core_knowledge",
+            db=db,
         )
         parsed = _parse_fielded_response(raw or "")
 

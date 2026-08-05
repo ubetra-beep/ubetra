@@ -302,6 +302,8 @@ Tailor examples to their SPTI profile and stated preferences in context. Keep ea
         user_prompt=prompt,
         dynamic_context=context,
         dynamic=dynamic,
+        tool_id="interests",
+        db=db,
     )
     examples = [
         line.lstrip("-• ").strip()

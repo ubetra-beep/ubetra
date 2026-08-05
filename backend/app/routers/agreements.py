@@ -298,6 +298,8 @@ CONTENT: <2-4 sentences>
         user_prompt=prompt,
         dynamic_context=context,
         dynamic=dynamic,
+        tool_id="agreements",
+        db=db,
     )
 
     items: list[SuggestedAgreementOut] = []

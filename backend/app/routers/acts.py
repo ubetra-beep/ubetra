@@ -170,6 +170,7 @@ def request_act(
         submissive_name=membership.display_name,
         dynamic=dynamic,
         act_type=act_type,
+        db=db,
     )
 
     act = ActOfSubmission(

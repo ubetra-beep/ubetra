@@ -53,6 +53,7 @@ def generate_playtime_subjects(
     dynamic: Dynamic | None = None,
     exclude_subjects: list[str] | None = None,
     note: str = "",
+    db=None,
 ) -> list[dict[str, str]]:
     effort_label = EFFORT_LABELS.get(effort, EFFORT_LABELS["med"])
     lean_label = LEAN_LABELS.get(lean, LEAN_LABELS["equal"])
@@ -89,6 +90,8 @@ Return ONLY valid JSON (no markdown):
         user_prompt=prompt,
         dynamic_context=dynamic_context,
         dynamic=dynamic,
+        tool_id="playtime",
+        db=db,
     )
     data = _extract_json(raw)
     items = data.get("subjects") if isinstance(data, dict) else data
@@ -128,6 +131,7 @@ def generate_playtime_scene(
     dynamic: Dynamic | None = None,
     avoid_summary: str = "",
     note: str = "",
+    db=None,
 ) -> dict[str, str]:
     effort_label = EFFORT_LABELS.get(effort, EFFORT_LABELS["med"])
     lean_label = LEAN_LABELS.get(lean, LEAN_LABELS["equal"])
@@ -163,6 +167,8 @@ Return ONLY valid JSON (no markdown):
         user_prompt=prompt,
         dynamic_context=dynamic_context,
         dynamic=dynamic,
+        tool_id="playtime",
+        db=db,
     )
     data = _extract_json(raw)
     if not isinstance(data, dict):

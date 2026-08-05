@@ -255,6 +255,7 @@ def generate_spin_extra_ideas(
     faces: int,
     dominant_name: str,
     submissive_name: str,
+    db=None,
 ) -> list[dict]:
     prompt = f"""The keyholder is configuring a "Spin the Wheel" denial/release game.
 Context: {submissive_name} has almost earned release or a full orgasm.
@@ -286,6 +287,8 @@ fail_behavior must be one of: respin, lock_up, respin_or_retry_edges, none
         user_prompt=prompt,
         dynamic_context=dynamic_context,
         dynamic=dynamic,
+        tool_id="spin_wheel",
+        db=db,
     )
     data = _extract_json(raw)
     ideas = data.get("ideas") if isinstance(data, dict) else data
@@ -328,6 +331,7 @@ def generate_post_orgasm_tasks(
     dynamic: Dynamic | None,
     dominant_name: str,
     submissive_name: str,
+    db=None,
 ) -> list[dict]:
     prompt = f"""{submissive_name} just earned a Full Orgasm in a keyholder game.
 Propose 3–5 post-orgasm service tasks {dominant_name} can assign (massage, facesitting,
@@ -345,6 +349,8 @@ Return ONLY valid JSON:
         user_prompt=prompt,
         dynamic_context=dynamic_context,
         dynamic=dynamic,
+        tool_id="spin_wheel",
+        db=db,
     )
     data = _extract_json(raw)
     tasks = data.get("tasks") if isinstance(data, dict) else data

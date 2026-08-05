@@ -598,6 +598,61 @@ function showToast(message, { duration = 3200 } = {}) {
   }, duration);
 }
 
+async function fetchAiToolStatus(toolId, dynamicId) {
+  const q = dynamicId ? `?dynamic_id=${encodeURIComponent(dynamicId)}` : "";
+  return api(`/settings/ai-tools/${encodeURIComponent(toolId)}/status${q}`);
+}
+
+function showAiFixSummary(status) {
+  const bits = [status.issue || `${status.label} needs configuration.`];
+  if (status.recommendations?.length) {
+    bits.push(
+      "Recommended: "
+        + status.recommendations.map((r) => r.label).join(", ")
+    );
+  }
+  showToast(bits.join(" "), { duration: 6500 });
+}
+
+/** Circled (!) for AI tools that are not ready. Click for a short fix summary. */
+function aiConfigBadge(toolId, { dynamicId = null, status = null } = {}) {
+  const btn = el("button", {
+    type: "button",
+    className: "ai-config-badge hidden",
+    title: "AI configuration needed",
+    "aria-label": "AI configuration needed",
+  }, "!");
+  const apply = (st) => {
+    if (!st || st.configured) {
+      btn.classList.add("hidden");
+      return;
+    }
+    btn.classList.remove("hidden");
+    if (st.assigned_unknown || st.needs_assignment) {
+      btn.classList.add("ai-config-badge-warn");
+    }
+    btn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showAiFixSummary(st);
+    };
+  };
+  if (status) {
+    apply(status);
+  } else {
+    fetchAiToolStatus(toolId, dynamicId)
+      .then(apply)
+      .catch(() => btn.classList.add("hidden"));
+  }
+  return btn;
+}
+
+function capChip(label, value) {
+  const cls = value === true ? "ai-cap ok" : value === false ? "ai-cap fail" : "ai-cap unknown";
+  const text = value === true ? `${label}: yes` : value === false ? `${label}: no` : `${label}: ?`;
+  return el("span", { className: cls }, text);
+}
+
 const ORGASM_TYPE_PRESETS = [
   "Full Orgasm",
   "Ruined Orgasm",
@@ -6068,7 +6123,10 @@ function renderAssistant(dynamicId) {
           subtitle: "Tasks, scenes, and release tools.",
           sectionFilter: "playtime",
         }),
-        el("p", { className: "muted" }, `Provider: ${status.llm_provider} · Model: ${status.llm_model}`),
+        el("div", { className: "row wrap" }, [
+          el("p", { className: "muted" }, `Provider: ${status.llm_provider} · Model: ${status.llm_model}`),
+          aiConfigBadge("assistant", { dynamicId }),
+        ]),
       ]);
 
       const dynamic = state.currentDynamic;
@@ -12319,6 +12377,11 @@ function renderManga(dynamicId) {
           subtitle: "One comic per month from your dynamic context. Off by default.",
           sectionFilter: "playtime",
         }),
+        el("div", { className: "row wrap" }, [
+          aiConfigBadge("manga_script", { dynamicId }),
+          aiConfigBadge("manga_image", { dynamicId }),
+          el("span", { className: "muted" }, "AI: script / images"),
+        ]),
         el("button", {
           className: "ghost-btn",
           type: "button",
@@ -14175,6 +14238,108 @@ function renderChat(dynamicId) {
     });
 }
 
+function renderAiRoutingSettings() {
+  const { query } = parseRoute();
+  const dynamicId = query.get("dynamic") || getActiveDynamicId();
+  setViewContent(el("p", { className: "muted" }, "Loading AI routing…"));
+  const q = dynamicId ? `?dynamic_id=${encodeURIComponent(dynamicId)}` : "";
+  Promise.all([
+    api(`/settings/ai-routing${q}`),
+    api("/settings/llm/providers"),
+  ])
+    .then(([routing]) => {
+      const error = el("div", { className: "error hidden" });
+      const status = el("p", { className: "muted" });
+      const stack = el("div", { className: "stack" }, [
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => navigate(dynamicId ? `/settings?dynamic=${encodeURIComponent(dynamicId)}` : "/settings"),
+        }, "← Settings"),
+        el("h1", {}, "Advanced AI routing"),
+        el("p", { className: "muted" },
+          "Assign a named AI connection to each tool. Labels in red need a service assigned (or a recommended provider added). Keyholder only."
+        ),
+        error,
+        status,
+      ]);
+
+      const drafts = {};
+      (routing.tools || []).forEach((tool) => {
+        drafts[tool.tool_id] = tool.service_id || "";
+        const select = el("select");
+        select.appendChild(el("option", { value: "" }, "— Not assigned —"));
+        (routing.services || []).forEach((svc) => {
+          const opt = el("option", { value: svc.id }, `${svc.name} (${svc.provider})`);
+          if (svc.id === tool.service_id) opt.selected = true;
+          select.appendChild(opt);
+        });
+        select.addEventListener("change", () => {
+          drafts[tool.tool_id] = select.value;
+        });
+
+        const label = el("strong", {
+          className: (!tool.service_id || tool.assigned_unknown || tool.needs_assignment)
+            ? "ai-tool-label unmet"
+            : "ai-tool-label",
+        }, tool.label);
+
+        const card = el("div", { className: "card stack" }, [
+          el("div", { className: "row wrap" }, [
+            label,
+            aiConfigBadge(tool.tool_id, { dynamicId, status: tool }),
+          ]),
+          el("p", { className: "muted" }, tool.description),
+          el("p", { className: "muted" }, `Needs: ${(tool.needs || []).join(", ") || "—"}`),
+          el("label", {}, ["Assigned service", select]),
+        ]);
+
+        if (!tool.service_id || !tool.configured) {
+          const helper = el("div", { className: "ai-recommend-box" }, [
+            el("p", {}, tool.issue || "Assign a compatible service, or add one from the list below."),
+          ]);
+          if (tool.recommendations?.length) {
+            helper.appendChild(el("p", { className: "muted" }, "Recommended to set up:"));
+            tool.recommendations.forEach((rec) => {
+              helper.appendChild(el("div", { className: "stack" }, [
+                el("strong", {}, rec.label),
+                el("p", { className: "muted" }, rec.note || ""),
+                rec.key_url
+                  ? el("a", { href: rec.key_url, target: "_blank", rel: "noopener" }, "Get API key →")
+                  : null,
+              ]));
+            });
+          }
+          card.appendChild(helper);
+        }
+        stack.appendChild(card);
+      });
+
+      stack.appendChild(el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: async () => {
+          error.classList.add("hidden");
+          try {
+            const updated = await api(`/settings/ai-routing${q}`, {
+              method: "PUT",
+              body: JSON.stringify({ routes: drafts }),
+            });
+            status.textContent = `Saved ${Object.keys(updated.routes || {}).length} route(s).`;
+            showToast("AI routing saved");
+            renderAiRoutingSettings();
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+          }
+        },
+      }, "Save tool assignments"));
+
+      setViewContent(stack);
+    })
+    .catch((err) => setViewContent(el("div", { className: "error" }, err.message)));
+}
+
 function renderSettings() {
   viewEl.replaceChildren(el("p", { className: "muted" }, "Loading settings..."));
   const { query } = parseRoute();
@@ -15175,6 +15340,191 @@ function renderSettings() {
           },
         }, "Clear saved API key"),
       ]));
+
+      // Multi AI connections + adult/image + advanced routing
+      const aiConnCard = el("div", { className: "card stack" }, [
+        el("h2", {}, "AI connections"),
+        el("p", { className: "muted" },
+          "Add multiple providers (text, adult, images). Use Batch test to see what each connection allows. Assign tools under Advanced AI routing."
+        ),
+      ]);
+      const aiConnList = el("div", { className: "stack ai-conn-list" });
+      const aiConnError = el("div", { className: "error hidden" });
+      const aiDynQ = initialDynamicId
+        ? `?dynamic_id=${encodeURIComponent(initialDynamicId)}`
+        : "";
+
+      async function refreshAiConnections() {
+        aiConnError.classList.add("hidden");
+        try {
+          const services = await api(`/settings/ai-services${aiDynQ}`);
+          aiConnList.replaceChildren();
+          if (!services.length) {
+            aiConnList.appendChild(el("p", { className: "muted" }, "No named connections yet — legacy key above still works until you add one."));
+          }
+          services.forEach((svc) => {
+            const row = el("div", { className: "stack ai-conn-row" }, [
+              el("div", { className: "row wrap" }, [
+                el("strong", {}, svc.name),
+                el("span", { className: "muted" }, `${svc.provider} · ${svc.model || "—"}${svc.purpose && svc.purpose !== "general" ? ` · ${svc.purpose}` : ""}`),
+              ]),
+              el("div", { className: "row wrap ai-cap-row" }, [
+                capChip("text", svc.cap_text),
+                capChip("NSFW text", svc.cap_text_nsfw),
+                capChip("image", svc.cap_image),
+                capChip("NSFW image", svc.cap_image_nsfw),
+              ]),
+              el("div", { className: "row wrap" }, [
+                el("button", {
+                  type: "button",
+                  className: "ghost-btn",
+                  onClick: async () => {
+                    try {
+                      showToast("Running NSFW/text/image probes…");
+                      const updated = await api(`/settings/ai-services/${svc.id}/probe${aiDynQ}`, { method: "POST" });
+                      showToast(
+                        `Probe done · text ${updated.cap_text ? "✓" : "✗"} · NSFW ${updated.cap_text_nsfw ? "✓" : "✗"} · img ${updated.cap_image ? "✓" : "✗"} · NSFW img ${updated.cap_image_nsfw ? "✓" : "✗"}`,
+                        { duration: 5000 }
+                      );
+                      refreshAiConnections();
+                    } catch (err) {
+                      aiConnError.textContent = err.message;
+                      aiConnError.classList.remove("hidden");
+                    }
+                  },
+                }, "Batch test"),
+                el("button", {
+                  type: "button",
+                  className: "ghost-btn",
+                  onClick: async () => {
+                    try {
+                      await api(`/settings/ai-services/${svc.id}${aiDynQ}`, {
+                        method: "PATCH",
+                        body: JSON.stringify({ set_as_adult: true, purpose: "adult" }),
+                      });
+                      showToast(`“${svc.name}” set as adult / images default`);
+                      refreshAiConnections();
+                    } catch (err) {
+                      aiConnError.textContent = err.message;
+                      aiConnError.classList.remove("hidden");
+                    }
+                  },
+                }, "Use for adult/images"),
+                el("button", {
+                  type: "button",
+                  className: "ghost-btn",
+                  onClick: async () => {
+                    if (!confirm(`Delete “${svc.name}”?`)) return;
+                    await api(`/settings/ai-services/${svc.id}`, { method: "DELETE" });
+                    refreshAiConnections();
+                  },
+                }, "Delete"),
+              ]),
+            ]);
+            if (svc.test_log?.length) {
+              const details = el("details", {}, [
+                el("summary", { className: "muted" }, "Last probe log"),
+                ...svc.test_log.map((line) => el("p", { className: "muted" },
+                  `${line.probe}: ${line.ok ? "ok" : "fail"} — ${line.detail || ""}`
+                )),
+              ]);
+              row.appendChild(details);
+            }
+            aiConnList.appendChild(row);
+          });
+        } catch (err) {
+          aiConnError.textContent = err.message;
+          aiConnError.classList.remove("hidden");
+        }
+      }
+      refreshAiConnections();
+
+      const addName = el("input", { placeholder: "Name (e.g. LM Studio home)" });
+      const addProvider = el("select");
+      providers.forEach((p) => {
+        if (p.id === "server") return;
+        addProvider.appendChild(el("option", { value: p.id }, p.label));
+      });
+      const addPurpose = el("select", {}, [
+        el("option", { value: "general" }, "General text"),
+        el("option", { value: "adult" }, "Adult / NSFW text"),
+        el("option", { value: "images" }, "Images / manga panels"),
+      ]);
+      const addModel = el("input", { placeholder: "Model id" });
+      const addImageModel = el("input", { placeholder: "Image model (optional)" });
+      const addKey = el("input", { type: "password", placeholder: "API key", autocomplete: "off" });
+      const addBase = el("input", { type: "url", placeholder: "Base URL (for LM Studio / compatible)" });
+      const shareDyn = el("input", { type: "checkbox" });
+      shareDyn.checked = true;
+
+      function syncAddProviderDefaults() {
+        const p = providerMap[addProvider.value];
+        if (p?.default_model && !addModel.value) addModel.value = p.default_model;
+        if (p?.needs_base_url) {
+          addBase.classList.remove("hidden");
+          if (!addBase.value && p.default_base_url) addBase.value = p.default_base_url;
+        } else {
+          addBase.classList.add("hidden");
+        }
+      }
+      addProvider.addEventListener("change", syncAddProviderDefaults);
+      syncAddProviderDefaults();
+
+      aiConnCard.append(
+        aiConnList,
+        aiConnError,
+        el("h3", {}, "Add connection"),
+        el("label", {}, ["Name", addName]),
+        el("label", {}, ["Provider", addProvider]),
+        el("label", {}, ["Purpose", addPurpose]),
+        el("label", {}, ["Model", addModel]),
+        el("label", {}, ["Image model", addImageModel]),
+        el("label", {}, ["API key", addKey]),
+        el("label", {}, ["Base URL", addBase]),
+        el("label", { className: "checkbox-label" }, [
+          shareDyn,
+          " Share with this dynamic (partner can use it)",
+        ]),
+        el("button", {
+          type: "button",
+          className: "primary-btn",
+          onClick: async () => {
+            aiConnError.classList.add("hidden");
+            try {
+              const created = await api(`/settings/ai-services${aiDynQ}`, {
+                method: "POST",
+                body: JSON.stringify({
+                  name: addName.value.trim() || "AI connection",
+                  provider: addProvider.value,
+                  model: addModel.value.trim(),
+                  image_model: addImageModel.value.trim(),
+                  api_key: addKey.value.trim() || null,
+                  base_url: addBase.value.trim(),
+                  purpose: addPurpose.value,
+                  share_with_dynamic: !!shareDyn.checked,
+                }),
+              });
+              addKey.value = "";
+              showToast(`Added “${created.name}” — run Batch test to log NSFW/image compatibility`);
+              refreshAiConnections();
+            } catch (err) {
+              aiConnError.textContent = err.message;
+              aiConnError.classList.remove("hidden");
+            }
+          },
+        }, "Add AI connection"),
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => navigate(
+            initialDynamicId
+              ? `/settings/ai-routing?dynamic=${encodeURIComponent(initialDynamicId)}`
+              : "/settings/ai-routing"
+          ),
+        }, "Advanced AI routing →"),
+      );
+      stack.appendChild(aiConnCard);
+
       const assistantDomOnly = !!(assistantSettings.dynamic_id && assistantSettings.you_are_dominant === false);
       const assistantToneBlock = lockedSettingsWrap({
         locked: assistantDomOnly,
@@ -15825,7 +16175,10 @@ async function renderRoute() {
       || (parts[0] === "dynamic" && parts[2] === "survey");
     if (!onboardingAllowed) return renderOnboarding();
   }
-  if (parts[0] === "settings") return renderSettings();
+  if (parts[0] === "settings") {
+    if (parts[1] === "ai-routing") return renderAiRoutingSettings();
+    return renderSettings();
+  }
   // Legacy History URL — keep Dynamic tab active, never a bottom-nav item.
   if (parts[0] === "dashboard") {
     if (parts[1]) navigate(`/dynamic/${parts[1]}/history`);

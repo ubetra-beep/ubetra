@@ -791,6 +791,8 @@ Write 2-4 sentences in assistant-domme tone: acknowledge the miss, set clear exp
         user_prompt=prompt,
         dynamic_context=ctx,
         dynamic=dynamic,
+        tool_id="tasks",
+        db=db,
     )
     return TaskMakeupAssistOut(note=(note or "").strip())
 

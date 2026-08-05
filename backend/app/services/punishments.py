@@ -265,7 +265,7 @@ Return ONLY a JSON array of objects with keys:
 
 Do not wrap in markdown. JSON array only.
 """
-    raw = generate_text(user=user, user_prompt=prompt, dynamic_context=context, dynamic=dynamic)
+    raw = generate_text(user=user, user_prompt=prompt, dynamic_context=context, dynamic=dynamic, tool_id="punishments", db=db)
     ideas = _parse_ideas_json(raw, options)
     report.ideas = json.dumps(ideas)
     report.status = "ideas"

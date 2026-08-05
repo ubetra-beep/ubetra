@@ -165,6 +165,9 @@ class User(Base):
     llm_api_key: Mapped[str] = mapped_column(String(512), default="")
     llm_model: Mapped[str] = mapped_column(String(120), default="")
     llm_base_url: Mapped[str] = mapped_column(String(512), default="")
+    # Preferred default text / adult-image services (optional overrides)
+    default_ai_service_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    adult_ai_service_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     assistant_tone: Mapped[str] = mapped_column(String(32), default="balanced")
     assistant_extra_instructions: Mapped[str] = mapped_column(Text, default="")
     assistant_include_tracking: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -295,6 +298,8 @@ class Dynamic(Base):
     # Dom-controlled assistant voice for this dynamic
     assistant_tone: Mapped[str] = mapped_column(String(32), default="balanced")
     assistant_extra_instructions: Mapped[str] = mapped_column(Text, default="")
+    # JSON map of AI tool id → ai_services.id (per-tool provider routing)
+    ai_tool_routes: Mapped[str] = mapped_column(Text, default="{}")
 
     memberships: Mapped[list["Membership"]] = relationship(
         back_populates="dynamic",
@@ -956,5 +961,35 @@ class MangaPanel(Base):
     visual_prompt: Mapped[str] = mapped_column(Text, default="")
     image_data: Mapped[str] = mapped_column(Text, default="")  # data URL or empty
     image_error: Mapped[str] = mapped_column(Text, default="")
+
+
+class AiService(Base):
+    """Named LLM / image API connection (multiple per user or shared to a dynamic)."""
+
+    __tablename__ = "ai_services"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    dynamic_id: Mapped[str | None] = mapped_column(ForeignKey("dynamics.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), default="AI connection")
+    provider: Mapped[str] = mapped_column(String(32), default=LlmProvider.gemini.value)
+    api_key: Mapped[str] = mapped_column(String(512), default="")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    # Optional separate model for image generations (OpenAI/OpenRouter style)
+    image_model: Mapped[str] = mapped_column(String(120), default="")
+    base_url: Mapped[str] = mapped_column(String(512), default="")
+    # general | adult | images — UI hint for primary purpose
+    purpose: Mapped[str] = mapped_column(String(32), default="general")
+    # Capability probe results: None = untested, True/False = last probe outcome
+    cap_text: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    cap_text_nsfw: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    cap_image: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    cap_image_nsfw: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    test_log: Mapped[str] = mapped_column(Text, default="")  # JSON array of probe rows
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
 
     comic: Mapped[MangaComic] = relationship(back_populates="panels")

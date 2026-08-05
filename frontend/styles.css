@@ -3023,3 +3023,39 @@ details[open] summary {
   border-top: 1px solid var(--border);
 }
 
+
+.ai-config-badge {
+  flex: 0 0 auto;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  border: 1.5px solid #c44;
+  background: rgba(180, 40, 40, 0.15);
+  color: #e66;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+.ai-config-badge.hidden { display: none; }
+.ai-tool-label.unmet { color: #e05555; }
+.ai-recommend-box {
+  padding: 0.75rem;
+  border: 1px solid rgba(224, 85, 85, 0.35);
+  border-radius: 8px;
+  background: rgba(180, 40, 40, 0.08);
+}
+.ai-cap {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.ai-cap.ok { color: #6fbf7a; border-color: rgba(111, 191, 122, 0.45); }
+.ai-cap.fail { color: #e06666; border-color: rgba(224, 102, 102, 0.45); }
+.ai-cap.unknown { color: #c9a227; border-color: rgba(201, 162, 39, 0.45); }
+.ai-conn-row {
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}

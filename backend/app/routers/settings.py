@@ -6,15 +6,32 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user, get_membership
 from ..config import settings
 from ..database import get_db
-from ..models import Dynamic, LlmProvider, Membership, User
+from ..models import AiService, Dynamic, LlmProvider, Membership, User
 from ..schemas import (
     AssistantSettingsOut,
     AssistantSettingsUpdate,
     AssistantToneOption,
+    AiRoutingOut,
+    AiServiceCreate,
+    AiServiceOut,
+    AiServiceUpdate,
+    AiToolRouteUpdate,
+    AiToolStatusOut,
     LlmProviderOption,
     LlmSettingsOut,
     LlmSettingsUpdate,
     LlmTestOut,
+)
+from ..services.ai_services import (
+    AI_TOOLS,
+    ensure_legacy_services,
+    get_service_for_user,
+    get_tool_routes,
+    list_visible_services,
+    run_capability_probe,
+    service_out,
+    set_tool_routes,
+    tool_status,
 )
 from ..services.llm import (
     ASSISTANT_TONES,
@@ -321,3 +338,238 @@ def update_assistant_settings(
     if dynamic is not None:
         db.refresh(dynamic)
     return _assistant_settings_out(user, dynamic=dynamic, membership=membership)
+
+
+def _ai_service_model(data: dict) -> AiServiceOut:
+    return AiServiceOut(**data)
+
+
+def _routing_out(db: Session, user: User, dynamic: Dynamic | None) -> AiRoutingOut:
+    ensure_legacy_services(db, user, dynamic)
+    services = list_visible_services(db, user, dynamic)
+    routes = get_tool_routes(dynamic)
+    tools: list[AiToolStatusOut] = []
+    for tool in AI_TOOLS.values():
+        st = tool_status(db, user, dynamic, tool.id)
+        assigned_unknown = False
+        if st.service_id:
+            svc = get_service_for_user(db, user, st.service_id, dynamic)
+            if svc is not None:
+                cap_map = {
+                    "text": svc.cap_text,
+                    "text_nsfw": svc.cap_text_nsfw,
+                    "image": svc.cap_image,
+                    "image_nsfw": svc.cap_image_nsfw,
+                }
+                assigned_unknown = any(cap_map.get(cap) is None for cap in tool.needs)
+        tools.append(
+            AiToolStatusOut(
+                tool_id=tool.id,
+                label=tool.label,
+                description=tool.description,
+                needs=list(tool.needs),
+                configured=st.configured,
+                service_id=st.service_id,
+                service_name=st.service_name,
+                issue=st.issue,
+                needs_assignment=st.needs_assignment,
+                missing_caps=st.missing_caps,
+                recommendations=st.recommendations,
+                assigned_unknown=assigned_unknown or st.needs_assignment,
+            )
+        )
+    return AiRoutingOut(
+        dynamic_id=dynamic.id if dynamic else None,
+        default_ai_service_id=getattr(user, "default_ai_service_id", None),
+        adult_ai_service_id=getattr(user, "adult_ai_service_id", None),
+        routes=routes,
+        tools=tools,
+        services=[_ai_service_model(service_out(s)) for s in services],
+    )
+
+
+@router.get("/ai-services", response_model=list[AiServiceOut])
+def list_ai_services(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    dynamic_id: str | None = None,
+) -> list[AiServiceOut]:
+    dynamic = pick_llm_dynamic(db, user, dynamic_id)
+    ensure_legacy_services(db, user, dynamic)
+    return [_ai_service_model(service_out(s)) for s in list_visible_services(db, user, dynamic)]
+
+
+@router.post("/ai-services", response_model=AiServiceOut)
+def create_ai_service(
+    payload: AiServiceCreate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    dynamic_id: str | None = None,
+) -> AiServiceOut:
+    if payload.provider not in PROVIDER_CATALOG:
+        raise HTTPException(status_code=400, detail="Unknown provider")
+    catalog = PROVIDER_CATALOG[payload.provider]
+    dynamic = pick_llm_dynamic(db, user, dynamic_id)
+    dyn_id = None
+    if payload.share_with_dynamic and dynamic is not None:
+        dyn_id = dynamic.id
+    svc = AiService(
+        owner_user_id=user.id,
+        dynamic_id=dyn_id,
+        name=(payload.name or "AI connection").strip()[:120],
+        provider=payload.provider,
+        api_key=(payload.api_key or "").strip(),
+        model=(payload.model or catalog["default_model"]).strip(),
+        image_model=(payload.image_model or "").strip(),
+        base_url=(payload.base_url or catalog.get("default_base_url") or "").strip(),
+        purpose=(payload.purpose or "general").strip()[:32],
+    )
+    if not svc.api_key and not catalog.get("allow_empty_key"):
+        raise HTTPException(status_code=400, detail="API key is required for this provider.")
+    if catalog.get("needs_base_url") and not svc.base_url:
+        raise HTTPException(status_code=400, detail="Base URL is required for this provider.")
+    db.add(svc)
+    db.flush()
+    if payload.purpose == "adult" and not user.adult_ai_service_id:
+        user.adult_ai_service_id = svc.id
+    if payload.purpose == "general" and not user.default_ai_service_id:
+        user.default_ai_service_id = svc.id
+    if payload.purpose == "images" and not user.adult_ai_service_id:
+        user.adult_ai_service_id = svc.id
+    db.commit()
+    db.refresh(svc)
+    return _ai_service_model(service_out(svc))
+
+
+@router.patch("/ai-services/{service_id}", response_model=AiServiceOut)
+def update_ai_service(
+    service_id: str,
+    payload: AiServiceUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    dynamic_id: str | None = None,
+) -> AiServiceOut:
+    dynamic = pick_llm_dynamic(db, user, dynamic_id)
+    svc = get_service_for_user(db, user, service_id, dynamic)
+    if svc is None or svc.owner_user_id != user.id:
+        raise HTTPException(status_code=404, detail="AI service not found")
+    if payload.name is not None:
+        svc.name = payload.name.strip()[:120] or svc.name
+    if payload.provider is not None:
+        if payload.provider not in PROVIDER_CATALOG:
+            raise HTTPException(status_code=400, detail="Unknown provider")
+        svc.provider = payload.provider
+    if payload.model is not None:
+        svc.model = payload.model.strip()
+    if payload.image_model is not None:
+        svc.image_model = payload.image_model.strip()
+    if payload.base_url is not None:
+        svc.base_url = payload.base_url.strip()
+    if payload.purpose is not None:
+        svc.purpose = payload.purpose.strip()[:32]
+    if payload.clear_api_key:
+        svc.api_key = ""
+    elif payload.api_key is not None and payload.api_key.strip():
+        svc.api_key = payload.api_key.strip()
+    if payload.share_with_dynamic is not None and dynamic is not None:
+        svc.dynamic_id = dynamic.id if payload.share_with_dynamic else None
+    if payload.set_as_default:
+        user.default_ai_service_id = svc.id
+    if payload.set_as_adult:
+        user.adult_ai_service_id = svc.id
+    db.commit()
+    db.refresh(svc)
+    return _ai_service_model(service_out(svc))
+
+
+@router.delete("/ai-services/{service_id}")
+def delete_ai_service(
+    service_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    svc = db.get(AiService, service_id)
+    if svc is None or svc.owner_user_id != user.id:
+        raise HTTPException(status_code=404, detail="AI service not found")
+    if user.default_ai_service_id == svc.id:
+        user.default_ai_service_id = None
+    if user.adult_ai_service_id == svc.id:
+        user.adult_ai_service_id = None
+    db.delete(svc)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/ai-services/{service_id}/probe", response_model=AiServiceOut)
+def probe_ai_service(
+    service_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    dynamic_id: str | None = None,
+) -> AiServiceOut:
+    dynamic = pick_llm_dynamic(db, user, dynamic_id)
+    svc = get_service_for_user(db, user, service_id, dynamic)
+    if svc is None or svc.owner_user_id != user.id:
+        raise HTTPException(status_code=404, detail="AI service not found")
+    svc = run_capability_probe(db, user=user, svc=svc, dynamic=dynamic)
+    return _ai_service_model(service_out(svc))
+
+
+@router.get("/ai-routing", response_model=AiRoutingOut)
+def get_ai_routing(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    dynamic_id: str | None = None,
+) -> AiRoutingOut:
+    dynamic = pick_llm_dynamic(db, user, dynamic_id)
+    return _routing_out(db, user, dynamic)
+
+
+@router.put("/ai-routing", response_model=AiRoutingOut)
+def update_ai_routing(
+    payload: AiToolRouteUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    dynamic_id: str | None = None,
+) -> AiRoutingOut:
+    dynamic = pick_llm_dynamic(db, user, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=400, detail="Join a dynamic before assigning AI tools.")
+    membership = get_membership(dynamic.id, user, db)
+    if not is_dominant(membership):
+        raise HTTPException(status_code=403, detail="Only the keyholder can assign AI tool routing.")
+    for sid in payload.routes.values():
+        if not sid:
+            continue
+        if get_service_for_user(db, user, sid, dynamic) is None:
+            raise HTTPException(status_code=400, detail=f"Unknown AI service: {sid}")
+    set_tool_routes(dynamic, payload.routes)
+    db.commit()
+    return _routing_out(db, user, dynamic)
+
+
+@router.get("/ai-tools/{tool_id}/status", response_model=AiToolStatusOut)
+def get_ai_tool_status(
+    tool_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    dynamic_id: str | None = None,
+) -> AiToolStatusOut:
+    dynamic = pick_llm_dynamic(db, user, dynamic_id)
+    ensure_legacy_services(db, user, dynamic)
+    tool = AI_TOOLS.get(tool_id)
+    st = tool_status(db, user, dynamic, tool_id)
+    return AiToolStatusOut(
+        tool_id=st.tool_id,
+        label=st.label,
+        description=tool.description if tool else "",
+        needs=list(tool.needs) if tool else [],
+        configured=st.configured,
+        service_id=st.service_id,
+        service_name=st.service_name,
+        issue=st.issue,
+        needs_assignment=st.needs_assignment,
+        missing_caps=st.missing_caps,
+        recommendations=st.recommendations,
+        assigned_unknown=st.needs_assignment or (not st.configured),
+    )

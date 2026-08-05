@@ -761,6 +761,79 @@ class LlmTestOut(BaseModel):
     detail: str = ""
 
 
+class AiServiceCreate(BaseModel):
+    name: str = Field(default="AI connection", max_length=120)
+    provider: str
+    model: str = ""
+    image_model: str = ""
+    api_key: str | None = None
+    base_url: str = ""
+    purpose: str = "general"  # general | adult | images
+    share_with_dynamic: bool = False
+
+
+class AiServiceUpdate(BaseModel):
+    name: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    image_model: str | None = None
+    api_key: str | None = None
+    clear_api_key: bool = False
+    base_url: str | None = None
+    purpose: str | None = None
+    share_with_dynamic: bool | None = None
+    set_as_default: bool = False
+    set_as_adult: bool = False
+
+
+class AiServiceOut(BaseModel):
+    id: str
+    name: str
+    provider: str
+    model: str
+    image_model: str = ""
+    base_url: str = ""
+    purpose: str = "general"
+    dynamic_id: str | None = None
+    api_key_set: bool
+    api_key_hint: str | None = None
+    cap_text: bool | None = None
+    cap_text_nsfw: bool | None = None
+    cap_image: bool | None = None
+    cap_image_nsfw: bool | None = None
+    last_tested_at: str | None = None
+    test_log: list = Field(default_factory=list)
+    ready: bool = False
+
+
+class AiToolRouteUpdate(BaseModel):
+    routes: dict[str, str | None] = Field(default_factory=dict)
+
+
+class AiToolStatusOut(BaseModel):
+    tool_id: str
+    label: str
+    description: str = ""
+    needs: list[str] = Field(default_factory=list)
+    configured: bool
+    service_id: str | None = None
+    service_name: str | None = None
+    issue: str | None = None
+    needs_assignment: bool = False
+    missing_caps: list[str] = Field(default_factory=list)
+    recommendations: list[dict[str, str]] = Field(default_factory=list)
+    assigned_unknown: bool = False  # assigned but caps unknown → show red
+
+
+class AiRoutingOut(BaseModel):
+    dynamic_id: str | None = None
+    default_ai_service_id: str | None = None
+    adult_ai_service_id: str | None = None
+    routes: dict[str, str] = Field(default_factory=dict)
+    tools: list[AiToolStatusOut] = Field(default_factory=list)
+    services: list[AiServiceOut] = Field(default_factory=list)
+
+
 class ActOfSubmissionOut(BaseModel):
     id: str
     status: ActStatus

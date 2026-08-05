@@ -1126,3 +1126,58 @@ def run_migrations() -> None:
       conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_manga_panels_comic_id ON manga_panels (comic_id)")
       )
+
+    # Multi AI connections + per-tool routing (v0.85)
+    user_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()
+    }
+    if "default_ai_service_id" not in user_cols:
+      conn.execute(text("ALTER TABLE users ADD COLUMN default_ai_service_id VARCHAR(36)"))
+    if "adult_ai_service_id" not in user_cols:
+      conn.execute(text("ALTER TABLE users ADD COLUMN adult_ai_service_id VARCHAR(36)"))
+
+    dyn_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(dynamics)")).fetchall()
+    }
+    if "ai_tool_routes" not in dyn_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN ai_tool_routes TEXT DEFAULT '{}'"))
+
+    tables = {
+      row[0]
+      for row in conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table'")
+      ).fetchall()
+    }
+    if "ai_services" not in tables:
+      conn.execute(
+        text(
+          "CREATE TABLE ai_services ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "owner_user_id VARCHAR(36) NOT NULL,"
+          "dynamic_id VARCHAR(36),"
+          "name VARCHAR(120) DEFAULT 'AI connection',"
+          "provider VARCHAR(32) DEFAULT 'gemini',"
+          "api_key VARCHAR(512) DEFAULT '',"
+          "model VARCHAR(120) DEFAULT '',"
+          "image_model VARCHAR(120) DEFAULT '',"
+          "base_url VARCHAR(512) DEFAULT '',"
+          "purpose VARCHAR(32) DEFAULT 'general',"
+          "cap_text BOOLEAN,"
+          "cap_text_nsfw BOOLEAN,"
+          "cap_image BOOLEAN,"
+          "cap_image_nsfw BOOLEAN,"
+          "last_tested_at DATETIME,"
+          "test_log TEXT DEFAULT '',"
+          "created_at DATETIME,"
+          "updated_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_ai_services_owner_user_id ON ai_services (owner_user_id)")
+      )
+      conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_ai_services_dynamic_id ON ai_services (dynamic_id)")
+      )
