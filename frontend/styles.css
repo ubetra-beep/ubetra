@@ -882,6 +882,31 @@ textarea {
   filter: blur(18px);
 }
 
+.csv-import-preview {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.csv-preview-list {
+  max-height: 16rem;
+  overflow-y: auto;
+  gap: 0.35rem;
+}
+
+.csv-preview-row {
+  font-size: 0.9rem;
+  line-height: 1.35;
+  padding: 0.25rem 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.csv-preview-row-error {
+  color: var(--danger, #f87171);
+}
+
 .chat-screen {
   display: flex;
   flex-direction: column;

@@ -3,6 +3,15 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.87] — 2026-08-05
+
+### Added
+- Prior orgasm CSV import: preview rows (and errors) before confirm; success message after import
+
+### Changed
+- Artebu orgasm CSV partners: JustJim → Robot_Boy
+- Service worker cache `ubetra-v87`
+
 ## [0.86] — 2026-08-05
 
 ### Added

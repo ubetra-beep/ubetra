@@ -3,12 +3,12 @@
 Source: Artebu “Sex & orgasm history” screenshots (Jun–Jul 2026).
 
 ## CSV
-`ubetra-orgasm-history-artebu.csv` — Tracking → Prior history → Import CSV.
+`ubetra-orgasm-history-artebu.csv` — Tracking → Prior history → Choose CSV → preview → Confirm import.
 
 Columns: `partner,event_type,occurred_at,ended_at,notes,tags,orgasm_tags`
 
 ### Partner names
-Artebu labels **xseptional** and **JustJim**. Rename in the CSV to match your dynamic membership **display names** (e.g. if JustJim is now `Robot_Boy`, replace `JustJim` with `Robot_Boy`).
+Artebu **xseptional** kept as-is; Artebu **JustJim** mapped to **Robot_Boy** (membership display name).
 
 ### Notes
 - Times without a clock on Artebu are stored as noon local (`12:00`).

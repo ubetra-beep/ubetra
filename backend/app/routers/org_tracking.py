@@ -814,6 +814,7 @@ async def import_tracking_historical_csv(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
+    dry_run: Annotated[bool, Query(description="Parse and validate only; do not write")] = False,
 ) -> dict:
     membership = get_membership(dynamic_id, user, db)
     raw = await file.read()
@@ -840,6 +841,7 @@ async def import_tracking_historical_csv(
 
     created = 0
     errors: list[str] = []
+    preview_rows: list[dict] = []
     for idx, row in enumerate(reader, start=2):
         try:
             label = (row.get(field_map["partner"]) or "").strip()
@@ -884,6 +886,25 @@ async def import_tracking_historical_csv(
                 secs = (ended_at - occurred_at).total_seconds()
                 duration_minutes = min(24 * 60, int(round(secs / 60)))
 
+            flat_orgasm_tags = [t for group in orgasms for t in group["tags"]]
+            preview_rows.append(
+                {
+                    "row": idx,
+                    "ok": True,
+                    "partner": target.display_name,
+                    "event_type": event_type.value,
+                    "occurred_at": occurred_at.isoformat(sep=" ", timespec="minutes"),
+                    "ended_at": ended_at.isoformat(sep=" ", timespec="minutes") if ended_at else "",
+                    "notes": notes,
+                    "tags": tags,
+                    "orgasm_tags": flat_orgasm_tags,
+                }
+            )
+
+            if dry_run:
+                created += 1
+                continue
+
             entry = OrgTrackingEntry(
                 dynamic_id=dynamic_id,
                 logged_by_membership_id=membership.id,
@@ -900,9 +921,23 @@ async def import_tracking_historical_csv(
             db.add(entry)
             created += 1
         except HTTPException as exc:
-            errors.append(f"Row {idx}: {exc.detail}")
+            msg = f"Row {idx}: {exc.detail}"
+            errors.append(msg)
+            preview_rows.append({"row": idx, "ok": False, "error": str(exc.detail)})
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"Row {idx}: {exc}")
+            msg = f"Row {idx}: {exc}"
+            errors.append(msg)
+            preview_rows.append({"row": idx, "ok": False, "error": str(exc)})
+
+    if dry_run:
+        db.rollback()
+        return {
+            "dry_run": True,
+            "would_create": created,
+            "error_count": len(errors),
+            "errors": errors[:50],
+            "rows": preview_rows[:200],
+        }
 
     if created:
         post_system_event(
@@ -916,8 +951,10 @@ async def import_tracking_historical_csv(
         db.rollback()
 
     return {
+        "dry_run": False,
         "created": created,
         "error_count": len(errors),
         "errors": errors[:25],
+        "ok": created > 0,
     }
 

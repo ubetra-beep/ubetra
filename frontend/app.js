@@ -10359,7 +10359,7 @@ function renderOrgasmPriorHistory(dynamicId) {
 
       const csvCard = el("div", { className: "card stack" }, [
         el("h2", {}, "CSV import"),
-        el("p", { className: "muted" }, "Columns: partner, event_type (orgasm|no_orgasm), occurred_at, ended_at, notes, tags, orgasm_tags. Use | in orgasm_tags to separate multiple orgasms."),
+        el("p", { className: "muted" }, "Columns: partner, event_type (orgasm|no_orgasm), occurred_at, ended_at, notes, tags, orgasm_tags. Use | in orgasm_tags to separate multiple orgasms. Choose a file to preview before importing."),
       ]);
       csvCard.appendChild(el("button", {
         type: "button",
@@ -10387,6 +10387,128 @@ function renderOrgasmPriorHistory(dynamicId) {
         },
       }, "Download CSV template"));
 
+      const previewBox = el("div", { className: "csv-import-preview hidden stack" });
+      let pendingCsvFile = null;
+
+      async function postCsv(file, { dryRun }) {
+        const body = new FormData();
+        body.append("file", file);
+        const token = state.token;
+        const q = dryRun ? "?dry_run=true" : "";
+        const res = await fetch(`${API}/dynamics/${dynamicId}/tracking/historical/import-csv${q}`, {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.message || "Import failed");
+        return data;
+      }
+
+      function clearPreview() {
+        pendingCsvFile = null;
+        previewBox.classList.add("hidden");
+        previewBox.replaceChildren();
+      }
+
+      function showPreview(data, file) {
+        pendingCsvFile = file;
+        previewBox.classList.remove("hidden");
+        previewBox.replaceChildren();
+        const would = data.would_create || 0;
+        const errCount = data.error_count || 0;
+        previewBox.appendChild(el("h3", {}, "Import preview"));
+        previewBox.appendChild(
+          el(
+            "p",
+            { className: "muted" },
+            `${file.name} · ${would} ready to import`
+              + (errCount ? ` · ${errCount} row error(s) will be skipped` : "")
+          )
+        );
+        const list = el("div", { className: "csv-preview-list stack" });
+        (data.rows || []).forEach((row) => {
+          if (row.ok) {
+            const tagBits = [
+              ...(row.orgasm_tags || []),
+              ...(row.tags || []),
+            ].filter(Boolean);
+            list.appendChild(
+              el("div", { className: "csv-preview-row" }, [
+                el("strong", {}, row.occurred_at || `Row ${row.row}`),
+                el(
+                  "span",
+                  { className: "muted" },
+                  ` · ${row.partner || "?"} · ${row.event_type === "no_orgasm" ? "No orgasm" : "Orgasm"}`
+                    + (tagBits.length ? ` · ${tagBits.join(", ")}` : "")
+                ),
+              ])
+            );
+          } else {
+            list.appendChild(
+              el("div", { className: "csv-preview-row csv-preview-row-error" }, [
+                el("strong", {}, `Row ${row.row}`),
+                el("span", {}, ` — ${row.error || "Invalid"}`),
+              ])
+            );
+          }
+        });
+        previewBox.appendChild(list);
+        if (data.errors?.length && !(data.rows || []).some((r) => !r.ok)) {
+          error.textContent = data.errors.join("\n");
+          error.classList.remove("hidden");
+        } else if (errCount) {
+          error.textContent = "";
+          error.classList.add("hidden");
+        }
+        const actions = el("div", { className: "row wrap" }, [
+          el("button", {
+            type: "button",
+            className: "primary-btn",
+            disabled: would < 1,
+            onClick: async () => {
+              if (!pendingCsvFile || would < 1) return;
+              error.classList.add("hidden");
+              status.textContent = "Importing…";
+              try {
+                const result = await postCsv(pendingCsvFile, { dryRun: false });
+                clearPreview();
+                const n = result.created || 0;
+                if (n > 0) {
+                  status.textContent = `Success — imported ${n} entr${n === 1 ? "y" : "ies"}.`;
+                  status.classList.add("ok-banner");
+                } else {
+                  status.textContent = "Nothing imported.";
+                  status.classList.remove("ok-banner");
+                }
+                if (result.errors?.length) {
+                  error.textContent = result.errors.join("\n");
+                  error.classList.remove("hidden");
+                }
+              } catch (err) {
+                status.textContent = "";
+                status.classList.remove("ok-banner");
+                error.textContent = err.message;
+                error.classList.remove("hidden");
+              }
+            },
+          }, would ? `Confirm import (${would})` : "Nothing to import"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              clearPreview();
+              status.textContent = "";
+              status.classList.remove("ok-banner");
+              error.classList.add("hidden");
+            },
+          }, "Cancel"),
+        ]);
+        previewBox.appendChild(actions);
+        status.textContent = "Review the preview, then confirm to import.";
+        status.classList.remove("ok-banner");
+      }
+
       const fileInput = el("input", {
         type: "file",
         accept: ".csv,text/csv",
@@ -10394,33 +10516,19 @@ function renderOrgasmPriorHistory(dynamicId) {
       });
       fileInput.addEventListener("change", async () => {
         const file = fileInput.files?.[0];
+        fileInput.value = "";
         if (!file) return;
         error.classList.add("hidden");
-        status.textContent = "Importing…";
+        status.classList.remove("ok-banner");
+        status.textContent = "Building preview…";
+        clearPreview();
         try {
-          const body = new FormData();
-          body.append("file", file);
-          const token = state.token;
-          const res = await fetch(`${API}/dynamics/${dynamicId}/tracking/historical/import-csv`, {
-            method: "POST",
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-            body,
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.detail || data.message || "Import failed");
-          const bits = [`Imported ${data.created || 0} entr${data.created === 1 ? "y" : "ies"}.`];
-          if (data.error_count) bits.push(`${data.error_count} row error(s).`);
-          status.textContent = bits.join(" ");
-          if (data.errors?.length) {
-            error.textContent = data.errors.join("\n");
-            error.classList.remove("hidden");
-          }
+          const data = await postCsv(file, { dryRun: true });
+          showPreview(data, file);
         } catch (err) {
           status.textContent = "";
           error.textContent = err.message;
           error.classList.remove("hidden");
-        } finally {
-          fileInput.value = "";
         }
       });
       csvCard.appendChild(fileInput);
@@ -10428,7 +10536,8 @@ function renderOrgasmPriorHistory(dynamicId) {
         type: "button",
         className: "primary-btn",
         onClick: () => fileInput.click(),
-      }, "Upload CSV"));
+      }, "Choose CSV…"));
+      csvCard.appendChild(previewBox);
       stack.appendChild(csvCard);
 
       const manualCard = el("div", { className: "card stack" }, [
