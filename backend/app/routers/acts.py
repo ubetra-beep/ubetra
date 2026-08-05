@@ -122,7 +122,7 @@ def request_act(
         focus = [
             key
             for key in valid_keys
-            if getattr(record, key, "").strip()
+            if (getattr(record, key, None) or "").strip()
         ]
     if not focus:
         raise HTTPException(

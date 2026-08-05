@@ -23,9 +23,8 @@ router = APIRouter(prefix="/dynamics", tags=["core-knowledge"])
 
 def _core_knowledge_out(record, membership: Membership) -> CoreKnowledgeOut:
     out = core_knowledge_to_out(record, is_yours=True)
-    return CoreKnowledgeOut(
-        **out.model_dump(),
-        interview_completed=membership.interview_completed,
+    return out.model_copy(
+        update={"interview_completed": bool(membership.interview_completed)}
     )
 
 

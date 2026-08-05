@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy.orm import Session, joinedload
 
 from ..models import (
@@ -60,14 +62,14 @@ def core_knowledge_to_out(
     partner_display_name: str | None = None,
 ) -> CoreKnowledgeOut:
     return CoreKnowledgeOut(
-        relationship_context=record.relationship_context,
-        distance=record.distance,
-        space=record.space,
-        budget=record.budget,
-        about_you=record.about_you,
-        desires=record.desires,
-        submitted=record.submitted,
-        updated_at=record.updated_at,
+        relationship_context=(record.relationship_context or ""),
+        distance=(record.distance or ""),
+        space=(record.space or ""),
+        budget=(record.budget or ""),
+        about_you=(record.about_you or ""),
+        desires=(record.desires or ""),
+        submitted=bool(record.submitted),
+        updated_at=record.updated_at or datetime.utcnow(),
         is_yours=is_yours,
         partner_display_name=partner_display_name,
     )
