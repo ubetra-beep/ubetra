@@ -12816,6 +12816,7 @@ function renderGear(dynamicId) {
 function renderVault(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading image vault..."));
   const revealed = new Set();
+  const highlightMsgId = parseRoute().query.get("msg") || "";
 
   async function paint(images) {
     const error = el("div", { className: "error hidden" });
@@ -12827,6 +12828,7 @@ function renderVault(dynamicId) {
       capture: "environment",
       className: "hidden",
     });
+    let highlightCard = null;
 
     if (!images.length) {
       grid.appendChild(el("p", { className: "muted" }, "No images yet. Chat photos are saved here encrypted, or upload below."));
@@ -12834,7 +12836,13 @@ function renderVault(dynamicId) {
 
     for (const image of images) {
       const decrypted = await decryptVaultPayload(dynamicId, image.image_encrypted);
-      const card = el("div", { className: "card stack vault-card" });
+      const isHighlight =
+        !!highlightMsgId && String(image.source_chat_message_id || "") === String(highlightMsgId);
+      const card = el("div", {
+        className: `card stack vault-card${isHighlight ? " vault-highlight" : ""}`,
+        id: isHighlight ? "vault-highlight-target" : undefined,
+      });
+      if (isHighlight) highlightCard = card;
       if (!decrypted) {
         card.appendChild(el("p", { className: "muted" }, "Encrypted — set up the chat E2E key in Settings to view."));
       } else {
@@ -12866,7 +12874,7 @@ function renderVault(dynamicId) {
           className: "ghost-btn",
           type: "button",
           onClick: async () => {
-            if (!confirm("Delete this vault image?")) return;
+            if (!confirm("Delete this vault image? A chat log entry will be posted.")) return;
             await api(`/dynamics/${dynamicId}/vault/${image.id}`, { method: "DELETE" });
             load();
           },
@@ -12910,7 +12918,7 @@ function renderVault(dynamicId) {
 
     setViewContent(el("div", { className: "stack" }, [
       el("h1", {}, "Image vault"),
-      el("p", { className: "muted" }, "Private images from chat. Blur reveal follows Chat settings (hold / 5s / session). When Encrypted chat is on, images use the shared chat key."),
+      el("p", { className: "muted" }, "Private images from chat. Any partner can delete an image; deletions are logged in chat. Blur reveal follows Chat settings (hold / 5s / session). When Encrypted chat is on, images use the shared chat key."),
       el("div", { className: "row wrap" }, [
         el("button", {
           className: "primary-btn",
@@ -12935,6 +12943,12 @@ function renderVault(dynamicId) {
         onClick: () => navigate(`/dynamic/${dynamicId}/track`),
       }, "Back to tracking"),
     ]));
+
+    if (highlightCard) {
+      requestAnimationFrame(() => {
+        highlightCard.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    }
   }
 
   function load() {
@@ -13331,14 +13345,34 @@ function renderChat(dynamicId) {
   let typingPartners = [];
   let refreshE2eDeviceBanner = () => {};
 
-  async function paintMessages(messages) {
+  async function paintMessages(messages, { forceScroll = false } = {}) {
     lastMessages = messages || lastMessages;
     const chatLog = document.getElementById("partner-chat-log");
     if (!chatLog) return;
+    const stickToBottom =
+      forceScroll ||
+      chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 140 ||
+      chatLog.scrollHeight <= chatLog.clientHeight + 4;
     const youAreDom = !!settings.you_are_dominant;
     const nodes = [];
     for (const msg of lastMessages) {
-      if (msg.message_type === "image" && !showImages) continue;
+      if (msg.message_type === "image" && !showImages) {
+        nodes.push(
+          el("div", { className: `chat-bubble ${msg.is_yours ? "user" : "assistant"}` }, [
+            el("span", { className: "muted chat-sender" }, msg.sender_display_name),
+            el(
+              "button",
+              {
+                type: "button",
+                className: "link-btn chat-vault-link",
+                onClick: () => navigate(`/dynamic/${id}/vault?msg=${encodeURIComponent(msg.id)}`),
+              },
+              "Open in vault →"
+            ),
+          ])
+        );
+        continue;
+      }
       if (msg.message_type === "system" || msg.action === "settings_request_resolved" || msg.action === "image_unlock_resolved") {
         if (!showActivityLogs) continue;
         const parsed = parseSystemEventBody(msg.body);
@@ -13603,7 +13637,7 @@ function renderChat(dynamicId) {
       );
     }
     requestAnimationFrame(() => {
-      chatLog.scrollTop = chatLog.scrollHeight;
+      if (stickToBottom) chatLog.scrollTop = chatLog.scrollHeight;
     });
   }
 
@@ -13692,14 +13726,14 @@ function renderChat(dynamicId) {
     });
   }
 
-  function refresh() {
+  function refresh(opts = {}) {
     return Promise.all([
       api(`/dynamics/${id}/chat/settings`),
       api(`/dynamics/${id}/chat/messages`),
     ]).then(([chatSettings, messages]) => {
       settings = chatSettings;
       refreshE2eDeviceBanner();
-      return paintMessages(messages);
+      return paintMessages(messages, opts);
     });
   }
 
@@ -13796,7 +13830,7 @@ function renderChat(dynamicId) {
         error.replaceChildren();
         try {
           await sendText(input);
-          await refresh();
+          await refresh({ forceScroll: true });
         } catch (err) {
           error.textContent = err.message;
           error.classList.remove("hidden");
@@ -13837,7 +13871,7 @@ function renderChat(dynamicId) {
             locked = !!choice.locked;
           }
           await sendImage(file, { locked });
-          await refresh();
+          await refresh({ forceScroll: true });
         } catch (err) {
           error.textContent = err.message;
           error.classList.remove("hidden");
@@ -13960,6 +13994,8 @@ function renderChat(dynamicId) {
       panelLogsToggle.checked = showActivityLogs;
       const panelImagesToggle = el("input", { type: "checkbox" });
       panelImagesToggle.checked = showImages;
+      const clearDomOnly = el("input", { type: "checkbox" });
+      clearDomOnly.checked = !!settings.clear_dom_only;
       panelLogsToggle.addEventListener("change", () => {
         showActivityLogs = panelLogsToggle.checked;
         localStorage.setItem(logsKey(), showActivityLogs ? "true" : "false");
@@ -14040,7 +14076,43 @@ function renderChat(dynamicId) {
         "chat.system_events",
         "Post activity logs to chat"
       );
+      appendMaybeLocked(
+        el("label", { className: "checkbox-label" }, [clearDomOnly, " Only keyholder can clear chat"]),
+        "chat.clear_dom_only",
+        "Only keyholder can clear chat"
+      );
+      const canClearChat = isDom || !settings.clear_dom_only;
       settingsPanel.append(
+        el("button", {
+          className: "ghost-btn",
+          type: "button",
+          title: "Delete all chat messages for this dynamic",
+          onClick: async () => {
+            if (settings.clear_dom_only && !settings.you_are_dominant) {
+              panelError.textContent = "Only the keyholder can clear chat for this dynamic.";
+              panelError.classList.remove("hidden");
+              return;
+            }
+            if (!confirm("Clear all chat messages for this dynamic? This cannot be undone.")) return;
+            panelError.classList.add("hidden");
+            try {
+              await api(`/dynamics/${id}/chat/clear`, { method: "POST", body: "{}" });
+              settingsPanel.classList.add("hidden");
+              await refresh({ forceScroll: true });
+              panelStatus.textContent = "Chat cleared.";
+            } catch (err) {
+              panelError.textContent = err.message;
+              panelError.classList.remove("hidden");
+            }
+          },
+        }, "Clear chat…"),
+        el(
+          "p",
+          { className: "muted" },
+          canClearChat
+            ? "Anyone in this dynamic can clear chat (change below / in Settings)."
+            : "Clear chat is limited to the keyholder."
+        ),
         panelStatus,
         panelError,
         el("button", {
@@ -14069,6 +14141,7 @@ function renderChat(dynamicId) {
                   expire_hours: parseInt(expireHours.value, 10) || 720,
                   system_events: systemEvents.checked,
                   push_enabled: chatPushEnabled.checked,
+                  clear_dom_only: clearDomOnly.checked,
                 }),
               });
               panelStatus.textContent = "Saved.";
@@ -14191,7 +14264,7 @@ function renderChat(dynamicId) {
         },
         { once: false }
       );
-      await paintMessages(messages);
+      await paintMessages(messages, { forceScroll: true });
       paintTyping();
 
       let liveSig = "";
@@ -14526,6 +14599,8 @@ function renderSettings() {
       });
       const systemEvents = el("input", { type: "checkbox" });
       systemEvents.checked = true;
+      const clearDomOnly = el("input", { type: "checkbox" });
+      clearDomOnly.checked = false;
       const chatPushEnabled = el("input", { type: "checkbox" });
       chatPushEnabled.checked = true;
       const pushDeviceEnabled = el("input", { type: "checkbox" });
@@ -14796,6 +14871,7 @@ function renderSettings() {
             expireHours.value = String(chatSettings.expire_hours || 720);
             expireHours.disabled = chatSettings.retain_history;
             systemEvents.checked = chatSettings.system_events !== false;
+            clearDomOnly.checked = !!chatSettings.clear_dom_only;
             chatPushEnabled.checked = chatSettings.push_enabled !== false;
             privacyStatus.textContent = chatSettings.retain_history
               ? "Messages stay on the server forever (all your devices can sync anytime)."
@@ -15645,6 +15721,11 @@ function renderSettings() {
             locked: !!(policy && !policy.you_are_dominant),
             children: el("label", { className: "checkbox-label" }, [systemEvents, " Show activity log in chat (tasks, tracking, chastity…)"]),
           }),
+          lockedSettingsWrap({
+            locked: !!(policy && !policy.you_are_dominant),
+            children: el("label", { className: "checkbox-label" }, [clearDomOnly, " Only keyholder can clear chat"]),
+          }),
+          el("p", { className: "muted" }, "By default anyone in the dynamic can clear chat. Turn this on to restrict clearing to the keyholder."),
           el("label", { className: "checkbox-label" }, [blurByDefault, " Blur shared images"]),
           el("label", {}, ["When blurred", blurModeSelect]),
           el(
@@ -15666,6 +15747,7 @@ function renderSettings() {
           keyConfigured: !!privacyBaselineMeta.keyConfigured || hasChatCryptoKey(privacyDynamic.value),
           expire: expireHours.value,
           system: systemEvents.checked,
+          clearDomOnly: clearDomOnly.checked,
           push: chatPushEnabled.checked,
           blur: blurByDefault.checked,
           blurMode: blurModeSelect.value,
@@ -15681,6 +15763,7 @@ function renderSettings() {
             || e2eMode.checked !== privacyBaseline.e2e
             || expireHours.value !== privacyBaseline.expire
             || systemEvents.checked !== privacyBaseline.system
+            || clearDomOnly.checked !== privacyBaseline.clearDomOnly
             || chatPushEnabled.checked !== privacyBaseline.push
             || blurByDefault.checked !== privacyBaseline.blur
             || blurModeSelect.value !== privacyBaseline.blurMode
@@ -15693,6 +15776,7 @@ function renderSettings() {
           return (
             retainHistory.checked !== privacyBaseline.retain
             || systemEvents.checked !== privacyBaseline.system
+            || clearDomOnly.checked !== privacyBaseline.clearDomOnly
           );
         },
         save: async () => {
@@ -15707,6 +15791,7 @@ function renderSettings() {
           });
           const retainChanged = privacyBaseline && retainHistory.checked !== privacyBaseline.retain;
           const systemChanged = privacyBaseline && systemEvents.checked !== privacyBaseline.system;
+          const clearChanged = privacyBaseline && clearDomOnly.checked !== privacyBaseline.clearDomOnly;
           if (isSubmissive && retainChanged) {
             await postSettingsChangeRequest({
               dynamicId,
@@ -15725,6 +15810,15 @@ function renderSettings() {
             });
             systemEvents.checked = privacyBaseline.system;
           }
+          if (isSubmissive && clearChanged) {
+            await postSettingsChangeRequest({
+              dynamicId,
+              settingKey: "chat.clear_dom_only",
+              settingLabel: "Only keyholder can clear chat",
+              requestedValue: clearDomOnly.checked,
+            });
+            clearDomOnly.checked = privacyBaseline.clearDomOnly;
+          }
           if (e2eMode.checked) {
             if (!cryptoSubtleAvailable()) throw encryptionUnavailableError();
             await ensureChatCryptoKey(dynamicId, {
@@ -15739,6 +15833,7 @@ function renderSettings() {
               expire_hours: parseInt(expireHours.value, 10),
               system_events: isSubmissive ? privacyBaseline.system : systemEvents.checked,
               push_enabled: chatPushEnabled.checked,
+              clear_dom_only: isSubmissive ? privacyBaseline.clearDomOnly : clearDomOnly.checked,
             }),
           });
           privacyStatus.textContent = updated.retain_history
@@ -15746,7 +15841,7 @@ function renderSettings() {
             : `Messages stay on the server for ${updated.expire_hours} hour(s), then auto-delete.`;
           refreshE2eKeyUi();
           snapshotPrivacyBaseline();
-          const requested = (isSubmissive && (retainChanged || systemChanged));
+          const requested = (isSubmissive && (retainChanged || systemChanged || clearChanged));
           return requested ? "Privacy saved · change request sent" : "Privacy settings saved";
         },
       });

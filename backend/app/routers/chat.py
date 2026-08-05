@@ -40,6 +40,7 @@ from ..schemas import (
     SettingsRequestCreate,
     SettingsRequestResolve,
 )
+from ..services.chat_events import post_system_event
 from ..services.chat_presence import active_typers, mark_typing
 from ..services.push import notify_chat_push_async
 from ..services.settings_policy import (
@@ -127,6 +128,7 @@ def _chat_settings_out(dynamic: Dynamic, membership: Membership) -> ChatSettings
         chastity_sub_can_delete_breaks=bool(
             getattr(dynamic, "chastity_sub_can_delete_breaks", True)
         ),
+        clear_dom_only=bool(getattr(dynamic, "chat_clear_dom_only", False)),
     )
 
 
@@ -168,6 +170,11 @@ def update_chat_settings(
     if payload.chastity_sub_can_delete_breaks is not None:
         require_dom_for_setting(membership, "chastity.sub_can_delete_breaks")
         dynamic.chastity_sub_can_delete_breaks = payload.chastity_sub_can_delete_breaks
+    if payload.clear_dom_only is not None and payload.clear_dom_only != bool(
+        getattr(dynamic, "chat_clear_dom_only", False)
+    ):
+        require_dom_for_setting(membership, "chat.clear_dom_only")
+        dynamic.chat_clear_dom_only = bool(payload.clear_dom_only)
     if payload.e2e_enabled is not None:
         dynamic.chat_e2e_enabled = payload.e2e_enabled
     if payload.expire_hours is not None:
@@ -181,6 +188,37 @@ def update_chat_settings(
         )
     db.commit()
     return _chat_settings_out(dynamic, membership)
+
+
+@router.post("/dynamics/{dynamic_id}/chat/clear")
+def clear_chat_history(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    if bool(getattr(dynamic, "chat_clear_dom_only", False)) and not is_dominant(membership):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the keyholder can clear chat for this dynamic.",
+        )
+    deleted = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.dynamic_id == dynamic_id)
+        .delete(synchronize_session=False)
+    )
+    post_system_event(
+        db,
+        dynamic_id,
+        membership,
+        f"cleared chat history ({deleted} message(s))",
+        force=True,
+    )
+    db.commit()
+    return {"ok": True, "deleted": deleted}
 
 
 @router.get("/dynamics/{dynamic_id}/chat/key", response_model=ChatSharedKeyOut)

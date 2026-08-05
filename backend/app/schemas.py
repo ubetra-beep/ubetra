@@ -464,6 +464,7 @@ class ChatSettingsOut(BaseModel):
     push_enabled: bool
     you_are_dominant: bool = False
     chastity_sub_can_delete_breaks: bool = True
+    clear_dom_only: bool = False
 
 
 class ChatSettingsUpdate(BaseModel):
@@ -473,6 +474,7 @@ class ChatSettingsUpdate(BaseModel):
     system_events: bool | None = None
     push_enabled: bool | None = None
     chastity_sub_can_delete_breaks: bool | None = None
+    clear_dom_only: bool | None = None
 
 
 class SettingsRequestCreate(BaseModel):

@@ -22,6 +22,7 @@ DOM_CONTROLLED_SETTING_KEYS = frozenset(
         "feelings.require_end_of_day",
         "chat.system_events",
         "chat.retain_history",
+        "chat.clear_dom_only",
         "assistant.tone",
         "assistant.extra_instructions",
     }
@@ -36,6 +37,7 @@ def setting_label(key: str) -> str:
         "feelings.require_end_of_day": "Require end-of-day feelings",
         "chat.system_events": "Post activity logs to chat",
         "chat.retain_history": "Keep chat forever on server (no auto-delete)",
+        "chat.clear_dom_only": "Only keyholder can clear chat",
         "assistant.tone": "Assistant domme tone",
         "assistant.extra_instructions": "Assistant domme extra instructions",
     }
@@ -94,6 +96,14 @@ def apply_setting(
             "enabled forever chat history on server"
             if dynamic.chat_retain_history
             else "disabled forever chat history (using timed server cache)"
+        )
+
+    if setting_key == "chat.clear_dom_only":
+        dynamic.chat_clear_dom_only = bool(value)
+        return (
+            "restricted chat clear to keyholder only"
+            if dynamic.chat_clear_dom_only
+            else "allowed anyone to clear chat"
         )
 
     if setting_key == "feelings.prompt_mode":
@@ -177,6 +187,7 @@ def policy_snapshot(dynamic: Dynamic) -> dict:
         "chat_system_events": bool(getattr(dynamic, "chat_system_events", True)),
         "chat_retain_history": bool(getattr(dynamic, "chat_retain_history", False)),
         "chat_expire_hours": int(getattr(dynamic, "chat_expire_hours", 720) or 720),
+        "chat_clear_dom_only": bool(getattr(dynamic, "chat_clear_dom_only", False)),
         "assistant_tone": getattr(dynamic, "assistant_tone", None) or "balanced",
         "assistant_extra_instructions": getattr(dynamic, "assistant_extra_instructions", None) or "",
         "enabled_features": sorted(parse_enabled_features(dynamic.enabled_features)),

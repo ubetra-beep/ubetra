@@ -1181,3 +1181,12 @@ def run_migrations() -> None:
       conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_ai_services_dynamic_id ON ai_services (dynamic_id)")
       )
+
+    dyn_cols2 = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(dynamics)")).fetchall()
+    }
+    if "chat_clear_dom_only" not in dyn_cols2:
+      conn.execute(
+        text("ALTER TABLE dynamics ADD COLUMN chat_clear_dom_only BOOLEAN DEFAULT 0")
+      )

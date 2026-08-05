@@ -10,6 +10,7 @@ from ..auth import get_current_user, get_membership
 from ..database import get_db
 from ..models import ChatMessage, ChatMessageType, Dynamic, User, VaultImage
 from ..schemas import VaultImageCreate, VaultImageOut, VaultImageUpdate
+from ..services.chat_events import post_system_event
 
 router = APIRouter(prefix="/dynamics", tags=["vault"])
 
@@ -165,7 +166,7 @@ def delete_vault_image(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
-    get_membership(dynamic_id, user, db)
+    membership = get_membership(dynamic_id, user, db)
     image = (
         db.query(VaultImage)
         .filter(VaultImage.id == image_id, VaultImage.dynamic_id == dynamic_id)
@@ -173,6 +174,14 @@ def delete_vault_image(
     )
     if image is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Image not found")
+    title = (image.title or "Untitled").strip() or "Untitled"
     db.delete(image)
+    post_system_event(
+        db,
+        dynamic_id,
+        membership,
+        f"deleted vault image “{title[:80]}”",
+        force=True,
+    )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

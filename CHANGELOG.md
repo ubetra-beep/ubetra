@@ -3,6 +3,19 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.86] — 2026-08-05
+
+### Added
+- Clear chat from Chat ⋯ menu (anyone by default; Settings → Privacy can limit to keyholder)
+- Images-off chat still shows an **Open in vault** link for each photo
+- Vault image deletions are always logged in chat; any partner can delete
+
+### Fixed
+- Chat typing bar / UBETRA top bar staying visible (chat scrolls inside the message list only)
+
+### Changed
+- Service worker cache `ubetra-v86`
+
 ## [0.85] — 2026-08-05
 
 ### Added

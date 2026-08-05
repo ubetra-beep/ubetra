@@ -26,9 +26,12 @@ def post_system_event(
     from_label: str | None = None,
     action: str = "",
     payload: dict | None = None,
+    force: bool = False,
 ) -> None:
     dynamic = db.get(Dynamic, dynamic_id)
-    if dynamic is None or not bool(getattr(dynamic, "chat_system_events", True)):
+    if dynamic is None:
+        return
+    if not force and not bool(getattr(dynamic, "chat_system_events", True)):
         return
 
     expires_at = None

@@ -277,6 +277,8 @@ class Dynamic(Base):
     chat_expire_hours: Mapped[int] = mapped_column(Integer, default=720)  # 30 days
     chat_system_events: Mapped[bool] = mapped_column(Boolean, default=True)
     chat_push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # When True, only the keyholder can clear chat history
+    chat_clear_dom_only: Mapped[bool] = mapped_column(Boolean, default=False)
     # When False, only the keyholder can delete temporary unlock log entries
     chastity_sub_can_delete_breaks: Mapped[bool] = mapped_column(Boolean, default=True)
     shared_llm_provider: Mapped[str] = mapped_column(String(32), default="")
