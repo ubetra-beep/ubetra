@@ -69,6 +69,13 @@ const TRACKING_FACETS = [
   { id: "org_tracking", icon: "📈", title: "Sex & orgasm tracking", subtitle: "Counts and recent activity", route: "tracking" },
   { id: "feelings", icon: "💫", title: "Feelings tracking", subtitle: "Wheel check-ins before/after play", route: "feelings" },
   {
+    id: "sleep_tracking",
+    icon: "😴",
+    title: "Sleep tracking",
+    subtitle: "Manual log + Google / Garmin / Apple sync",
+    route: "sleep",
+  },
+  {
     id: "punishment",
     icon: "⚖",
     title: "Punishment",
@@ -89,6 +96,13 @@ const PLAYTIME_FACETS = [
     subtitle: "Open / missed work and acts of submission",
     route: "tasks",
     alsoEnabledBy: ["acts"],
+  },
+  {
+    id: "manga_comics",
+    icon: "📚",
+    title: "Monthly manga",
+    subtitle: "AI comic from your dynamic context",
+    route: "manga",
   },
 ];
 
@@ -2040,7 +2054,7 @@ function facetBadge(facet, dynamic) {
 
 function updateBottomNav() {
   const { parts } = parseRoute();
-  const authPages = ["login", "register", "onboarding"];
+  const authPages = ["login", "register", "onboarding", "forgot-password", "reset-password"];
   const hide = !state.token || authPages.includes(parts[0]) || parts[0] === "settings";
   bottomNavEl.classList.toggle("hidden", hide);
   if (hide) return;
@@ -2050,11 +2064,11 @@ function updateBottomNav() {
   const playtimeOn =
     !enabledFeatures.length || enabledFeatures.includes("scene_workshop");
   const trackingRoutes = new Set([
-    "track", "tracking", "chastity", "feelings", "punishment",
+    "track", "tracking", "chastity", "feelings", "punishment", "sleep",
     "history", "vault", "journal", "ground-rules", "interview", "survey",
     "knowledge", "context", "gear", "features", "overlap",
   ]);
-  const playtimeRoutes = new Set(["assistant", "tasks", "acts"]);
+  const playtimeRoutes = new Set(["assistant", "tasks", "acts", "manga"]);
   const activeTab =
     parts[0] === "chat" ? "chat"
     : parts[0] === "dynamic" && playtimeRoutes.has(parts[2]) ? "workshop"
@@ -2140,7 +2154,14 @@ function openAppFeaturesPanel(dynamicId, sectionFilter = "all") {
         const box = el("input", { type: "checkbox" });
         box.checked = feature.enabled;
         checks[feature.id] = box;
-        list.appendChild(el("label", { className: "checkbox-label" }, [box, ` ${feature.title}`]));
+        const canToggle = youAreDominant || feature.partner_enableable;
+        if (!canToggle) box.disabled = true;
+        const note = feature.partner_enableable && !feature.default_enabled
+          ? " (off by default · either partner)"
+          : feature.partner_enableable
+            ? " (either partner)"
+            : "";
+        list.appendChild(el("label", { className: "checkbox-label" }, [box, ` ${feature.title}${note}`]));
       });
       body.appendChild(list);
       body.appendChild(el("div", { className: "row wrap" }, [
@@ -2150,8 +2171,9 @@ function openAppFeaturesPanel(dynamicId, sectionFilter = "all") {
           onClick: async () => {
             error.classList.add("hidden");
             try {
+              const partnerOnly = !youAreDominant;
+              const enabled_optional = [];
               if (youAreDominant) {
-                const enabled_optional = [];
                 Object.entries(checks).forEach(([id, box]) => {
                   if (!box.checked) return;
                   enabled_optional.push(id);
@@ -2175,44 +2197,60 @@ function openAppFeaturesPanel(dynamicId, sectionFilter = "all") {
                 status.textContent = "Saved.";
                 updateBottomNav();
                 setTimeout(() => backdrop.remove(), 400);
-              } else {
-                const dirty = [];
-                optional.forEach((feature) => {
-                  const box = checks[feature.id];
-                  if (!box || box.checked === feature.enabled) return;
-                  dirty.push({
-                    settingKey: `features.${feature.id}`,
-                    settingLabel: `Feature: ${feature.title}`,
-                    requestedValue: box.checked,
-                  });
-                });
-                if (!dirty.length) {
-                  status.textContent = "No changes.";
-                  return;
-                }
-                for (const d of dirty) {
-                  await postSettingsChangeRequest({
-                    dynamicId,
-                    settingKey: d.settingKey,
-                    settingLabel: d.settingLabel,
-                    requestedValue: d.requestedValue,
-                    note: "From Application features menu",
-                  });
-                }
-                status.textContent = "Request sent to keyholder.";
-                setTimeout(() => backdrop.remove(), 700);
+                return;
               }
+
+              // Sub: direct-save partner_enableable; request the rest
+              const partnerIds = optional.filter((f) => f.partner_enableable).map((f) => f.id);
+              if (partnerIds.length) {
+                (features.optional || []).forEach((f) => {
+                  if (partnerIds.includes(f.id)) {
+                    if (checks[f.id]?.checked) enabled_optional.push(f.id);
+                  } else if (f.enabled) {
+                    enabled_optional.push(f.id);
+                    if (f.paired_with) enabled_optional.push(f.paired_with);
+                  }
+                });
+                const updated = await api(`/dynamics/${dynamicId}/features`, {
+                  method: "PUT",
+                  body: JSON.stringify({ enabled_optional: [...new Set(enabled_optional)] }),
+                });
+                if (state.currentDynamic?.id === dynamicId) {
+                  state.currentDynamic.enabled_features = updated.enabled;
+                }
+              }
+              const dirty = [];
+              optional.forEach((feature) => {
+                if (feature.partner_enableable) return;
+                const box = checks[feature.id];
+                if (!box || box.checked === feature.enabled) return;
+                dirty.push({
+                  settingKey: `features.${feature.id}`,
+                  settingLabel: `Feature: ${feature.title}`,
+                  requestedValue: box.checked,
+                });
+              });
+              for (const d of dirty) {
+                await postSettingsChangeRequest({
+                  dynamicId,
+                  settingKey: d.settingKey,
+                  settingLabel: d.settingLabel,
+                  requestedValue: d.requestedValue,
+                  note: "From Application features menu",
+                });
+              }
+              status.textContent = dirty.length
+                ? "Partner features saved; other requests sent to keyholder."
+                : "Saved.";
+              updateBottomNav();
+              setTimeout(() => backdrop.remove(), 700);
             } catch (err) {
               error.textContent = err.message;
               error.classList.remove("hidden");
             }
           },
-        }, youAreDominant ? "Save" : "Submit settings change"),
-        el("button", {
-          type: "button",
-          className: "ghost-btn",
-          onClick: () => backdrop.remove(),
-        }, "Close"),
+        }, "Save"),
+        el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Close"),
       ]));
     })
     .catch((err) => {
@@ -2223,7 +2261,10 @@ function openAppFeaturesPanel(dynamicId, sectionFilter = "all") {
 
 function isFacetEnabled(facet, enabledFeatures) {
   if (facet.core) return true;
-  if (!enabledFeatures || !enabledFeatures.length) return true;
+  // Empty list historically meant "all on" — but opt-in features stay gated by their id.
+  if (!enabledFeatures || !enabledFeatures.length) {
+    return facet.id !== "sleep_tracking" && facet.id !== "manga_comics";
+  }
   if (enabledFeatures.includes(facet.id)) return true;
   if (Array.isArray(facet.alsoEnabledBy)) {
     return facet.alsoEnabledBy.some((id) => enabledFeatures.includes(id));
@@ -2392,6 +2433,11 @@ function renderLogin() {
     el("label", {}, ["Password", el("input", { name: "password", type: "password", required: "true", autocomplete: "current-password" })]),
     error,
     el("button", { className: "primary-btn", type: "submit" }, "Continue"),
+    el("button", {
+      className: "ghost-btn",
+      type: "button",
+      onClick: () => navigate("/forgot-password"),
+    }, "Forgot password?"),
   ]);
   const registerLink = el("button", {
     className: "ghost-btn",
@@ -2439,6 +2485,109 @@ function renderLogin() {
     form.appendChild(claimLink);
   });
 
+  viewEl.replaceChildren(el("div", { className: "auth-splash" }, [form]));
+}
+
+function renderForgotPassword() {
+  setAuthVisible(false);
+  const error = el("div", { className: "error hidden" });
+  const ok = el("div", { className: "muted hidden" });
+  const form = el("form", { className: "stack auth-card" }, [
+    el("h1", {}, "Forgot password"),
+    el("p", { className: "muted" }, "We’ll email a one-time code and a reset link (SMTP must be configured on the server)."),
+    el("label", {}, ["Email", el("input", { name: "email", type: "email", required: "true", autocomplete: "email" })]),
+    error,
+    ok,
+    el("button", { className: "primary-btn", type: "submit" }, "Send reset email"),
+    el("button", {
+      className: "ghost-btn",
+      type: "button",
+      onClick: () => navigate("/reset-password"),
+    }, "I already have a code"),
+    el("button", { className: "ghost-btn", type: "button", onClick: () => navigate("/login") }, "Back to sign in"),
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    error.classList.add("hidden");
+    ok.classList.add("hidden");
+    const data = new FormData(form);
+    try {
+      const result = await api("/auth/password-reset/request", {
+        method: "POST",
+        body: JSON.stringify({ email: data.get("email") }),
+      });
+      ok.textContent = result.detail || "If that email is registered, a reset message was sent.";
+      ok.classList.remove("hidden");
+      const email = String(data.get("email") || "").trim();
+      setTimeout(() => navigate(`/reset-password?email=${encodeURIComponent(email)}`), 800);
+    } catch (err) {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    }
+  });
+  viewEl.replaceChildren(el("div", { className: "auth-splash" }, [form]));
+}
+
+function renderResetPassword() {
+  setAuthVisible(false);
+  const { query } = parseRoute();
+  const prefillEmail = query.get("email") || "";
+  const prefillToken = query.get("token") || "";
+  const error = el("div", { className: "error hidden" });
+  const form = el("form", { className: "stack auth-card" }, [
+    el("h1", {}, "Set new password"),
+    el("p", { className: "muted" }, prefillToken
+      ? "Link detected — enter a new password (or paste the email code instead)."
+      : "Enter the email code from your inbox, or open the reset link."),
+    el("label", {}, ["Email", el("input", {
+      name: "email",
+      type: "email",
+      required: "true",
+      autocomplete: "email",
+      value: prefillEmail,
+    })]),
+    el("label", {}, ["One-time code (optional if using link)", el("input", {
+      name: "code",
+      inputmode: "numeric",
+      autocomplete: "one-time-code",
+      placeholder: "6-digit code",
+    })]),
+    el("input", { name: "token", type: "hidden", value: prefillToken }),
+    el("label", {}, ["New password", el("input", {
+      name: "new_password",
+      type: "password",
+      required: "true",
+      autocomplete: "new-password",
+      minlength: "6",
+    })]),
+    error,
+    el("button", { className: "primary-btn", type: "submit" }, "Update password"),
+    el("button", { className: "ghost-btn", type: "button", onClick: () => navigate("/login") }, "Back to sign in"),
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    error.classList.add("hidden");
+    const data = new FormData(form);
+    const body = {
+      email: data.get("email"),
+      new_password: data.get("new_password"),
+    };
+    const code = String(data.get("code") || "").trim();
+    const token = String(data.get("token") || "").trim();
+    if (code) body.code = code;
+    if (token) body.token = token;
+    try {
+      await api("/auth/password-reset/confirm", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      showToast("Password updated — sign in with your new password.");
+      navigate("/login");
+    } catch (err) {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    }
+  });
   viewEl.replaceChildren(el("div", { className: "auth-splash" }, [form]));
 }
 
@@ -2713,6 +2862,8 @@ function renderOnboarding() {
         const modelSelect = el("select");
         const modelCustom = el("input", { placeholder: "Model name" });
         const apiKeyInput = el("input", { type: "password", placeholder: "Paste API key", autocomplete: "off" });
+        const baseUrlInput = el("input", { type: "url", placeholder: "http://host:1234/v1" });
+        const baseUrlLabel = el("label", { className: "hidden" }, ["Base URL", baseUrlInput]);
         const description = el("p", { className: "muted" });
         const providerRow = el("div", { className: "row wrap" }, [
           el("label", { className: "grow" }, ["AI provider", providerSelect]),
@@ -2730,17 +2881,24 @@ function renderOnboarding() {
             modelSelect.appendChild(el("option", { value: model }, model));
           });
           if (selected?.default_model) modelCustom.value = selected.default_model;
+          if (selected?.needs_base_url) {
+            baseUrlLabel.classList.remove("hidden");
+            baseUrlInput.value = selected.default_base_url || baseUrlInput.value;
+          } else {
+            baseUrlLabel.classList.add("hidden");
+          }
         }
         providerSelect.addEventListener("change", refreshProviderUi);
         modelSelect.addEventListener("change", () => { modelCustom.value = modelSelect.value; });
         refreshProviderUi();
 
         panel.appendChild(el("h2", {}, "AI provider setup"));
-        panel.appendChild(el("p", { className: "muted" }, "This key is shared for your dynamic — both partners use it for the assistant. If your partner already configured one, you would have skipped this step."));
+        panel.appendChild(el("p", { className: "muted" }, "Shared for your dynamic. Tap ? for adult-content guidance (LM Studio / uncensored OpenRouter block less)."));
         panel.appendChild(providerRow);
         panel.appendChild(description);
         panel.appendChild(el("label", {}, ["Model", modelSelect]));
         panel.appendChild(el("label", {}, ["Custom model (optional)", modelCustom]));
+        panel.appendChild(baseUrlLabel);
         panel.appendChild(el("label", {}, ["API key", apiKeyInput]));
         panel.appendChild(el("div", { className: "row wrap" }, [
           el("button", {
@@ -2755,6 +2913,7 @@ function renderOnboarding() {
                     provider: providerSelect.value,
                     model: modelCustom.value || modelSelect.value,
                     api_key: apiKeyInput.value.trim(),
+                    base_url: baseUrlInput.value.trim(),
                   }),
                 });
                 renderOnboarding();
@@ -11831,6 +11990,309 @@ function renderActs(dynamicId) {
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
+function renderSleep(dynamicId) {
+  setViewContent(el("p", { className: "muted" }, "Loading sleep…"));
+  Promise.all([
+    api(`/dynamics/${dynamicId}/sleep/status`),
+    api(`/dynamics/${dynamicId}/sleep`).catch((err) => {
+      if (String(err.message || "").includes("not enabled")) return null;
+      throw err;
+    }),
+    loadDynamic(dynamicId),
+  ])
+    .then(async ([status, sessions]) => {
+      const stack = el("div", { className: "stack" }, [
+        buildHubHeader(dynamicId, "Sleep tracking", {
+          subtitle: "Off by default. Either partner can enable it in Application features.",
+          sectionFilter: "tracking",
+        }),
+        el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: () => navigate(`/dynamic/${dynamicId}/track`),
+        }, "← Back to Tracking"),
+      ]);
+      if (!status.feature_enabled) {
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("p", {}, "Sleep tracking is off for this dynamic."),
+          el("button", {
+            className: "primary-btn",
+            type: "button",
+            onClick: () => openAppFeaturesPanel(dynamicId, "tracking"),
+          }, "Enable in Application features"),
+        ]));
+        setViewContent(stack);
+        return;
+      }
+
+      const error = el("div", { className: "error hidden" });
+      const syncCard = el("div", { className: "card stack" }, [
+        el("h2", {}, "Sync"),
+        el("p", { className: "muted" }, "Google is the primary sync. Garmin needs developer OAuth credentials on the server. Apple Health requires the iOS app (HealthKit) — not available in the browser."),
+        el("div", { className: "row wrap" }, [
+          el("button", {
+            className: "primary-btn",
+            type: "button",
+            disabled: !status.google_configured,
+            onClick: async () => {
+              error.classList.add("hidden");
+              try {
+                if (!status.google_connected) {
+                  const { auth_url } = await api(`/dynamics/${dynamicId}/sleep/google/connect`);
+                  location.href = auth_url;
+                  return;
+                }
+                const out = await api(`/dynamics/${dynamicId}/sleep/google/sync`, { method: "POST" });
+                showToast(`Google sync imported ${out.imported} night(s).`);
+                renderSleep(dynamicId);
+              } catch (err) {
+                error.textContent = err.message;
+                error.classList.remove("hidden");
+              }
+            },
+          }, status.google_connected ? "Sync Google sleep" : "Connect Google"),
+          el("button", {
+            className: "ghost-btn",
+            type: "button",
+            disabled: !status.garmin_configured,
+            onClick: async () => {
+              error.classList.add("hidden");
+              try {
+                if (!status.garmin_connected) {
+                  const { auth_url } = await api(`/dynamics/${dynamicId}/sleep/garmin/connect`);
+                  location.href = auth_url;
+                  return;
+                }
+                const out = await api(`/dynamics/${dynamicId}/sleep/garmin/sync`, { method: "POST" });
+                showToast(`Garmin sync imported ${out.imported} night(s).`);
+                renderSleep(dynamicId);
+              } catch (err) {
+                error.textContent = err.message;
+                error.classList.remove("hidden");
+              }
+            },
+          }, status.garmin_connected ? "Sync Garmin" : "Connect Garmin"),
+          el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: async () => {
+              error.classList.add("hidden");
+              try {
+                if (window.UbetraAppleHealth?.exportSleepSessions) {
+                  const raw = await window.UbetraAppleHealth.exportSleepSessions({ days: 14 });
+                  const out = await api(`/dynamics/${dynamicId}/sleep/apple/import`, {
+                    method: "POST",
+                    body: JSON.stringify({ sessions: raw || [] }),
+                  });
+                  showToast(`Apple Health imported ${out.imported} night(s).`);
+                  renderSleep(dynamicId);
+                  return;
+                }
+                error.textContent = "Apple Health sync needs the UBETRA iOS app with HealthKit. Use manual logging here, or Google/Garmin.";
+                error.classList.remove("hidden");
+              } catch (err) {
+                error.textContent = err.message;
+                error.classList.remove("hidden");
+              }
+            },
+          }, status.apple_connected ? "Import from Apple Health" : "Apple Health (iOS app)"),
+        ]),
+        error,
+      ]);
+      stack.appendChild(syncCard);
+
+      const startInput = el("input", { type: "datetime-local" });
+      const endInput = el("input", { type: "datetime-local" });
+      const scoreInput = el("input", { type: "number", min: "0", max: "100", placeholder: "Score (optional)" });
+      const notesInput = el("textarea", { rows: "2", placeholder: "Notes (optional)" });
+      const manualError = el("div", { className: "error hidden" });
+      stack.appendChild(el("div", { className: "card stack" }, [
+        el("h2", {}, "Log a night"),
+        el("label", {}, ["Fell asleep", startInput]),
+        el("label", {}, ["Woke up", endInput]),
+        el("label", {}, ["Sleep score", scoreInput]),
+        notesInput,
+        manualError,
+        el("button", {
+          className: "primary-btn",
+          type: "button",
+          onClick: async () => {
+            manualError.classList.add("hidden");
+            try {
+              await api(`/dynamics/${dynamicId}/sleep`, {
+                method: "POST",
+                body: JSON.stringify({
+                  start_at: new Date(startInput.value).toISOString(),
+                  end_at: new Date(endInput.value).toISOString(),
+                  sleep_score: scoreInput.value ? Number(scoreInput.value) : null,
+                  notes: notesInput.value,
+                }),
+              });
+              showToast("Sleep logged.");
+              renderSleep(dynamicId);
+            } catch (err) {
+              manualError.textContent = err.message;
+              manualError.classList.remove("hidden");
+            }
+          },
+        }, "Save night"),
+      ]));
+
+      const list = el("div", { className: "stack" }, [el("h2", {}, "Recent nights")]);
+      if (!sessions || !sessions.length) {
+        list.appendChild(el("p", { className: "muted" }, "No sleep sessions yet."));
+      } else {
+        sessions.forEach((s) => {
+          const when = new Date(s.start_at).toLocaleString();
+          const hrs = (s.duration_min / 60).toFixed(1);
+          list.appendChild(el("div", { className: "card stack" }, [
+            el("strong", {}, `${when} · ${hrs}h · ${s.source}`),
+            s.sleep_score != null ? el("p", { className: "muted" }, `Score ${s.sleep_score}`) : null,
+            s.notes ? el("p", {}, s.notes) : null,
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: async () => {
+                if (!confirm("Delete this sleep entry?")) return;
+                await api(`/dynamics/${dynamicId}/sleep/${s.id}`, { method: "DELETE" });
+                renderSleep(dynamicId);
+              },
+            }, "Delete"),
+          ]));
+        });
+      }
+      stack.appendChild(list);
+      setViewContent(stack);
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+}
+
+function renderManga(dynamicId) {
+  setViewContent(el("p", { className: "muted" }, "Loading manga…"));
+  Promise.all([
+    api(`/dynamics/${dynamicId}/manga/modes`),
+    api(`/dynamics/${dynamicId}/manga`).catch((err) => {
+      if (String(err.message || "").includes("not enabled")) return [];
+      throw err;
+    }),
+    loadDynamic(dynamicId),
+  ])
+    .then(([modes, comics]) => {
+      const stack = el("div", { className: "stack" }, [
+        buildHubHeader(dynamicId, "Monthly manga", {
+          subtitle: "One comic per month from your dynamic context. Off by default.",
+          sectionFilter: "playtime",
+        }),
+        el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+        }, "← Back to Playtime"),
+      ]);
+      if (!modes.feature_enabled) {
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("p", {}, "Monthly manga is off for this dynamic."),
+          el("button", {
+            className: "primary-btn",
+            type: "button",
+            onClick: () => openAppFeaturesPanel(dynamicId, "playtime"),
+          }, "Enable in Application features"),
+        ]));
+        setViewContent(stack);
+        return;
+      }
+
+      const modeSelect = el("select");
+      (modes.modes || []).forEach((m) => {
+        modeSelect.appendChild(el("option", { value: m.id }, m.label));
+      });
+      const warn = el("p", { className: "muted" }, (modes.modes || [])[0]?.warning || "");
+      modeSelect.addEventListener("change", () => {
+        const m = (modes.modes || []).find((x) => x.id === modeSelect.value);
+        warn.textContent = m?.warning || "";
+      });
+      const error = el("div", { className: "error hidden" });
+      const status = el("p", { className: "muted" }, `Month: ${modes.year_month}`);
+      stack.appendChild(el("div", { className: "card stack" }, [
+        el("h2", {}, "Generate this month"),
+        status,
+        el("label", {}, ["Mode", modeSelect]),
+        warn,
+        error,
+        el("button", {
+          className: "primary-btn",
+          type: "button",
+          onClick: async () => {
+            error.classList.add("hidden");
+            status.textContent = "Generating… this can take a minute.";
+            try {
+              await api(`/dynamics/${dynamicId}/manga/generate`, {
+                method: "POST",
+                body: JSON.stringify({ mode: modeSelect.value }),
+              });
+              showToast("Comic draft ready.");
+              renderManga(dynamicId);
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+              status.textContent = `Month: ${modes.year_month}`;
+            }
+          },
+        }, "Generate comic"),
+      ]));
+
+      (comics || []).forEach((comic) => {
+        const card = el("div", { className: "card stack" }, [
+          el("h2", {}, comic.title || comic.year_month),
+          el("p", { className: "muted" }, `${comic.year_month} · ${comic.mode} · ${comic.status}`),
+        ]);
+        (comic.warnings || []).forEach((w) => {
+          card.appendChild(el("p", { className: "muted" }, w));
+        });
+        (comic.panels || []).forEach((panel, idx) => {
+          const panelEl = el("div", { className: "stack manga-panel" }, [
+            el("strong", {}, `Panel ${idx + 1}`),
+            panel.image_data
+              ? el("img", { src: panel.image_data, alt: panel.caption || `Panel ${idx + 1}`, style: "max-width:100%;border-radius:8px;" })
+              : el("div", { className: "manga-frame muted" }, panel.visual_prompt || "No image — captioned frame"),
+            panel.caption ? el("p", {}, panel.caption) : null,
+            panel.dialogue ? el("p", { className: "muted" }, panel.dialogue) : null,
+            panel.image_error ? el("p", { className: "error" }, panel.image_error) : null,
+          ]);
+          card.appendChild(panelEl);
+        });
+        const actions = el("div", { className: "row wrap" });
+        if (comic.status === "draft") {
+          actions.appendChild(el("button", {
+            className: "primary-btn",
+            type: "button",
+            onClick: async () => {
+              await api(`/dynamics/${dynamicId}/manga/${comic.id}/save`, { method: "POST" });
+              showToast("Comic saved for this month.");
+              renderManga(dynamicId);
+            },
+          }, "Save for this month"));
+        }
+        actions.appendChild(el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: async () => {
+            if (!confirm("Delete this comic?")) return;
+            await api(`/dynamics/${dynamicId}/manga/${comic.id}`, { method: "DELETE" });
+            renderManga(dynamicId);
+          },
+        }, "Delete"));
+        card.appendChild(actions);
+        stack.appendChild(card);
+      });
+      if (!(comics || []).length) {
+        stack.appendChild(el("p", { className: "muted" }, "No comics yet this month."));
+      }
+      setViewContent(stack);
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+}
+
 function renderFeatureSettings(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading features..."));
   Promise.all([
@@ -13632,6 +14094,12 @@ function renderSettings() {
           : "Paste API key",
         autocomplete: "off",
       });
+      const baseUrlInput = el("input", {
+        type: "url",
+        placeholder: "http://127.0.0.1:1234/v1",
+        value: settings.base_url || settings.shared_base_url || "",
+      });
+      const baseUrlLabel = el("label", { className: "hidden" }, ["Base URL (LM Studio / compatible)", baseUrlInput]);
 
       const description = el("p", { className: "muted" });
 
@@ -13651,6 +14119,17 @@ function renderSettings() {
           apiKeyInput.placeholder = settings.server_env_configured
             ? `Server .env key ${settings.api_key_hint || "configured"}`
             : "Server .env key not set";
+        }
+        if (selected?.needs_base_url) {
+          baseUrlLabel.classList.remove("hidden");
+          if (!baseUrlInput.value && selected.default_base_url) {
+            baseUrlInput.value = selected.default_base_url;
+          }
+          if (selected.allow_empty_key) {
+            apiKeyInput.placeholder = "Optional for local servers — leave blank if unused";
+          }
+        } else {
+          baseUrlLabel.classList.add("hidden");
         }
       }
 
@@ -14236,6 +14715,45 @@ function renderSettings() {
         },
       });
 
+      const currentPassword = el("input", {
+        type: "password",
+        autocomplete: "current-password",
+        placeholder: "Current password",
+      });
+      const newPassword = el("input", {
+        type: "password",
+        autocomplete: "new-password",
+        placeholder: "New password (min 6)",
+        minlength: "6",
+      });
+      const passwordError = el("div", { className: "error hidden" });
+      stack.appendChild(el("div", { className: "card stack" }, [
+        el("h2", {}, "Change password"),
+        el("p", { className: "muted" }, "Update your sign-in password. Forgot it? Use Forgot password on the sign-in screen."),
+        el("label", {}, ["Current password", currentPassword]),
+        el("label", {}, ["New password", newPassword]),
+        passwordError,
+      ]));
+      draft.register({
+        isDirty: () => !!(currentPassword.value || newPassword.value),
+        save: async () => {
+          passwordError.classList.add("hidden");
+          if (!currentPassword.value || !newPassword.value) {
+            throw new Error("Enter current and new password.");
+          }
+          await api("/auth/password", {
+            method: "PUT",
+            body: JSON.stringify({
+              current_password: currentPassword.value,
+              new_password: newPassword.value,
+            }),
+          });
+          currentPassword.value = "";
+          newPassword.value = "";
+          return "Password updated";
+        },
+      });
+
       const youAreDomIn = (dynamics || []).filter((d) =>
         (d.partners || []).some((p) => p.is_you && p.role === "dominant")
       );
@@ -14397,8 +14915,10 @@ function renderSettings() {
           helpSlot,
         ]),
         description,
+        el("p", { className: "muted" }, "Tap ? for adult-content guidance. LM Studio / uncensored OpenRouter models block less than Gemini/OpenAI."),
         el("label", {}, ["Model", modelSelect]),
         el("label", {}, ["Custom model (optional)", modelCustom]),
+        baseUrlLabel,
         el("label", {}, ["API key", apiKeyInput]),
         el("p", { className: "muted" }, "Keys are never shown again after saving. Prefer gemini-3.5-flash (Gemini 2.0/2.5 IDs are retired). Use a dedicated key you can revoke."),
       ]);
@@ -14437,6 +14957,7 @@ function renderSettings() {
       let llmBaseline = {
         provider: providerSelect.value,
         model: (modelCustom.value || modelSelect.value || "").trim(),
+        base_url: (baseUrlInput.value || "").trim(),
       };
       draft.register({
         isDirty: () => {
@@ -14444,6 +14965,7 @@ function renderSettings() {
           return (
             providerSelect.value !== llmBaseline.provider
             || model !== llmBaseline.model
+            || (baseUrlInput.value || "").trim() !== llmBaseline.base_url
             || !!apiKeyInput.value.trim()
           );
         },
@@ -14452,6 +14974,7 @@ function renderSettings() {
           const body = {
             provider: providerSelect.value,
             model: modelCustom.value || modelSelect.value,
+            base_url: baseUrlInput.value.trim(),
           };
           if (apiKeyInput.value.trim()) body.api_key = apiKeyInput.value.trim();
           const llmPath = initialDynamicId
@@ -14467,9 +14990,11 @@ function renderSettings() {
           apiKeyInput.placeholder = updated.api_key_set
             ? `Saved key ${updated.api_key_hint || ""} — leave blank to keep`
             : "Paste API key";
+          baseUrlInput.value = updated.base_url || "";
           llmBaseline = {
             provider: providerSelect.value,
             model: (modelCustom.value || modelSelect.value || "").trim(),
+            base_url: (baseUrlInput.value || "").trim(),
           };
           return "AI settings saved";
         },
@@ -15075,6 +15600,7 @@ function renderSettings() {
         Appearance: "Appearance",
         "Biological sex": "Account",
         "Account email": "Account",
+        "Change password": "Account",
         "Backup & restore": "Account",
         "Partner username": "Account",
         "Log out": "Account",
@@ -15145,13 +15671,16 @@ async function renderRoute() {
   const hashPath = (location.hash.replace(/^#/, "") || "/");
   rememberRoute(hashPath.startsWith("/") ? hashPath : `/${hashPath}`);
   const { parts } = parseRoute();
-  if (!state.token && parts[0] !== "login" && parts[0] !== "register") {
+  if (!state.token && parts[0] !== "login" && parts[0] !== "register"
+      && parts[0] !== "forgot-password" && parts[0] !== "reset-password") {
     renderLogin();
     return;
   }
 
   if (parts[0] === "login") return renderLogin();
   if (parts[0] === "register") return renderRegister();
+  if (parts[0] === "forgot-password") return renderForgotPassword();
+  if (parts[0] === "reset-password") return renderResetPassword();
   if (parts[0] === "onboarding") return renderOnboarding();
   if (state.user && !state.user.onboarding_completed) {
     const onboardingAllowed =
@@ -15204,6 +15733,8 @@ async function renderRoute() {
       return renderTracking(dynamicId);
     }
     if (parts[2] === "feelings") return renderFeelings(dynamicId);
+    if (parts[2] === "sleep") return renderSleep(dynamicId);
+    if (parts[2] === "manga") return renderManga(dynamicId);
     if (parts[2] === "punishment") {
       if (parts[3]) return renderPunishment(dynamicId, parts[3]);
       return renderPunishment(dynamicId);

@@ -2,7 +2,7 @@
 
 Route: `/#/dynamic/{id}/track`
 
-Hub for history, chastity, orgasm logging, feelings, punishment, tasks/acts, journaling, and the image vault. This is the app's home screen for an active dynamic.
+Hub for history, chastity, orgasm logging, feelings, sleep, punishment, journaling, and the image vault. This is the app's home screen for an active dynamic.
 
 ![Tracking hub — Dom](images/11-tracking-hub.png)
 
@@ -49,6 +49,19 @@ Route: `/#/dynamic/{id}/feelings`
 Wheel check-ins (feelings / desires) before and after play. Dom can set soft vs hard prompts and end-of-day expectations.
 
 ![Feelings](images/15-feelings.png)
+
+---
+
+## Sleep tracking
+
+Route: `/#/dynamic/{id}/sleep`
+
+**Off by default** — either Dom or Sub can enable it under Application features.
+
+- Manual night logging  
+- **Google** Fitness sleep OAuth (primary)  
+- **Garmin** Wellness OAuth (needs `UBETRA_GARMIN_*` on the server)  
+- **Apple Health** via the iOS Capacitor app + HealthKit bridge (`mobile/IOS_HEALTHKIT.md`); browser shows a clear requirement message  
 
 ---
 

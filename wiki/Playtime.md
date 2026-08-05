@@ -38,3 +38,18 @@ Route: `/#/dynamic/{id}/tasks`
 - **Create tasks** (Dom) with optional category tags
 
 Open / missed timelines and make-up live on the Tasks screen. See [Tracking](Tracking) for the older screenshot reference until recaptured.
+
+---
+
+## Monthly manga
+
+Route: `/#/dynamic/{id}/manga`
+
+Opt-in (off by default; either partner can enable). Generates one comic per calendar month from dynamic context.
+
+Modes (all available, with in-app warnings):
+1. **Script / storyboard** — text panels only  
+2. **Hybrid** — images when the provider allows; otherwise captioned frames  
+3. **Full AI panels** — attempt an image per panel (hosted image APIs often refuse adult art)
+
+Prefer LM Studio or uncensored OpenRouter models for fewer text blocks; see Settings → AI provider help (?).

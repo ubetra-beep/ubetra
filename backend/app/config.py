@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://127.0.0.1:8000/api/google/callback"
+    google_fitness_redirect_uri: str = "http://127.0.0.1:8000/api/sleep/google/callback"
+    garmin_client_id: str = ""
+    garmin_client_secret: str = ""
+    garmin_redirect_uri: str = "http://127.0.0.1:8000/api/sleep/garmin/callback"
     public_app_url: str = "http://127.0.0.1:8000"
     mfa_required: bool = False
     mfa_log_codes: bool = False

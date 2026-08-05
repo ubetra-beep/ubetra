@@ -194,12 +194,16 @@ def get_shared_llm(
     if dynamic.shared_llm_set_by_membership_id:
         setter = db.get(Membership, dynamic.shared_llm_set_by_membership_id)
         setter_name = setter.display_name if setter else None
-    configured = bool((dynamic.shared_llm_api_key or "").strip())
+    configured = bool(
+        (dynamic.shared_llm_api_key or "").strip()
+        or (getattr(dynamic, "shared_llm_base_url", None) or "").strip()
+    )
     return SharedLlmOut(
         configured=configured,
         provider=dynamic.shared_llm_provider or LlmProvider.gemini.value,
         model=dynamic.shared_llm_model or "",
         api_key_hint=mask_api_key(dynamic.shared_llm_api_key) if configured else None,
+        base_url=(getattr(dynamic, "shared_llm_base_url", None) or "").strip(),
         set_by_display_name=setter_name,
     )
 
@@ -218,26 +222,44 @@ def update_shared_llm(
     if payload.provider not in PROVIDER_CATALOG:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown provider")
 
-    had_key = bool((dynamic.shared_llm_api_key or "").strip())
+    had_key = bool(
+        (dynamic.shared_llm_api_key or "").strip()
+        or (getattr(dynamic, "shared_llm_base_url", None) or "").strip()
+    )
     catalog = PROVIDER_CATALOG[payload.provider]
     if payload.provider == LlmProvider.server.value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Use a personal provider key for the dynamic, not server default",
         )
-    if not payload.api_key.strip() and not had_key:
+    if not payload.api_key.strip() and not had_key and not catalog.get("allow_empty_key"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API key required")
+    if catalog.get("needs_base_url") and not (payload.base_url or "").strip() and not (
+        getattr(dynamic, "shared_llm_base_url", None) or ""
+    ).strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Base URL required for this provider",
+        )
 
     dynamic.shared_llm_provider = payload.provider
     dynamic.shared_llm_model = (payload.model or catalog["default_model"]).strip()
+    if (payload.base_url or "").strip():
+        dynamic.shared_llm_base_url = payload.base_url.strip()
+    elif catalog.get("default_base_url") and not (dynamic.shared_llm_base_url or "").strip():
+        dynamic.shared_llm_base_url = catalog["default_base_url"]
     if payload.api_key.strip():
         dynamic.shared_llm_api_key = payload.api_key.strip()
+    elif catalog.get("allow_empty_key") and not (dynamic.shared_llm_api_key or "").strip():
+        dynamic.shared_llm_api_key = "local"
     dynamic.shared_llm_set_by_membership_id = membership.id
 
     user.llm_provider = payload.provider
     user.llm_model = dynamic.shared_llm_model
     if payload.api_key.strip():
         user.llm_api_key = payload.api_key.strip()
+    if (payload.base_url or "").strip():
+        user.llm_base_url = payload.base_url.strip()
 
     if had_key:
         post_system_event(
@@ -279,20 +301,38 @@ def update_dynamic_features(
     db: Annotated[Session, Depends(get_db)],
 ) -> DynamicFeaturesOut:
     membership = get_membership(dynamic_id, user, db)
-    if not is_dominant(membership):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the keyholder can change menu features. Send a request from Settings.",
-        )
     dynamic = db.get(Dynamic, dynamic_id)
     if dynamic is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+
     selected = {item for item in payload.enabled_optional if item in OPTIONAL_FEATURES}
     # Keep paired optional features (tasks/acts) in sync
     for feature_id in list(selected):
         pair = OPTIONAL_FEATURES.get(feature_id, {}).get("paired_with")
         if pair:
             selected.add(pair)
+
+    if not is_dominant(membership):
+        # Sub may only toggle partner_enableable features; other flags stay as-is.
+        current = parse_enabled_features(dynamic.enabled_features)
+        partner_ids = {
+            fid for fid, meta in OPTIONAL_FEATURES.items() if meta.get("partner_enableable")
+        }
+        for fid in partner_ids:
+            if fid in selected:
+                current.add(fid)
+            else:
+                current.discard(fid)
+        selected = current & set(OPTIONAL_FEATURES.keys())
+        # Non-partner features must remain unchanged — already true via current base
+        for fid in OPTIONAL_FEATURES:
+            if fid in partner_ids:
+                continue
+            if fid in parse_enabled_features(dynamic.enabled_features):
+                selected.add(fid)
+            else:
+                selected.discard(fid)
+
     dynamic.enabled_features = serialize_enabled_features(selected)
     db.commit()
     db.refresh(dynamic)
@@ -313,7 +353,12 @@ def get_dynamic_policy(
     locked = [] if is_dominant(membership) else sorted(
         {
             *DOM_CONTROLLED_SETTING_KEYS,
-            *[f"features.{fid}" for fid in OPTIONAL_FEATURES if not OPTIONAL_FEATURES[fid].get("hidden")],
+            *[
+                f"features.{fid}"
+                for fid in OPTIONAL_FEATURES
+                if not OPTIONAL_FEATURES[fid].get("hidden")
+                and not OPTIONAL_FEATURES[fid].get("partner_enableable")
+            ],
         }
     )
     return DynamicPolicyOut(

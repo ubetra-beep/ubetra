@@ -15,9 +15,13 @@ from ..schemas import (
     LoginResponse,
     MfaResendRequest,
     MfaVerifyRequest,
+    PasswordResetConfirm,
+    PasswordResetOk,
+    PasswordResetRequest,
     TokenResponse,
     UserCreate,
     UserEmailUpdate,
+    UserPasswordUpdate,
     UserUsernameUpdate,
     UserSexUpdate,
     UserLogin,
@@ -311,3 +315,50 @@ def update_email(
     db.commit()
     db.refresh(user)
     return _user_out(user)
+
+
+@router.put("/password", response_model=UserOut)
+def update_password(
+    payload: UserPasswordUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UserOut:
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    db.refresh(user)
+    return _user_out(user)
+
+
+@router.post("/password-reset/request", response_model=PasswordResetOk)
+def password_reset_request(
+    payload: PasswordResetRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> PasswordResetOk:
+    from ..services.password_reset import request_password_reset
+
+    result = request_password_reset(db, payload.email)
+    db.commit()
+    return PasswordResetOk(**result)
+
+
+@router.post("/password-reset/confirm", response_model=PasswordResetOk)
+def password_reset_confirm(
+    payload: PasswordResetConfirm,
+    db: Annotated[Session, Depends(get_db)],
+) -> PasswordResetOk:
+    from ..services.password_reset import confirm_password_reset
+
+    try:
+        confirm_password_reset(
+            db,
+            email=payload.email,
+            new_password=payload.new_password,
+            code=payload.code,
+            token=payload.token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return PasswordResetOk(ok=True, detail="Password updated. You can sign in now.")

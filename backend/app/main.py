@@ -25,6 +25,7 @@ from .routers import (
     interests,
     interview,
     journals,
+    manga,
     onboarding,
     org_tracking,
     history_dashboard,
@@ -33,6 +34,7 @@ from .routers import (
     push,
     punishments,
     settings as settings_router,
+    sleep,
     tasks,
     vault,
 )
@@ -74,6 +76,9 @@ app.include_router(chat.router, prefix="/api")
 app.include_router(gear.router, prefix="/api")
 app.include_router(vault.router, prefix="/api")
 app.include_router(google_tasks.router, prefix="/api")
+app.include_router(sleep.router, prefix="/api")
+app.include_router(sleep.callback_router, prefix="/api")
+app.include_router(manga.router, prefix="/api")
 app.include_router(push.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")

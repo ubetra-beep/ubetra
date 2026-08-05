@@ -68,6 +68,27 @@ class UserEmailUpdate(BaseModel):
     password: str = Field(min_length=6, max_length=128)
 
 
+class UserPasswordUpdate(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+
+
+class PasswordResetConfirm(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    new_password: str = Field(min_length=6, max_length=128)
+    code: str | None = Field(default=None, max_length=12)
+    token: str | None = Field(default=None, max_length=128)
+
+
+class PasswordResetOk(BaseModel):
+    ok: bool = True
+    detail: str = ""
+
+
 class UserUsernameUpdate(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=6, max_length=128)
@@ -160,6 +181,7 @@ class SharedLlmOut(BaseModel):
     provider: str
     model: str
     api_key_hint: str | None
+    base_url: str = ""
     set_by_display_name: str | None
 
 
@@ -167,6 +189,7 @@ class SharedLlmUpdate(BaseModel):
     provider: str
     model: str = ""
     api_key: str = ""
+    base_url: str = ""
     use_for_dynamic: bool = True
 
 
@@ -695,6 +718,9 @@ class LlmProviderOption(BaseModel):
     default_model: str
     models: list[str]
     key_url: str
+    needs_base_url: bool = False
+    default_base_url: str = ""
+    allow_empty_key: bool = False
 
 
 class LlmSettingsOut(BaseModel):
@@ -702,6 +728,7 @@ class LlmSettingsOut(BaseModel):
     model: str
     api_key_set: bool
     api_key_hint: str | None
+    base_url: str = ""
     configured: bool
     using_server_default: bool
     server_env_configured: bool
@@ -713,6 +740,7 @@ class LlmSettingsOut(BaseModel):
     shared_provider: str | None = None
     shared_model: str | None = None
     shared_api_key_hint: str | None = None
+    shared_base_url: str | None = None
     active_dynamic_id: str | None = None
 
 
@@ -720,6 +748,7 @@ class LlmSettingsUpdate(BaseModel):
     provider: str
     model: str = ""
     api_key: str | None = None
+    base_url: str | None = None
     clear_api_key: bool = False
 
 

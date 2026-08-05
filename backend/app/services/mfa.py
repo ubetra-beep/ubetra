@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import logging
 import random
-import smtplib
 import string
 from datetime import datetime, timedelta
-from email.message import EmailMessage
 
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -13,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..auth import hash_password, verify_password
 from ..config import settings
 from ..models import MfaChallenge, User
+from .mail import send_email, smtp_configured
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +19,18 @@ MFA_PURPOSE = "mfa"
 OTP_LENGTH = 6
 OTP_TTL_MINUTES = 10
 RESEND_COOLDOWN_SECONDS = 45
+
+# Re-export for callers that imported smtp_configured from mfa.
+__all__ = [
+    "generate_otp",
+    "create_mfa_token",
+    "decode_mfa_token",
+    "smtp_configured",
+    "send_otp_email",
+    "purge_expired_challenges",
+    "create_challenge",
+    "verify_challenge",
+]
 
 
 def generate_otp() -> str:
@@ -47,38 +58,16 @@ def decode_mfa_token(token: str) -> dict:
     return payload
 
 
-def smtp_configured() -> bool:
-    return bool(settings.smtp_host and settings.smtp_from)
-
-
 def send_otp_email(to_email: str, code: str) -> None:
-    if not smtp_configured():
-        logger.warning("SMTP not configured — MFA code for %s: %s", to_email, code)
-        return
-
-    msg = EmailMessage()
-    msg["Subject"] = "Your sign-in code"
-    msg["From"] = settings.smtp_from
-    msg["To"] = to_email
-    msg.set_content(
-        f"Your sign-in code is {code}.\n\n"
-        f"It expires in {OTP_TTL_MINUTES} minutes.\n"
-        "If you did not request this, you can ignore this message.\n"
+    send_email(
+        to_email=to_email,
+        subject="Your sign-in code",
+        body=(
+            f"Your sign-in code is {code}.\n\n"
+            f"It expires in {OTP_TTL_MINUTES} minutes.\n"
+            "If you did not request this, you can ignore this message.\n"
+        ),
     )
-
-    if settings.smtp_tls:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            if settings.smtp_user:
-                server.login(settings.smtp_user, settings.smtp_password)
-            server.send_message(msg)
-    else:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
-            if settings.smtp_user:
-                server.login(settings.smtp_user, settings.smtp_password)
-            server.send_message(msg)
 
 
 def purge_expired_challenges(db: Session, user_id: str | None = None) -> None:

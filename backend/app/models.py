@@ -80,6 +80,9 @@ class LlmProvider(str, enum.Enum):
     server = "server"
     gemini = "gemini"
     openai = "openai"
+    openrouter = "openrouter"
+    lmstudio = "lmstudio"
+    openai_compatible = "openai_compatible"
 
 
 class ContextLinkCategory(str, enum.Enum):
@@ -160,6 +163,7 @@ class User(Base):
     llm_provider: Mapped[str] = mapped_column(String(32), default=LlmProvider.server.value)
     llm_api_key: Mapped[str] = mapped_column(String(512), default="")
     llm_model: Mapped[str] = mapped_column(String(120), default="")
+    llm_base_url: Mapped[str] = mapped_column(String(512), default="")
     assistant_tone: Mapped[str] = mapped_column(String(32), default="balanced")
     assistant_extra_instructions: Mapped[str] = mapped_column(Text, default="")
     assistant_include_tracking: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -167,6 +171,11 @@ class User(Base):
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     google_refresh_token: Mapped[str] = mapped_column(Text, default="")
     google_tasks_list_id: Mapped[str] = mapped_column(String(128), default="@default")
+    google_fitness_scopes: Mapped[str] = mapped_column(String(255), default="")
+    garmin_access_token: Mapped[str] = mapped_column(Text, default="")
+    garmin_refresh_token: Mapped[str] = mapped_column(Text, default="")
+    garmin_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    apple_health_connected: Mapped[bool] = mapped_column(Boolean, default=False)
     # male | female | intersex | prefer_not_to_say | "" (unset)
     biological_sex: Mapped[str] = mapped_column(String(32), default="")
 
@@ -174,6 +183,9 @@ class User(Base):
     push_subscriptions: Mapped[list["PushSubscription"]] = relationship(back_populates="user")
     native_push_tokens: Mapped[list["NativePushToken"]] = relationship(back_populates="user")
     mfa_challenges: Mapped[list["MfaChallenge"]] = relationship(back_populates="user")
+    password_reset_challenges: Mapped[list["PasswordResetChallenge"]] = relationship(
+        back_populates="user"
+    )
 
 
 class MfaChallenge(Base):
@@ -187,6 +199,20 @@ class MfaChallenge(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped[User] = relationship(back_populates="mfa_challenges")
+
+
+class PasswordResetChallenge(Base):
+    __tablename__ = "password_reset_challenges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(255))
+    token_hash: Mapped[str] = mapped_column(String(255))
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped[User] = relationship(back_populates="password_reset_challenges")
 
 
 class PushSubscription(Base):
@@ -252,6 +278,7 @@ class Dynamic(Base):
     shared_llm_provider: Mapped[str] = mapped_column(String(32), default="")
     shared_llm_api_key: Mapped[str] = mapped_column(String(512), default="")
     shared_llm_model: Mapped[str] = mapped_column(String(120), default="")
+    shared_llm_base_url: Mapped[str] = mapped_column(String(512), default="")
     shared_llm_set_by_membership_id: Mapped[str | None] = mapped_column(
         ForeignKey("memberships.id"), nullable=True
     )
@@ -874,3 +901,57 @@ class VaultImage(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     dynamic: Mapped[Dynamic] = relationship(back_populates="vault_images")
+
+
+class SleepSession(Base):
+    __tablename__ = "sleep_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    subject_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"), index=True)
+    source: Mapped[str] = mapped_column(String(32), default="manual")  # manual|google|garmin|apple
+    external_id: Mapped[str] = mapped_column(String(191), default="")
+    start_at: Mapped[datetime] = mapped_column(DateTime)
+    end_at: Mapped[datetime] = mapped_column(DateTime)
+    duration_min: Mapped[int] = mapped_column(Integer, default=0)
+    sleep_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stages_json: Mapped[str] = mapped_column(Text, default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MangaComic(Base):
+    __tablename__ = "manga_comics"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    created_by_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    year_month: Mapped[str] = mapped_column(String(7), index=True)  # YYYY-MM
+    title: Mapped[str] = mapped_column(String(200), default="")
+    mode: Mapped[str] = mapped_column(String(32), default="script")  # script|hybrid|full
+    status: Mapped[str] = mapped_column(String(32), default="draft")  # draft|saved
+    warnings_json: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    panels: Mapped[list["MangaPanel"]] = relationship(
+        back_populates="comic", cascade="all, delete-orphan", order_by="MangaPanel.position"
+    )
+
+
+class MangaPanel(Base):
+    __tablename__ = "manga_panels"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    comic_id: Mapped[str] = mapped_column(ForeignKey("manga_comics.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    caption: Mapped[str] = mapped_column(Text, default="")
+    dialogue: Mapped[str] = mapped_column(Text, default="")
+    visual_prompt: Mapped[str] = mapped_column(Text, default="")
+    image_data: Mapped[str] = mapped_column(Text, default="")  # data URL or empty
+    image_error: Mapped[str] = mapped_column(Text, default="")
+
+    comic: Mapped[MangaComic] = relationship(back_populates="panels")

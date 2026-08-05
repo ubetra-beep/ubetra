@@ -3001,3 +3001,16 @@ details[open] summary {
   transform: translate(-50%, 0);
 }
 
+.manga-frame {
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  min-height: 4rem;
+}
+
+.manga-panel {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+

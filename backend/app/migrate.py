@@ -995,3 +995,125 @@ def run_migrations() -> None:
       conn.execute(text("ALTER TABLE tasks ADD COLUMN makeup_requested_at DATETIME"))
     if "makeup_granted_at" not in task_columns:
       conn.execute(text("ALTER TABLE tasks ADD COLUMN makeup_granted_at DATETIME"))
+
+    user_columns = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()
+    }
+    for col, ddl in [
+      ("llm_base_url", "ALTER TABLE users ADD COLUMN llm_base_url VARCHAR(512) DEFAULT ''"),
+      ("google_fitness_scopes", "ALTER TABLE users ADD COLUMN google_fitness_scopes VARCHAR(255) DEFAULT ''"),
+      ("garmin_access_token", "ALTER TABLE users ADD COLUMN garmin_access_token TEXT DEFAULT ''"),
+      ("garmin_refresh_token", "ALTER TABLE users ADD COLUMN garmin_refresh_token TEXT DEFAULT ''"),
+      ("garmin_token_expires_at", "ALTER TABLE users ADD COLUMN garmin_token_expires_at DATETIME"),
+      ("apple_health_connected", "ALTER TABLE users ADD COLUMN apple_health_connected BOOLEAN DEFAULT 0"),
+    ]:
+      if col not in user_columns:
+        conn.execute(text(ddl))
+
+    dynamic_columns = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(dynamics)")).fetchall()
+    }
+    if "shared_llm_base_url" not in dynamic_columns:
+      conn.execute(
+        text("ALTER TABLE dynamics ADD COLUMN shared_llm_base_url VARCHAR(512) DEFAULT ''")
+      )
+
+    tables = {
+      row[0]
+      for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    }
+    if "password_reset_challenges" not in tables:
+      conn.execute(
+        text(
+          "CREATE TABLE password_reset_challenges ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "user_id VARCHAR(36) NOT NULL,"
+          "code_hash VARCHAR(255) NOT NULL,"
+          "token_hash VARCHAR(255) NOT NULL,"
+          "expires_at DATETIME NOT NULL,"
+          "consumed_at DATETIME,"
+          "created_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(
+        text(
+          "CREATE INDEX IF NOT EXISTS ix_password_reset_challenges_user_id "
+          "ON password_reset_challenges (user_id)"
+        )
+      )
+
+    if "sleep_sessions" not in tables:
+      conn.execute(
+        text(
+          "CREATE TABLE sleep_sessions ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "subject_membership_id VARCHAR(36) NOT NULL,"
+          "source VARCHAR(32) DEFAULT 'manual',"
+          "external_id VARCHAR(191) DEFAULT '',"
+          "start_at DATETIME NOT NULL,"
+          "end_at DATETIME NOT NULL,"
+          "duration_min INTEGER DEFAULT 0,"
+          "sleep_score INTEGER,"
+          "stages_json TEXT DEFAULT '',"
+          "notes TEXT DEFAULT '',"
+          "synced_at DATETIME,"
+          "created_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_sleep_sessions_dynamic_id ON sleep_sessions (dynamic_id)")
+      )
+      conn.execute(
+        text(
+          "CREATE INDEX IF NOT EXISTS ix_sleep_sessions_subject "
+          "ON sleep_sessions (subject_membership_id)"
+        )
+      )
+
+    if "manga_comics" not in tables:
+      conn.execute(
+        text(
+          "CREATE TABLE manga_comics ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "created_by_membership_id VARCHAR(36) NOT NULL,"
+          "year_month VARCHAR(7) NOT NULL,"
+          "title VARCHAR(200) DEFAULT '',"
+          "mode VARCHAR(32) DEFAULT 'script',"
+          "status VARCHAR(32) DEFAULT 'draft',"
+          "warnings_json TEXT DEFAULT '',"
+          "created_at DATETIME,"
+          "updated_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_manga_comics_dynamic_id ON manga_comics (dynamic_id)")
+      )
+      conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_manga_comics_year_month ON manga_comics (year_month)")
+      )
+
+    if "manga_panels" not in tables:
+      conn.execute(
+        text(
+          "CREATE TABLE manga_panels ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "comic_id VARCHAR(36) NOT NULL,"
+          "position INTEGER DEFAULT 0,"
+          "caption TEXT DEFAULT '',"
+          "dialogue TEXT DEFAULT '',"
+          "visual_prompt TEXT DEFAULT '',"
+          "image_data TEXT DEFAULT '',"
+          "image_error TEXT DEFAULT ''"
+          ")"
+        )
+      )
+      conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_manga_panels_comic_id ON manga_panels (comic_id)")
+      )

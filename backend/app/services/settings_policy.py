@@ -6,7 +6,12 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..models import Dynamic, Membership, PartnerRole
-from .features import OPTIONAL_FEATURES, parse_enabled_features, serialize_enabled_features
+from .features import (
+    OPTIONAL_FEATURES,
+    is_partner_enableable,
+    parse_enabled_features,
+    serialize_enabled_features,
+)
 
 # Keys a submissive cannot change directly — they may request a change via chat.
 DOM_CONTROLLED_SETTING_KEYS = frozenset(
@@ -46,6 +51,10 @@ def is_dominant(membership: Membership) -> bool:
 
 
 def require_dom_for_setting(membership: Membership, setting_key: str) -> None:
+    if setting_key.startswith("features."):
+        feature_id = setting_key.split(".", 1)[1]
+        if is_partner_enableable(feature_id):
+            return
     base = setting_key.split(".", 1)[0]
     controlled = (
         setting_key in DOM_CONTROLLED_SETTING_KEYS

@@ -50,7 +50,13 @@ def _settings_out(
     )
 
     active_hint = mask_api_key(config.api_key) if config.api_key else None
-    shared_configured = bool(dynamic and (dynamic.shared_llm_api_key or "").strip())
+    shared_configured = bool(
+        dynamic
+        and (
+            (dynamic.shared_llm_api_key or "").strip()
+            or (getattr(dynamic, "shared_llm_base_url", None) or "").strip()
+        )
+    )
     account_provider = user.llm_provider or LlmProvider.server.value
     # Account form fields stay personal; shared_* reflects what both partners actually use.
     account_model = (user.llm_model or "").strip() or (
@@ -69,6 +75,7 @@ def _settings_out(
             if settings.gemini_api_key.strip()
             else None
         ),
+        base_url=(user.llm_base_url or "").strip(),
         configured=is_llm_configured(user, dynamic),
         using_server_default=config.using_server_default and source == "server",
         server_env_configured=bool(settings.gemini_api_key.strip()),
@@ -81,6 +88,11 @@ def _settings_out(
         shared_api_key_hint=(
             mask_api_key(dynamic.shared_llm_api_key) if shared_configured else None
         ),
+        shared_base_url=(
+            (getattr(dynamic, "shared_llm_base_url", None) or "").strip() or None
+            if shared_configured
+            else None
+        ),
         active_dynamic_id=dynamic.id if dynamic else None,
     )
 
@@ -88,7 +100,18 @@ def _settings_out(
 @router.get("/llm/providers", response_model=list[LlmProviderOption])
 def list_llm_providers() -> list[LlmProviderOption]:
     return [
-        LlmProviderOption(id=provider_id, **details)
+        LlmProviderOption(
+            id=provider_id,
+            label=details["label"],
+            description=details["description"],
+            policy_notes=details.get("policy_notes", ""),
+            default_model=details["default_model"],
+            models=list(details["models"]),
+            key_url=details.get("key_url", ""),
+            needs_base_url=bool(details.get("needs_base_url")),
+            default_base_url=details.get("default_base_url") or "",
+            allow_empty_key=bool(details.get("allow_empty_key")),
+        )
         for provider_id, details in PROVIDER_CATALOG.items()
     ]
 
@@ -115,6 +138,10 @@ def update_llm_settings(
     user.llm_provider = payload.provider
     catalog = PROVIDER_CATALOG[payload.provider]
     user.llm_model = (payload.model or catalog["default_model"]).strip()
+    if payload.base_url is not None:
+        user.llm_base_url = payload.base_url.strip()
+    elif catalog.get("needs_base_url") and not (user.llm_base_url or "").strip():
+        user.llm_base_url = (catalog.get("default_base_url") or "").strip()
 
     if payload.clear_api_key:
         user.llm_api_key = ""
@@ -125,7 +152,11 @@ def update_llm_settings(
     elif payload.provider != LlmProvider.server.value:
         sync_user_llm_to_shared_dynamics(db, user)
 
-    if payload.provider != LlmProvider.server.value and not user.llm_api_key.strip():
+    if (
+        payload.provider != LlmProvider.server.value
+        and not user.llm_api_key.strip()
+        and not catalog.get("allow_empty_key")
+    ):
         if payload.api_key is None and not payload.clear_api_key:
             pass
         elif not payload.clear_api_key and not (payload.api_key or "").strip():
@@ -133,6 +164,11 @@ def update_llm_settings(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="API key is required for this provider.",
             )
+    if catalog.get("needs_base_url") and not (user.llm_base_url or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Base URL is required for this provider (e.g. http://host:1234/v1).",
+        )
 
     db.commit()
     db.refresh(user)

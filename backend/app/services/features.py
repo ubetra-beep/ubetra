@@ -22,15 +22,31 @@ OPTIONAL_FEATURES = {
     "chastity": {"title": "Chastity tracking", "section": "tracking"},
     "feelings": {"title": "Feelings tracking", "section": "tracking"},
     "punishment": {"title": "Punishment self-report", "section": "tracking"},
-    # tasks + acts are one Tracking menu item (merged UI); keep both keys for API gates
+    "sleep_tracking": {
+        "title": "Sleep tracking",
+        "section": "tracking",
+        "default_enabled": False,
+        "partner_enableable": True,
+    },
+    # tasks + acts are one Playtime menu item (merged UI); keep both keys for API gates
     "tasks": {"title": "Tasks & acts", "section": "playtime", "paired_with": "acts"},
     "acts": {"title": "Tasks & acts", "section": "playtime", "hidden": True, "paired_with": "tasks"},
     "image_vault": {"title": "Image vault", "section": "tracking"},
     "scene_workshop": {"title": "Playtime", "section": "playtime"},
+    "manga_comics": {
+        "title": "Monthly manga",
+        "section": "playtime",
+        "default_enabled": False,
+        "partner_enableable": True,
+    },
     "journal": {"title": "Journal", "section": "tracking"},
 }
 
-DEFAULT_OPTIONAL_ENABLED = set(OPTIONAL_FEATURES.keys())
+DEFAULT_OPTIONAL_ENABLED = {
+    feature_id
+    for feature_id, meta in OPTIONAL_FEATURES.items()
+    if meta.get("default_enabled", True)
+}
 
 
 def parse_enabled_features(raw: str | None) -> set[str]:
@@ -76,6 +92,8 @@ def features_for_dynamic(dynamic: Dynamic) -> dict:
                 "section": meta["section"],
                 "enabled": is_on,
                 "paired_with": pair,
+                "default_enabled": meta.get("default_enabled", True),
+                "partner_enableable": bool(meta.get("partner_enableable")),
             }
         )
     return {
@@ -87,3 +105,7 @@ def features_for_dynamic(dynamic: Dynamic) -> dict:
 
 def is_feature_enabled(dynamic: Dynamic, feature_id: str) -> bool:
     return feature_id in parse_enabled_features(dynamic.enabled_features)
+
+
+def is_partner_enableable(feature_id: str) -> bool:
+    return bool(OPTIONAL_FEATURES.get(feature_id, {}).get("partner_enableable"))

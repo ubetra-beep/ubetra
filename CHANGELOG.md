@@ -3,6 +3,18 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.83] — 2026-08-05
+
+### Added
+- Forgotten password: email one-time code **and** reset link; Settings → Change password
+- AI providers: OpenRouter, LM Studio, OpenAI-compatible (with base URL) + stronger adult-content help text
+- Sleep tracking (default off; either partner can enable): manual log + Google / Garmin OAuth sync; Apple via iOS HealthKit bridge
+- Playtime → Monthly manga (default off): script / hybrid / full panel modes with provider warnings; one comic per month
+
+### Changed
+- Service worker cache `ubetra-v83`
+- Optional features can opt out of default-on (`sleep_tracking`, `manga_comics`)
+
 ## [0.82] — 2026-08-05
 
 ### Changed

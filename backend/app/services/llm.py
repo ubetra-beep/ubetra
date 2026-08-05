@@ -97,7 +97,7 @@ PROVIDER_CATALOG = {
     LlmProvider.server.value: {
         "label": "Server default",
         "description": "Use the API key and model configured in the server's .env file.",
-        "policy_notes": "Uses whatever model the server admin configured. Content filtering depends on that provider's policy.",
+        "policy_notes": "Uses whatever model the server admin configured. Content filtering depends on that provider's policy. For fewer adult blocks, point the server at a local LM Studio / OpenRouter uncensored model instead of Gemini/OpenAI.",
         "default_model": normalize_gemini_model(settings.gemini_model),
         "models": list(
             dict.fromkeys(
@@ -105,22 +105,70 @@ PROVIDER_CATALOG = {
             )
         ),
         "key_url": "",
+        "needs_base_url": False,
+        "default_base_url": "",
+        "allow_empty_key": False,
     },
     LlmProvider.gemini.value: {
         "label": "Google Gemini",
         "description": "API key from Google AI Studio. Strong general model; check Google's safety settings for adult content.",
-        "policy_notes": "Google applies safety filters by default. Some adult/BDSM content may be blocked unless you adjust safety settings in AI Studio or use models with looser filters. Good for structured tasks and long context. Gemini 2.0/2.5 Flash IDs are retired — use gemini-3.5-flash.",
+        "policy_notes": "Google applies safety filters by default. Consensual adult/BDSM text may still be blocked. Best for structured tasks when content is mild. For explicit scene writing or manga, prefer LM Studio (local uncensored) or OpenRouter models marketed as uncensored. Gemini 2.0/2.5 Flash IDs are retired — use gemini-3.5-flash.",
         "default_model": DEFAULT_GEMINI_MODEL,
         "models": list(GEMINI_MODELS),
         "key_url": "https://aistudio.google.com/apikey",
+        "needs_base_url": False,
+        "default_base_url": "",
+        "allow_empty_key": False,
     },
     LlmProvider.openai.value: {
         "label": "OpenAI",
         "description": "API key from platform.openai.com. Widely used; content may be filtered under usage policies.",
-        "policy_notes": "OpenAI restricts some explicit sexual content in API use. Often more permissive for consensual adult scene planning than consumer ChatGPT, but still policy-bound. GPT-4o models are strong for creative writing.",
+        "policy_notes": "OpenAI restricts some explicit sexual content in API use. Often more permissive for consensual adult scene planning than consumer ChatGPT, but still policy-bound. Image models (DALL·E) frequently refuse NSFW manga panels — use script/hybrid modes or a local image pipeline.",
         "default_model": "gpt-4o",
         "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
         "key_url": "https://platform.openai.com/api-keys",
+        "needs_base_url": False,
+        "default_base_url": "https://api.openai.com/v1",
+        "allow_empty_key": False,
+    },
+    LlmProvider.openrouter.value: {
+        "label": "OpenRouter",
+        "description": "One key routes to many hosted models (including community / uncensored options).",
+        "policy_notes": "Filtering depends on the underlying model you pick. For adult D/s text, prefer models labeled uncensored / abliterated / NSFW-friendly rather than frontier OpenAI/Anthropic/Google models (those often still refuse). Images follow each model's rules — many refuse explicit art. Good middle ground when you cannot run local LM Studio.",
+        "default_model": "openrouter/auto",
+        "models": [
+            "openrouter/auto",
+            "nousresearch/hermes-3-llama-3.1-70b",
+            "cognitivecomputations/dolphin-mixtral-8x22b",
+            "microsoft/wizardlm-2-8x22b",
+            "meta-llama/llama-3.1-70b-instruct",
+        ],
+        "key_url": "https://openrouter.ai/keys",
+        "needs_base_url": False,
+        "default_base_url": "https://openrouter.ai/api/v1",
+        "allow_empty_key": False,
+    },
+    LlmProvider.lmstudio.value: {
+        "label": "LM Studio (local)",
+        "description": "OpenAI-compatible local server (LM Studio). Best option for uncensored adult content you control.",
+        "policy_notes": "Best for not getting blocked: load an uncensored / abliterated GGUF in LM Studio, enable the local server, and point UBETRA at its base URL (e.g. http://192.168.1.10:1234/v1). The Docker/server host must reach that URL (LAN or VPN). No vendor safety layer — you own the hardware and privacy. API key is often optional (use any placeholder if required).",
+        "default_model": "local-model",
+        "models": ["local-model"],
+        "key_url": "https://lmstudio.ai/",
+        "needs_base_url": True,
+        "default_base_url": "http://127.0.0.1:1234/v1",
+        "allow_empty_key": True,
+    },
+    LlmProvider.openai_compatible.value: {
+        "label": "OpenAI-compatible",
+        "description": "Any chat-completions endpoint: Ollama, text-generation-webui, Together, Fireworks, etc.",
+        "policy_notes": "Same as LM Studio when you self-host: pick an uncensored model to avoid adult blocks. Hosted proxies may still enforce their own policies — read the provider docs. Enter the full API root ending in /v1 when applicable.",
+        "default_model": "gpt-4o",
+        "models": ["gpt-4o", "llama3.1", "mixtral"],
+        "key_url": "",
+        "needs_base_url": True,
+        "default_base_url": "http://127.0.0.1:11434/v1",
+        "allow_empty_key": True,
     },
 }
 
@@ -131,6 +179,7 @@ class ResolvedLlmConfig:
     api_key: str
     model: str
     using_server_default: bool
+    base_url: str = ""
 
 
 def mask_api_key(api_key: str) -> str | None:
@@ -151,19 +200,35 @@ def _maybe_normalize_model(provider: str, model: str) -> str:
     return (model or "").strip()
 
 
+def _provider_base_url(provider: str, stored: str | None = None) -> str:
+    catalog = PROVIDER_CATALOG.get(provider) or {}
+    custom = (stored or "").strip()
+    if custom:
+        return custom.rstrip("/")
+    return (catalog.get("default_base_url") or "").rstrip("/")
+
+
 def resolve_llm_config_for_dynamic(user: User, dynamic: Dynamic | None = None) -> ResolvedLlmConfig:
-    if dynamic is not None and (dynamic.shared_llm_api_key or "").strip():
-        provider = dynamic.shared_llm_provider or LlmProvider.gemini.value
+    shared_key = (dynamic.shared_llm_api_key or "").strip() if dynamic is not None else ""
+    shared_provider = (dynamic.shared_llm_provider or "").strip() if dynamic is not None else ""
+    shared_base = (getattr(dynamic, "shared_llm_base_url", None) or "").strip() if dynamic else ""
+    if dynamic is not None and (shared_key or (shared_provider and shared_base)):
+        provider = shared_provider or LlmProvider.gemini.value
         catalog = PROVIDER_CATALOG.get(provider, PROVIDER_CATALOG[LlmProvider.gemini.value])
+        key = shared_key
+        if not key and catalog.get("allow_empty_key"):
+            key = "local"
         return ResolvedLlmConfig(
             provider=provider,
-            api_key=dynamic.shared_llm_api_key.strip(),
+            api_key=key,
             model=_maybe_normalize_model(
                 provider, dynamic.shared_llm_model or catalog["default_model"]
             ),
             using_server_default=False,
+            base_url=_provider_base_url(provider, shared_base),
         )
 
+    # LM Studio / compatible may use base_url without a real key
     provider = user.llm_provider or LlmProvider.server.value
     if provider == LlmProvider.server.value:
         return ResolvedLlmConfig(
@@ -173,20 +238,30 @@ def resolve_llm_config_for_dynamic(user: User, dynamic: Dynamic | None = None) -
                 provider, settings.gemini_model or DEFAULT_GEMINI_MODEL
             ),
             using_server_default=True,
+            base_url="",
         )
 
     catalog = PROVIDER_CATALOG.get(provider, PROVIDER_CATALOG[LlmProvider.gemini.value])
     model = _maybe_normalize_model(provider, user.llm_model or catalog["default_model"])
+    key = (user.llm_api_key or "").strip()
+    if not key and catalog.get("allow_empty_key"):
+        key = "local"
     return ResolvedLlmConfig(
         provider=provider,
-        api_key=(user.llm_api_key or "").strip(),
+        api_key=key,
         model=model,
         using_server_default=False,
+        base_url=_provider_base_url(provider, getattr(user, "llm_base_url", None)),
     )
 
 
 def is_llm_configured(user: User, dynamic: Dynamic | None = None) -> bool:
     config = resolve_llm_config_for_dynamic(user, dynamic)
+    catalog = PROVIDER_CATALOG.get(config.provider) or {}
+    if catalog.get("needs_base_url") and not config.base_url:
+        return False
+    if catalog.get("allow_empty_key"):
+        return bool(config.model and config.base_url)
     return bool(config.api_key and config.model)
 
 
@@ -211,18 +286,32 @@ def sync_user_llm_to_shared_dynamics(
         dynamic = db.get(Dynamic, membership.dynamic_id)
         if dynamic is None:
             continue
-        had_shared = bool((dynamic.shared_llm_api_key or "").strip())
-        if not had_shared and not clear and not (user.llm_api_key or "").strip():
+        had_shared = bool(
+            (dynamic.shared_llm_api_key or "").strip()
+            or (getattr(dynamic, "shared_llm_base_url", None) or "").strip()
+        )
+        if not had_shared and not clear and not (user.llm_api_key or "").strip() and not (
+            getattr(user, "llm_base_url", None) or ""
+        ).strip():
             continue
         if clear:
             dynamic.shared_llm_api_key = ""
+            dynamic.shared_llm_base_url = ""
         else:
             dynamic.shared_llm_provider = user.llm_provider or LlmProvider.gemini.value
             dynamic.shared_llm_model = user.llm_model or dynamic.shared_llm_model
+            if (getattr(user, "llm_base_url", None) or "").strip():
+                dynamic.shared_llm_base_url = user.llm_base_url.strip()
             if (user.llm_api_key or "").strip():
                 dynamic.shared_llm_api_key = user.llm_api_key.strip()
                 dynamic.shared_llm_set_by_membership_id = membership.id
-        if had_shared or (user.llm_api_key or "").strip():
+            elif PROVIDER_CATALOG.get(dynamic.shared_llm_provider, {}).get("allow_empty_key"):
+                dynamic.shared_llm_set_by_membership_id = membership.id
+                if not (dynamic.shared_llm_api_key or "").strip():
+                    dynamic.shared_llm_api_key = "local"
+        if had_shared or (user.llm_api_key or "").strip() or (
+            getattr(user, "llm_base_url", None) or ""
+        ).strip():
             updated += 1
     return updated
 
@@ -325,14 +414,28 @@ def generate_text(
 
     instruction = system_instruction or build_system_instruction(user, dynamic)
 
-    if config.provider == LlmProvider.openai.value:
-        from .openai_client import generate_openai_text
+    openai_like = {
+        LlmProvider.openai.value,
+        LlmProvider.openrouter.value,
+        LlmProvider.lmstudio.value,
+        LlmProvider.openai_compatible.value,
+    }
+    if config.provider in openai_like:
+        from .openai_client import generate_openai_compatible_text
 
-        return generate_openai_text(
-            api_key=config.api_key,
+        extra = {}
+        if config.provider == LlmProvider.openrouter.value:
+            extra = {
+                "HTTP-Referer": (settings.public_app_url or "https://ubetra.local").rstrip("/"),
+                "X-Title": "UBETRA",
+            }
+        return generate_openai_compatible_text(
+            api_key=config.api_key if config.api_key != "local" else "",
             model=config.model,
             system_instruction=instruction,
             user_prompt=prompt,
+            base_url=config.base_url or None,
+            extra_headers=extra or None,
         )
 
     from .gemini import generate_gemini_text
