@@ -964,6 +964,8 @@ class MangaPanel(Base):
     image_data: Mapped[str] = mapped_column(Text, default="")  # data URL or empty
     image_error: Mapped[str] = mapped_column(Text, default="")
 
+    comic: Mapped[MangaComic] = relationship(back_populates="panels")
+
 
 class AiService(Base):
     """Named LLM / image API connection (multiple per user or shared to a dynamic)."""
@@ -993,5 +995,3 @@ class AiService(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
-
-    comic: Mapped[MangaComic] = relationship(back_populates="panels")

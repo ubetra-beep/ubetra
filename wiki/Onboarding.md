@@ -4,6 +4,8 @@ Route: `/#/onboarding`
 
 Setup steps: **Dynamic → AI key → SPTI → Kinks → Done**
 
+After onboarding, configure modules and privacy using **[Features & Settings](Features-and-Settings)**.
+
 ![Onboarding — start or join](images/02-onboarding-dynamic.png)
 
 ---

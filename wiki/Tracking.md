@@ -2,13 +2,13 @@
 
 Route: `/#/dynamic/{id}/track`
 
-Hub for history, chastity, orgasm logging, feelings, sleep, punishment, journaling, and the image vault. This is the app's home screen for an active dynamic.
+Hub for history, chastity, orgasm logging, feelings, sleep, punishment, journaling, and the image vault.
 
 ![Tracking hub — Dom](images/11-tracking-hub.png)
 
 ![Tracking hub — Sub](images/35-sub-tracking.png)
 
-A collapsed **Setup / Dynamic** section at the bottom of the hub holds the less-frequently-used items — ground rules, dynamic interview, kink survey, knowledge, context library/journal library, and gear — plus a link to **Application features** (formerly "Menu features") for turning optional modules on/off.
+Collapsed **Setup / Dynamic** holds ground rules, interview, kink survey, knowledge, context/journal libraries, gear, and **Application features**.
 
 ---
 
@@ -16,7 +16,7 @@ A collapsed **Setup / Dynamic** section at the bottom of the hub holds the less-
 
 Route: `/#/dynamic/{id}/history`
 
-Reports, dashboards, and session logs for the dynamic.
+Reports and dashboards (weekly, orgasm, chastity stats). Demo data includes ~3 months of synthetic history plus recent wiki seed events.
 
 ![History](images/23-history.png)
 
@@ -26,7 +26,7 @@ Reports, dashboards, and session logs for the dynamic.
 
 Route: `/#/dynamic/{id}/chastity`
 
-Lock/unlock, temporary breaks, timers, and goals. When the Chastity feature is on, Subs can track immediately unless the Dom force-disables them. Subs may propose lock limits depending on policy.
+Lock/unlock, temporary breaks (Hygiene, Sleep, …), timers, goals, **Eventual Release**. Import prior lock/unlock CSV from Prior lockup history. Unlock reasons are tags on the timeline.
 
 ![Chastity](images/13-chastity.png)
 
@@ -36,7 +36,7 @@ Lock/unlock, temporary breaks, timers, and goals. When the Chastity feature is o
 
 Route: `/#/dynamic/{id}/tracking`
 
-Counts, tags, and calendars. Dom can configure which fields/metrics are shown.
+Counts, tags, calendars. Dom configures fields/metrics. **Prior orgasm / play history** supports CSV import with a **preview before confirm** and a success message after import.
 
 ![Orgasm tracking](images/14-orgasm-tracking.png)
 
@@ -46,7 +46,7 @@ Counts, tags, and calendars. Dom can configure which fields/metrics are shown.
 
 Route: `/#/dynamic/{id}/feelings`
 
-Wheel check-ins (feelings / desires) before and after play. Dom can set soft vs hard prompts and end-of-day expectations.
+Wheel check-ins (before/after play, end of day). Dom can set soft vs hard prompts.
 
 ![Feelings](images/15-feelings.png)
 
@@ -56,12 +56,9 @@ Wheel check-ins (feelings / desires) before and after play. Dom can set soft vs 
 
 Route: `/#/dynamic/{id}/sleep`
 
-**Off by default** — either Dom or Sub can enable it under Application features.
+**Off by default** — enable under Application features. Manual nights + Google / Garmin OAuth; Apple via iOS HealthKit.
 
-- Manual night logging  
-- **Google** Fitness sleep OAuth (primary)  
-- **Garmin** Wellness OAuth (needs `UBETRA_GARMIN_*` on the server)  
-- **Apple Health** via the iOS Capacitor app + HealthKit bridge (`mobile/IOS_HEALTHKIT.md`); browser shows a clear requirement message  
+![Sleep](images/29-sleep.png)
 
 ---
 
@@ -69,8 +66,7 @@ Route: `/#/dynamic/{id}/sleep`
 
 Route: `/#/dynamic/{id}/punishment`
 
-- **Sub:** confess / report an action  
-- **Dom:** assign or resolve  
+Sub confesses; Dom assigns or resolves. Pending items can surface in the return inbox.
 
 ![Punishment — Dom](images/16-punishment.png)
 
@@ -80,15 +76,7 @@ Route: `/#/dynamic/{id}/punishment`
 
 ## Tasks & acts
 
-Route: `/#/dynamic/{id}/tasks` (from **Playtime**)
-
-**Open tasks** and **Missed / Overdue** are expandable timelines with counts. Tap open items to complete when due today (or overdue with make-up granted). Daily recurring series are not shown as clickable for tomorrow’s occurrence.
-
-**Make-up:** Sub requests make-up on a missed task (optional note). Dom grants or denies (optional note; “Ask assistant for note” drafts Domme-tone text). After grant, the Sub can complete.
-
-**Dom controls:** edit content/tags, pause/unpause recurring series, multi-select bulk pause / remove future / apply category tag. Category presets: Domestic · Health / Hygiene · Sensual · Sexual (separate from orgasm tags). Create tasks and **Request a task** (Sub) live on the Playtime hub.
-
-Google Tasks sync UI is currently hidden (undeveloped).
+Managed from **Playtime** (`/#/dynamic/{id}/tasks`). Open/missed timelines, make-up requests, Dom bulk controls. See [Playtime](Playtime).
 
 ![Tasks](images/17-tasks.png)
 
@@ -98,7 +86,7 @@ Google Tasks sync UI is currently hidden (undeveloped).
 
 Route: `/#/dynamic/{id}/vault`
 
-Private images from chat. Stored encrypted when chat encryption is on. **Take photo** opens an in-app camera (using your device camera directly) instead of handing off to the OS camera app, falling back to a file picker if camera access is unavailable.
+Private images from chat. Any partner can delete; deletions are logged in chat. Chat **Images off** still shows vault links.
 
 ![Vault](images/24-vault.png)
 
@@ -108,21 +96,12 @@ Private images from chat. Stored encrypted when chat encryption is on. **Take ph
 
 Route: `/#/dynamic/{id}/journal`
 
-Private writing with optional AI assist, split out from the Context library. Each entry has two independent toggles:
+Private writing with **Use for AI** and **Visible to partner** toggles. Domme review can summarize an entry (needs LLM).
 
-- **Use for AI** — include this entry as context for AI assist and scene generation.
-- **Visible to partner** — when off, your partner sees the entry exists but its title/body is replaced with "Private entry."
-
-A hamburger menu lets you choose which context (stories, other journals, scenes, agreements, tracking) the AI should consider before you tap **Assist**. Doms also get a **Domme review** button that summarizes an entry using the assistant's Domme persona and can optionally post a system note to chat.
+![Journal](images/28-journal.png)
 
 ---
 
 ## Log cards
 
-Tracking history entries are collapsed by default, showing just the name, a relative timestamp (Today/Yesterday/hours), a type pill, and a colored accent stripe derived from the entry's tags. Tap a card to expand full details, or use the kebab (⋮) menu for **Edit** / **Delete**.
-
----
-
-## Inbox when returning
-
-After time away, an inbox overlay may surface pending punishments or settings approvals so nothing important is missed.
+Tracking history cards collapse by default (name, relative time, type pill, tag accent). Tap to expand; ⋮ for Edit / Delete.

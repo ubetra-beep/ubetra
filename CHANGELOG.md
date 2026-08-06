@@ -3,6 +3,15 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.88] — 2026-08-05
+
+### Fixed
+- Manga panel ↔ comic SQLAlchemy relationship (app would not start)
+
+### Changed
+- Wiki refreshed with seeded WikiDom/WikiSub demo data, new screenshots, and a Features & Settings guide
+- Service worker cache `ubetra-v88`
+
 ## [0.87] — 2026-08-05
 
 ### Added

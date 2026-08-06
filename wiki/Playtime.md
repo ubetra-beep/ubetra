@@ -2,11 +2,11 @@
 
 Route: `/#/dynamic/{id}/assistant`
 
-AI-assisted scene tools and games. Framed primarily for the Dom/keyholder; Subs see shared flows where allowed.
+AI-assisted scene tools, games, and tasks. Framed primarily for the Dom/keyholder; Subs see shared flows where allowed.
 
 ![Playtime hub](images/18-playtime.png)
 
-Needs a completed **dynamic interview** and a configured **LLM key** for full assistant features.
+Needs a completed **dynamic interview** and a configured **LLM key** for full assistant features. See [Features & Settings](Features-and-Settings).
 
 ---
 
@@ -14,7 +14,7 @@ Needs a completed **dynamic interview** and a configured **LLM key** for full as
 
 Route: `/#/dynamic/{id}/assistant/scene`
 
-Guided flow: effort → lean (Dom/Sub desires) → subject → full scene draft. A context (☰) menu lets you choose which sources — stories, journals, scenes, agreements, tracking — the AI draws on when generating the scene.
+Guided flow: effort → lean (Dom/Sub desires) → subject → full scene draft. Context (☰) chooses stories, journals, scenes, agreements, tracking.
 
 ---
 
@@ -24,8 +24,8 @@ Route: `/#/dynamic/{id}/assistant/games/spin`
 
 ![Spin game](images/25-spin-game.png)
 
-- **Dom:** full configuration, including outcomes that stay keyholder-only  
-- **Sub:** shared outcomes; post-orgasm spins when the Dom allows  
+- **Dom:** full configuration, including keyholder-only outcomes  
+- **Sub:** shared outcomes; post-orgasm spins when Dom allows  
 
 ---
 
@@ -33,11 +33,12 @@ Route: `/#/dynamic/{id}/assistant/games/spin`
 
 Route: `/#/dynamic/{id}/tasks`
 
-- **Tasks & acts** facet on this hub (moved from Tracking)
-- **Request a task** (Sub) at the top — needs keyholder approval
-- **Create tasks** (Dom) with optional category tags
+![Tasks](images/17-tasks.png)
 
-Open / missed timelines and make-up live on the Tasks screen. See [Tracking](Tracking) for the older screenshot reference until recaptured.
+- **Request a task** (Sub) — needs keyholder approval  
+- **Create tasks** (Dom) with category tags (Domestic · Health / Hygiene · Sensual · Sexual)  
+- Open / missed timelines and make-up live on the Tasks screen  
+- Acts of submission unlock after interview + submitted core knowledge  
 
 ---
 
@@ -45,11 +46,4 @@ Open / missed timelines and make-up live on the Tasks screen. See [Tracking](Tra
 
 Route: `/#/dynamic/{id}/manga`
 
-Opt-in (off by default; either partner can enable). Generates one comic per calendar month from dynamic context.
-
-Modes (all available, with in-app warnings):
-1. **Script / storyboard** — text panels only  
-2. **Hybrid** — images when the provider allows; otherwise captioned frames  
-3. **Full AI panels** — attempt an image per panel (hosted image APIs often refuse adult art)
-
-Prefer LM Studio or uncensored OpenRouter models for fewer text blocks; see Settings → AI provider help (?).
+Opt-in (off by default). One comic per calendar month. Prefer uncensored / local models for adult panels; see Settings → AI help.

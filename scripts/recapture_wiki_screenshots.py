@@ -1,8 +1,8 @@
-"""Finish onboarding and recapture hub screenshots for the wiki."""
+"""Recapture wiki screenshots against a seeded WikiDom/WikiSub demo."""
+
 from __future__ import annotations
 
 import json
-import re
 import time
 from pathlib import Path
 
@@ -13,6 +13,7 @@ BASE = "http://127.0.0.1:8000"
 API = f"{BASE}/api"
 OUT = Path(__file__).resolve().parents[1] / "wiki" / "images"
 META = Path(__file__).resolve().parents[1] / "wiki" / "capture-meta.json"
+OUT.mkdir(parents=True, exist_ok=True)
 
 DOM = {"email": "wiki-dom@example.com", "password": "WikiDemoPass123!"}
 SUB = {"email": "wiki-sub@example.com", "password": "WikiDemoPass123!"}
@@ -34,50 +35,58 @@ def shot(page, name):
     print("shot", path.name)
 
 
+def dismiss_overlays(page):
+    for sel in ("#inbox-overlay button", ".inbox-overlay button", 'button:has-text("Continue")', 'button:has-text("Got it")', 'button:has-text("Close")'):
+        btn = page.locator(sel)
+        if btn.count():
+            try:
+                btn.first.click(timeout=1500)
+                page.wait_for_timeout(400)
+            except Exception:
+                pass
+    page.evaluate(
+        """() => {
+          const o = document.getElementById('inbox-overlay');
+          if (o) o.remove();
+        }"""
+    )
+
+
 def login(page, user):
     page.goto(f"{BASE}/#/login")
+    page.wait_for_timeout(500)
+    dismiss_overlays(page)
     page.wait_for_selector('input[name="email"]')
     page.fill('input[name="email"]', user["email"])
     page.fill('input[name="password"]', user["password"])
-    page.click('button.primary-btn[type="submit"]')
-    page.wait_for_timeout(1200)
-
-
-def finish_onboarding(page):
-    for _ in range(10):
-        url = page.url
-        # Skip / fill later buttons
-        for label in ("Fill out later", "Skip for now", "Finish setup", "Go to your dynamic", "Continue"):
-            btn = page.locator(f'button:has-text("{label}")')
-            if btn.count():
-                btn.first.click()
-                page.wait_for_timeout(900)
-                break
-        else:
-            # Done button on finish card
-            done = page.locator('button.primary-btn')
-            if "You're all set" in page.content() and done.count():
-                done.first.click()
-                page.wait_for_timeout(1000)
-            break
-        if "#/onboarding" not in page.url and "#/dynamic" in page.url:
-            break
-        if "#/onboarding" not in page.url and "Welcome to UBETRA" not in page.content():
-            break
+    page.locator('button.primary-btn[type="submit"]').first.click(force=True)
+    page.wait_for_timeout(1400)
+    dismiss_overlays(page)
 
 
 def goto_wait(page, hash_path, ready_text=None, timeout=15000):
     page.goto(f"{BASE}/#{hash_path}")
-    page.wait_for_timeout(500)
-    # Force hashchange if already on same path
+    page.wait_for_timeout(400)
     page.evaluate(f"() => {{ location.hash = '{hash_path}'; }}")
     if ready_text:
-        page.wait_for_selector(f"text={ready_text}", timeout=timeout)
+        try:
+            page.wait_for_selector(f"text={ready_text}", timeout=timeout)
+        except Exception:
+            page.wait_for_timeout(1200)
     else:
         page.wait_for_timeout(1200)
 
 
 def main():
+    for _ in range(40):
+        try:
+            if requests.get(f"{API}/health", timeout=2).ok:
+                break
+        except Exception:
+            time.sleep(0.5)
+    else:
+        raise SystemExit("Server not healthy")
+
     meta = json.loads(META.read_text(encoding="utf-8"))
     dynamic_id = meta["dynamic_id"]
 
@@ -91,62 +100,32 @@ def main():
         )
         page = context.new_page()
 
-        # Dom: complete onboarding via API skips + UI
+        # Login screen
+        page.goto(f"{BASE}/#/login")
+        page.wait_for_selector("h1, .auth-card", timeout=15000)
+        shot(page, "00-login")
+
         login(page, DOM)
         token = page.evaluate("() => localStorage.getItem('ubetra_token')")
-        # API-complete remaining onboarding steps
-        try:
-            api("POST", "/onboarding/skip-api", token=token)
-        except Exception:
-            pass
-        try:
-            api("PUT", "/onboarding/spti", token=token, json={"skipped": True})
-        except Exception:
-            pass
-        try:
-            api("POST", "/onboarding/skip-survey", token=token)
-        except Exception:
-            pass
-        try:
-            api("POST", "/onboarding/complete", token=token)
-        except Exception as e:
-            print("complete warn", e)
 
-        page.goto(f"{BASE}/#/dynamic/{dynamic_id}")
-        page.wait_for_timeout(1500)
-        finish_onboarding(page)
-        page.goto(f"{BASE}/#/dynamic/{dynamic_id}")
-        page.wait_for_timeout(1500)
+        goto_wait(page, f"/dynamic/{dynamic_id}", ready_text=None)
+        page.wait_for_timeout(1000)
         shot(page, "10-dynamic-overview")
-
-        # Turn off e2e for demo plaintext chat seed, then capture
-        try:
-            api(
-                "PUT",
-                f"/dynamics/{dynamic_id}/chat/settings",
-                token=token,
-                json={"e2e_enabled": False},
-            )
-            api(
-                "POST",
-                f"/dynamics/{dynamic_id}/chat/messages",
-                token=token,
-                json={"message_type": "text", "body": "Welcome to our wiki demo dynamic."},
-            )
-            api(
-                "POST",
-                f"/dynamics/{dynamic_id}/chat/messages",
-                token=token,
-                json={"message_type": "text", "body": "Encrypted chat and push work on every signed-in device."},
-            )
-        except Exception as e:
-            print("seed chat", e)
+        shot(page, "07-dom-home-dynamic")
 
         goto_wait(page, f"/dynamic/{dynamic_id}/track", "History")
         shot(page, "11-tracking-hub")
 
         goto_wait(page, f"/dynamic/{dynamic_id}/ground-rules", "Ground")
         shot(page, "12-ground-rules")
+
+        goto_wait(page, f"/dynamic/{dynamic_id}/interview", ready_text=None)
+        page.wait_for_timeout(1200)
+        shot(page, "26-interview")
+
+        goto_wait(page, f"/dynamic/{dynamic_id}/knowledge", ready_text=None)
+        page.wait_for_timeout(1200)
+        shot(page, "27-core-knowledge")
 
         goto_wait(page, f"/dynamic/{dynamic_id}/chastity", "Chastity")
         shot(page, "13-chastity")
@@ -169,22 +148,21 @@ def main():
         shot(page, "18-playtime")
 
         goto_wait(page, f"/chat/{dynamic_id}", "Chat")
-        page.wait_for_timeout(800)
+        page.wait_for_timeout(900)
         shot(page, "19-chat")
 
         goto_wait(page, f"/settings?dynamic={dynamic_id}", "Settings")
         page.wait_for_timeout(1000)
         shot(page, "20-settings")
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
         page.wait_for_timeout(400)
         shot(page, "21-settings-lower")
 
-        # Survey (good reference from earlier finish attempt)
         goto_wait(page, f"/dynamic/{dynamic_id}/survey", "Kink")
         shot(page, "22-kink-list")
 
         goto_wait(page, f"/dynamic/{dynamic_id}/history", ready_text=None)
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(1200)
         shot(page, "23-history")
 
         goto_wait(page, f"/dynamic/{dynamic_id}/vault", ready_text=None)
@@ -195,48 +173,54 @@ def main():
         page.wait_for_timeout(1200)
         shot(page, "25-spin-game")
 
-        # Logout and Sub
-        page.evaluate("() => { localStorage.removeItem('ubetra_token'); location.hash='#/login'; }")
-        page.wait_for_timeout(600)
-        login(page, SUB)
-        sub_token = page.evaluate("() => localStorage.getItem('ubetra_token')")
-        try:
-            api("POST", "/onboarding/skip-api", token=sub_token)
-        except Exception:
-            pass
-        try:
-            api("PUT", "/onboarding/spti", token=sub_token, json={"skipped": True})
-        except Exception:
-            pass
-        try:
-            api("POST", "/onboarding/skip-survey", token=sub_token)
-        except Exception:
-            pass
-        try:
-            api("POST", "/onboarding/complete", token=sub_token)
-        except Exception:
-            pass
+        goto_wait(page, f"/dynamic/{dynamic_id}/journal", ready_text=None)
+        page.wait_for_timeout(1000)
+        shot(page, "28-journal")
 
-        page.goto(f"{BASE}/#/dynamic/{dynamic_id}")
-        page.wait_for_timeout(1500)
-        finish_onboarding(page)
-        page.goto(f"{BASE}/#/dynamic/{dynamic_id}")
+        goto_wait(page, f"/dynamic/{dynamic_id}/sleep", ready_text=None)
+        page.wait_for_timeout(1000)
+        shot(page, "29-sleep")
+
+        # Sub views
+        page.evaluate(
+            """() => {
+              localStorage.removeItem('ubetra_token');
+              localStorage.removeItem('ubetra_user');
+              location.hash = '#/login';
+              location.reload();
+            }"""
+        )
         page.wait_for_timeout(1200)
+        login(page, SUB)
+        dismiss_overlays(page)
+
+        goto_wait(page, f"/dynamic/{dynamic_id}", ready_text=None)
+        page.wait_for_timeout(1000)
+        dismiss_overlays(page)
         shot(page, "32-sub-dynamic-overview")
 
         goto_wait(page, f"/chat/{dynamic_id}", "Chat")
+        dismiss_overlays(page)
         shot(page, "33-sub-chat")
 
         goto_wait(page, f"/settings?dynamic={dynamic_id}", "Settings")
+        dismiss_overlays(page)
         shot(page, "34-sub-settings")
 
         goto_wait(page, f"/dynamic/{dynamic_id}/track", "History")
+        dismiss_overlays(page)
         shot(page, "35-sub-tracking")
 
         goto_wait(page, f"/dynamic/{dynamic_id}/punishment", "Punishment")
+        dismiss_overlays(page)
         shot(page, "36-sub-punishment")
 
-        print("recapture done")
+        goto_wait(page, f"/dynamic/{dynamic_id}/interview", ready_text=None)
+        page.wait_for_timeout(1000)
+        dismiss_overlays(page)
+        shot(page, "37-sub-interview")
+
+        print("recapture done", dynamic_id)
         browser.close()
 
 

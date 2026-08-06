@@ -4,6 +4,8 @@ Route: `/#/settings` (optional `?dynamic={id}`)
 
 One sticky **Save** appears when something changed. Subs see **Submit settings change** for Dom-controlled fields.
 
+For the full module map and “how to use it,” see **[Features & Settings](Features-and-Settings)**.
+
 ![Settings — Dom](images/20-settings.png)
 
 ![Settings scrolled](images/21-settings-lower.png)
@@ -14,7 +16,7 @@ One sticky **Save** appears when something changed. Subs see **Submit settings c
 
 ## Account
 
-Username, biological sex, email, password, and **Log out**. Dom may rename a Sub’s username for the dynamic.
+Username, biological sex, email, password, and **Log out**. Dom may rename a Sub’s username for the dynamic. Password reset uses email code **and** link when SMTP is configured.
 
 ## Appearance
 
@@ -26,8 +28,9 @@ Switch, create, or view invite context for the selected dynamic.
 
 ## AI & assistant
 
-- Shared dynamic key (preferred) vs personal Advanced key  
-- Provider / model  
+- Multiple named connections (text / adult / images) with Batch test probes  
+- Advanced AI routing per tool (red = needs assignment)  
+- Shared dynamic key vs personal Advanced key  
 - Dom: assistant tone and extra instructions  
 
 ## Chat & privacy
@@ -35,12 +38,13 @@ Switch, create, or view invite context for the selected dynamic.
 - Encrypted chat (shared key)  
 - Retain forever vs expire hours  
 - System events in chat  
+- **Only keyholder can clear chat** (off by default — anyone may clear)  
 - Image blur  
 - Device + dynamic push  
 
 ## Features
 
-Toggle optional menu modules (context library, gear, SPTI, scene workshop, etc.). Feature toggles are Dom-controlled.
+Toggle optional menu modules. Feature toggles are Dom-controlled (except partner-enableable sleep / manga).
 
 ## Chastity policy
 
@@ -48,7 +52,7 @@ e.g. whether the Sub may delete temporary unlock log entries.
 
 ## Integrations
 
-Google Tasks is currently hidden until the feature is ready.
+Google Tasks UI is currently hidden until ready. Sleep OAuth (Google / Garmin) appears when Sleep tracking is enabled.
 
 ## Backup
 

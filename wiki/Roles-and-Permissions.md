@@ -24,12 +24,14 @@ UBETRA assumes a **Dominant / keyholder** and a **Submissive** in each dynamic. 
 ## Dom-controlled settings (examples)
 
 - Application features  
-- Chat system events / retain history  
+- Chat system events / retain history / clear-chat policy  
 - Feelings prompt mode & end-of-day  
 - Assistant tone / extra instructions  
 - Chastity “Sub can delete breaks”  
 
 When a Sub saves one of these, a **settings request** appears in Chat for the Dom to approve or deny.
+
+Full map: [Features & Settings](Features-and-Settings).
 
 ---
 

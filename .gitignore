@@ -50,5 +50,6 @@ _tmp*
 *.log
 .wiki-clone/
 .wiki-official/
+.wiki-publish/
 wiki/capture-meta.json
 wiki/BOOTSTRAP_NEEDED.txt

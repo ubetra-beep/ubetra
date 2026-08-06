@@ -3,6 +3,7 @@
 **[Home](Home)**  
 **[Getting Started](Getting-Started)**  
 **[Onboarding](Onboarding)**  
+**[Features & Settings](Features-and-Settings)**  
 **[Dynamics](Dynamics)**  
 **[Tracking](Tracking)**  
 **[Chat](Chat)**  
