@@ -3,6 +3,32 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.89] — 2026-08-13
+
+### Added
+- **Cycle tracking** (opt-in, partner-enableable): manual flow/symptoms log; partner can view; Health Connect menstruation import on Android
+- **Health Connect** (Android APK): on-device sleep and cycle sync from Samsung Health, Fitbit, Pixel Watch, and other apps that write to Health Connect — not Google Fit cloud OAuth
+- Sleep history window: sync from the dynamic’s first log (not a hardcoded 14 days); “past data” / history permission for older nights
+- Days in chastity calendar: sleep rings (hours + locked/unlocked) and sex-tag dots (denied/milking, ruined, full orgasm)
+- Chat **bubble color** per person (applies immediately; saved on the membership)
+- Edit and delete your own chat messages (image delete also removes the vault copy)
+- Style-aware PWA / home-screen **bird icons** (violet, sage, midnight, ember, cream); asked on install and in Appearance
+- In-app **Android APK** download (`/apk/ubetra.apk`, Settings card); persistent signing keystore on the server
+- Capacitor plugin `@ubetra/health-connect` and APK **0.85** (sleep-only vs cycle-only permission requests)
+
+### Changed
+- Sleep page: collapsible log-cards like tracking; sessions within 6 hours awake are one night (hours summed, gaps omitted)
+- Health Connect sleep sync no longer requires Cycle / Menstruation permission
+- Sleep list loads a much longer history so nights can be grouped
+- Vault delete of a chat-sourced image also deletes the chat message (and sibling vault copies)
+- Docker Compose bind-mounts `mobile/dist` so the published APK is served from the container
+- Service worker cache `ubetra-v101`
+
+### Fixed
+- Chat bubble color swatches now paint live (not only after Save); tints are strong enough to see
+- Sleep sync failing when cycle tracking / menstruation wasn’t granted
+- APK sideload / Play Protect notes and DownloadManager handling in the WebView
+
 ## [0.88] — 2026-08-05
 
 ### Fixed

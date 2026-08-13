@@ -465,6 +465,7 @@ class ChatSettingsOut(BaseModel):
     you_are_dominant: bool = False
     chastity_sub_can_delete_breaks: bool = True
     clear_dom_only: bool = False
+    bubble_color: str = ""
 
 
 class ChatSettingsUpdate(BaseModel):
@@ -475,6 +476,7 @@ class ChatSettingsUpdate(BaseModel):
     push_enabled: bool | None = None
     chastity_sub_can_delete_breaks: bool | None = None
     clear_dom_only: bool | None = None
+    bubble_color: str | None = Field(default=None, max_length=16)
 
 
 class SettingsRequestCreate(BaseModel):
@@ -583,9 +585,16 @@ class ChatMessageOut(BaseModel):
     action: str = ""
     payload: dict = {}
     created_at: datetime
+    edited_at: datetime | None = None
+    sender_bubble_color: str = ""
 
     class Config:
         from_attributes = True
+
+
+class ChatMessageUpdate(BaseModel):
+    body: str = ""
+    body_encrypted: str = ""
 
 
 class ImageUnlockResolve(BaseModel):
@@ -1286,6 +1295,9 @@ class HistoryChastityDayOut(BaseModel):
     date: str
     status: str
     locked_seconds: int
+    sleep_hours: float | None = None
+    sleep_locked: bool | None = None
+    sex_dots: list[str] = []
 
 
 class HistoryChastityDaysPartnerOut(BaseModel):

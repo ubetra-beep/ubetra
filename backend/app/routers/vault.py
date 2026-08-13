@@ -175,7 +175,18 @@ def delete_vault_image(
     if image is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Image not found")
     title = (image.title or "Untitled").strip() or "Untitled"
-    db.delete(image)
+    chat_id = image.source_chat_message_id
+    if chat_id:
+        db.query(VaultImage).filter(
+            VaultImage.dynamic_id == dynamic_id,
+            VaultImage.source_chat_message_id == chat_id,
+        ).delete(synchronize_session=False)
+        db.flush()
+        chat_msg = db.get(ChatMessage, chat_id)
+        if chat_msg is not None and chat_msg.dynamic_id == dynamic_id:
+            db.delete(chat_msg)
+    else:
+        db.delete(image)
     post_system_event(
         db,
         dynamic_id,

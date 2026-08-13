@@ -818,6 +818,8 @@ def run_migrations() -> None:
             "ALTER TABLE chat_messages ADD COLUMN image_unlock_granted BOOLEAN DEFAULT 0"
           )
         )
+      if "edited_at" not in chat_msg_cols:
+        conn.execute(text("ALTER TABLE chat_messages ADD COLUMN edited_at DATETIME"))
 
     dynamic_columns = {
       row[1]
@@ -1189,4 +1191,41 @@ def run_migrations() -> None:
     if "chat_clear_dom_only" not in dyn_cols2:
       conn.execute(
         text("ALTER TABLE dynamics ADD COLUMN chat_clear_dom_only BOOLEAN DEFAULT 0")
+      )
+
+    mem_cols_bubble = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(memberships)")).fetchall()
+    }
+    if "chat_bubble_color" not in mem_cols_bubble:
+      conn.execute(
+        text("ALTER TABLE memberships ADD COLUMN chat_bubble_color VARCHAR(16) DEFAULT ''")
+      )
+
+    tables_cycle = {
+      row[0]
+      for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    }
+    if "cycle_logs" not in tables_cycle:
+      conn.execute(
+        text(
+          "CREATE TABLE cycle_logs ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "subject_membership_id VARCHAR(36) NOT NULL,"
+          "day VARCHAR(10) NOT NULL,"
+          "flow VARCHAR(16) DEFAULT 'none',"
+          "symptoms_json TEXT DEFAULT '[]',"
+          "notes TEXT DEFAULT '',"
+          "source VARCHAR(32) DEFAULT 'manual',"
+          "external_id VARCHAR(191) DEFAULT '',"
+          "created_at DATETIME,"
+          "updated_at DATETIME,"
+          "CONSTRAINT uq_cycle_person_day UNIQUE (dynamic_id, subject_membership_id, day)"
+          ")"
+        )
+      )
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cycle_logs_dynamic_id ON cycle_logs (dynamic_id)"))
+      conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_cycle_logs_subject ON cycle_logs (subject_membership_id)")
       )

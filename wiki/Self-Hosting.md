@@ -24,6 +24,8 @@ docker compose up -d --build
 
 Data persists in the `ubetra-data` volume. Optional: `UBETRA_HOST_PORT=18000` if 8000 is taken.
 
+`mobile/dist` is bind-mounted read-only so a built APK is downloadable from Settings.
+
 ## Important env vars
 
 | Variable | Purpose |
@@ -34,9 +36,11 @@ Data persists in the `ubetra-data` volume. Optional: `UBETRA_HOST_PORT=18000` if
 | `UBETRA_MFA_REQUIRED` | Email OTP |
 | `UBETRA_ALLOW_PUBLIC_REGISTER` | Open registration |
 | `UBETRA_SMTP_*` | SMTP for MFA codes **and** password-reset emails (code + link) |
-| `UBETRA_GOOGLE_*` | Google OAuth (Tasks + Fitness sleep redirect) |
+| `UBETRA_GOOGLE_*` | Google OAuth (Tasks; Fitness sleep is unused if you use Health Connect) |
 | `UBETRA_GARMIN_*` | Optional Garmin Wellness sleep OAuth |
 | `UBETRA_VAPID_CONTACT` | Web Push contact (`mailto:…`) |
+
+Health Connect sleep/cycle sync is **on the phone**, not a Google cloud login.
 
 ## HTTPS
 

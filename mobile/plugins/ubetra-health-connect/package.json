@@ -1,0 +1,16 @@
+{
+  "name": "@ubetra/health-connect",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Read sleep and cycle from Android Health Connect",
+  "main": "src/index.js",
+  "files": ["android", "src"],
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=7.0.0"
+  }
+}

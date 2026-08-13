@@ -37,8 +37,14 @@ Full Android Studio GUI is not needed — the server uses Docker images:
 ```bash
 cd ~/docker/ubetra
 bash mobile/scripts/build-apk.sh
-# → mobile/dist/ubetra-debug.apk
+# → mobile/dist/ubetra.apk  (also copied as ubetra-debug.apk)
 ```
+
+The web app serves that file at **`https://ubeneeko.duckdns.org/apk/ubetra.apk`**. In the Android app, **Settings → Update app** downloads it with the system download manager.
+
+**Installing:** close UBETRA completely, then tap the download. Play Protect may warn (sideload) — tap **Install anyway**.
+
+**“App not installed”:** the previous APKs were signed with a throwaway debug key. Uninstall the old UBETRA **once**, then install 0.82+. Later updates use a persistent keystore on the server and can install over the current app.
 
 Copy to your PC:
 

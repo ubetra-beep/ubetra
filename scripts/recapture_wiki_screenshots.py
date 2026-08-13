@@ -46,8 +46,11 @@ def dismiss_overlays(page):
                 pass
     page.evaluate(
         """() => {
-          const o = document.getElementById('inbox-overlay');
-          if (o) o.remove();
+          for (const id of ['inbox-overlay', 'punishment-remind-overlay']) {
+            const o = document.getElementById(id);
+            if (o) o.remove();
+          }
+          document.querySelectorAll('.inbox-overlay').forEach((n) => n.remove());
         }"""
     )
 
@@ -104,6 +107,10 @@ def main():
         page.goto(f"{BASE}/#/login")
         page.wait_for_selector("h1, .auth-card", timeout=15000)
         shot(page, "00-login")
+
+        page.goto(f"{BASE}/#/register")
+        page.wait_for_selector('input[name="email"]', timeout=15000)
+        shot(page, "01-register-wikidom")
 
         login(page, DOM)
         token = page.evaluate("() => localStorage.getItem('ubetra_token')")
@@ -179,7 +186,39 @@ def main():
 
         goto_wait(page, f"/dynamic/{dynamic_id}/sleep", ready_text=None)
         page.wait_for_timeout(1000)
-        shot(page, "29-sleep")
+        page.evaluate(
+            """() => {
+              const n = document.querySelector('.sleep-log-list') || document.querySelector('.sleep-log-card');
+              if (n) n.scrollIntoView({ block: 'start' });
+            }"""
+        )
+        page.wait_for_timeout(400)
+        page.screenshot(path=str(OUT / "29-sleep.png"), full_page=False)
+        print("shot 29-sleep.png")
+
+        goto_wait(page, f"/dynamic/{dynamic_id}/history/chastity-days", ready_text=None)
+        page.wait_for_timeout(1500)
+        loc = page.get_by_text("August 2026")
+        if loc.count():
+            loc.first.scroll_into_view_if_needed()
+            page.wait_for_timeout(400)
+        shot(page, "39-chastity-days")
+
+        goto_wait(page, f"/settings?dynamic={dynamic_id}", "Settings")
+        page.wait_for_timeout(800)
+        app = page.locator("summary", has_text="Appearance")
+        if app.count():
+            try:
+                app.first.click(force=True)
+                page.wait_for_timeout(400)
+            except Exception:
+                pass
+        picker = page.locator(".icon-style-picker")
+        if picker.count():
+            picker.first.scroll_into_view_if_needed()
+            page.wait_for_timeout(400)
+            page.screenshot(path=str(OUT / "40-appearance.png"), full_page=False)
+            print("shot 40-appearance.png")
 
         # Sub views
         page.evaluate(
@@ -210,6 +249,11 @@ def main():
         goto_wait(page, f"/dynamic/{dynamic_id}/track", "History")
         dismiss_overlays(page)
         shot(page, "35-sub-tracking")
+
+        goto_wait(page, f"/dynamic/{dynamic_id}/cycle", ready_text=None)
+        page.wait_for_timeout(1000)
+        dismiss_overlays(page)
+        shot(page, "38-cycle")
 
         goto_wait(page, f"/dynamic/{dynamic_id}/punishment", "Punishment")
         dismiss_overlays(page)

@@ -28,6 +28,12 @@ OPTIONAL_FEATURES = {
         "default_enabled": False,
         "partner_enableable": True,
     },
+    "cycle_tracking": {
+        "title": "Cycle tracking",
+        "section": "tracking",
+        "default_enabled": False,
+        "partner_enableable": True,
+    },
     # tasks + acts are one Playtime menu item (merged UI); keep both keys for API gates
     "tasks": {"title": "Tasks & acts", "section": "playtime", "paired_with": "acts"},
     "acts": {"title": "Tasks & acts", "section": "playtime", "hidden": True, "paired_with": "tasks"},

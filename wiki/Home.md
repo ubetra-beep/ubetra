@@ -52,4 +52,4 @@ Screenshots on these pages come from a local **WikiDom** (Dominant) / **WikiSub*
 
 ## Version
 
-Docs match app **v0.87** (CSV import preview, chat chrome fixes, clear-chat policy, vault links when images are off). See the [CHANGELOG](https://github.com/ubetra-beep/ubetra/blob/main/CHANGELOG.md).
+Docs match app **v0.89** (Health Connect sleep/cycle, grouped sleep logs, Days in chastity sleep rings, chat bubble colors, PWA icon styles). See the [CHANGELOG](https://github.com/ubetra-beep/ubetra/blob/main/CHANGELOG.md).

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from sqlalchemy.orm import Session, joinedload
@@ -9,15 +10,26 @@ from ..models import (
     ChastityLockup,
     Membership,
     OrgTrackingEntry,
+    SleepSession,
 )
 from .chastity import chastity_subs
+from .history_dashboard import locked_seconds_in_range
 from .lockup_at_time import load_lockups_for_dynamic, lockup_context_for_entry
 from .chastity_calendar import (
     calendar_day_status,
     count_rolling_full_days,
 )
-from .tags import entry_matches_selected_tags, tags_to_list
-from .tracking_events import has_full_orgasm_tag, has_ruined_orgasm_tag, is_orgasm_event, is_play_event, orgasm_count
+from .sleep_nights import group_sleep_nights_by_subject, merged_sleep_intervals
+from .tags import entry_all_tags, entry_matches_selected_tags, tags_to_list
+from .tracking_events import (
+    has_denial_tag,
+    has_full_orgasm_tag,
+    has_milking_tag,
+    has_ruined_orgasm_tag,
+    is_orgasm_event,
+    is_play_event,
+    orgasm_count,
+)
 
 RUIN_TYPES = {ChastityBreakType.authorized_denial, ChastityBreakType.authorized_ruin}
 
@@ -94,6 +106,65 @@ def build_chastity_days_report(
     if not tracked_subs:
         lockups = []
 
+    sleep_rows = (
+        db.query(SleepSession)
+        .filter(
+            SleepSession.dynamic_id == dynamic_id,
+            SleepSession.end_at >= period_start - timedelta(hours=18),
+            SleepSession.start_at <= period_end + timedelta(hours=18),
+        )
+        .all()
+    )
+    sleep_by_member_day: dict[tuple[str, str], dict] = {}
+    for mid, nights in group_sleep_nights_by_subject(sleep_rows).items():
+        for night in nights:
+            key = (mid, night.night_date)
+            intervals = merged_sleep_intervals(night.sessions)
+            sleep_secs = sum((end - start).total_seconds() for start, end in intervals)
+            locked_secs = 0.0
+            for lockup in lockups:
+                if lockup.for_membership_id != mid:
+                    continue
+                for start, end in intervals:
+                    locked_secs += locked_seconds_in_range(lockup, start, end)
+            prev = sleep_by_member_day.get(key)
+            if prev:
+                prev["sleep_hours"] += night.duration_min / 60.0
+                prev["_sleep_secs"] += sleep_secs
+                prev["_locked_secs"] += locked_secs
+            else:
+                sleep_by_member_day[key] = {
+                    "sleep_hours": night.duration_min / 60.0,
+                    "_sleep_secs": sleep_secs,
+                    "_locked_secs": locked_secs,
+                }
+    for info in sleep_by_member_day.values():
+        sleep_secs = info.pop("_sleep_secs", 0.0)
+        locked_secs = info.pop("_locked_secs", 0.0)
+        info["sleep_locked"] = sleep_secs > 0 and locked_secs >= sleep_secs * 0.5
+        info["sleep_hours"] = round(info["sleep_hours"], 2)
+
+    tracking_rows = (
+        db.query(OrgTrackingEntry)
+        .options(joinedload(OrgTrackingEntry.orgasms))
+        .filter(
+            OrgTrackingEntry.dynamic_id == dynamic_id,
+            OrgTrackingEntry.occurred_at >= period_start,
+            OrgTrackingEntry.occurred_at <= period_end,
+        )
+        .all()
+    )
+    dots_by_member_day: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for entry in tracking_rows:
+        tags = entry_all_tags(entry)
+        dots = dots_by_member_day[(entry.for_membership_id, entry.occurred_at.date().isoformat())]
+        if has_denial_tag(tags) or has_milking_tag(tags):
+            dots.add("denied")
+        if has_ruined_orgasm_tag(tags):
+            dots.add("ruined")
+        if has_full_orgasm_tag(tags):
+            dots.add("full")
+
     day_list = _days_in_range(period_start.date(), period_end.date())
     partners = []
     for sub in tracked_subs:
@@ -110,11 +181,17 @@ def build_chastity_days_report(
                 partial_days += 1
             else:
                 free_days += 1
+            day_key = (sub.id, day.isoformat())
+            sleep_info = sleep_by_member_day.get(day_key)
+            dot_set = dots_by_member_day.get(day_key, set())
             days_payload.append(
                 {
                     "date": day.isoformat(),
                     "status": status,
                     "locked_seconds": locked,
+                    "sleep_hours": sleep_info["sleep_hours"] if sleep_info else None,
+                    "sleep_locked": sleep_info["sleep_locked"] if sleep_info else None,
+                    "sex_dots": [kind for kind in ("denied", "ruined", "full") if kind in dot_set],
                 }
             )
         partners.append(

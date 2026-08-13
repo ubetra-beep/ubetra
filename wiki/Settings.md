@@ -20,7 +20,9 @@ Username, biological sex, email, password, and **Log out**. Dom may rename a Sub
 
 ## Appearance
 
-Color theme for this device (Midnight, Ember, Forest, Slate). Stored in localStorage — not synced yet.
+Color theme for this device (Midnight, Ember, Forest, Slate). **App icon** style (violet, sage, midnight, ember, cream) is used when you install the PWA. Stored in localStorage — not synced yet.
+
+![Appearance / app icon](images/40-appearance.png)
 
 ## Dynamics
 
@@ -39,12 +41,13 @@ Switch, create, or view invite context for the selected dynamic.
 - Retain forever vs expire hours  
 - System events in chat  
 - **Only keyholder can clear chat** (off by default — anyone may clear)  
+- Your **chat bubble color**  
 - Image blur  
 - Device + dynamic push  
 
 ## Features
 
-Toggle optional menu modules. Feature toggles are Dom-controlled (except partner-enableable sleep / manga).
+Toggle optional menu modules. Feature toggles are Dom-controlled (except partner-enableable sleep / cycle / manga).
 
 ## Chastity policy
 
@@ -52,7 +55,7 @@ e.g. whether the Sub may delete temporary unlock log entries.
 
 ## Integrations
 
-Google Tasks UI is currently hidden until ready. Sleep OAuth (Google / Garmin) appears when Sleep tracking is enabled.
+Google Tasks UI is currently hidden until ready. Sleep/cycle Health Connect lives in the Android APK. Garmin OAuth appears when Sleep tracking is enabled.
 
 ## Backup
 

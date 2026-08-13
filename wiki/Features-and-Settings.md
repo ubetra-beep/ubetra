@@ -12,7 +12,7 @@ This page is the map of **what UBETRA can do** and **where you configure it**. S
 
 | Hub | Purpose | Typical use |
 |-----|---------|-------------|
-| **Tracking** | Day-to-day logs and status | History, chastity, orgasm/play log, feelings, sleep, punishment, journal, vault; Setup / Dynamic at the bottom |
+| **Tracking** | Day-to-day logs and status | History, chastity, orgasm/play log, feelings, sleep, cycle, punishment, journal, vault; Setup / Dynamic at the bottom |
 | **Playtime** | Games, AI scenes, tasks | Scene builder, spin the wheel, tasks & acts, monthly manga (opt-in) |
 | **Chat** | Conversation + activity feed | Messages, photos, system logs (lockups, tracking, settings approvals) |
 
@@ -37,10 +37,11 @@ Each hub’s **☰** opens **Application features** for that area (same toggles 
 | SPTI profile | On | Paste personality results for AI context |
 | Context library | On | Files/links tagged for AI |
 | Gear | On | Toys / outfits inventory |
-| Sleep tracking | **Off** | Manual log + Google / Garmin / Apple HealthKit; either partner can enable |
+| Sleep tracking | **Off** | Collapsible night log; Health Connect on Android (sleep permission only); Garmin / Apple optional |
+| Cycle tracking | **Off** | Period flow/symptoms; partner can view; Health Connect menstruation import |
 | Monthly manga | **Off** | One comic/month; either partner can enable |
 
-Dom-controlled for most toggles; sleep/manga are partner-enableable.
+Dom-controlled for most toggles; sleep / cycle / manga are partner-enableable.
 
 ---
 
@@ -50,7 +51,7 @@ Dom-controlled for most toggles; sleep/manga are partner-enableable.
 Change username, email, password; log out. Dom may rename the Sub’s username for the dynamic.
 
 ### Appearance
-Device theme (Midnight, Ember, Forest, Slate) — local to this browser/app.
+Device theme (Midnight, Ember, Forest, Slate) and **PWA app icon** style — local to this browser/app.
 
 ### Dynamics
 Pick the active dynamic, create another, or copy invite context.
@@ -70,6 +71,7 @@ Use this when Playtime scenes, journal assist, Domme review, or acts need a mode
 | Keep forever / server cache hours | Timed cache (~30d) | Multi-device sync vs auto-delete |
 | Show activity log in chat | On | You want lockups, tracking, tasks mirrored into Chat |
 | Only keyholder can clear chat | **Off** (anyone can clear) | Raise the bar so only Dom clears history |
+| Chat bubble color | Per person | Your bubbles in the thread (live + saved) |
 | Blur shared images | Device preference | Quick privacy on shared screens |
 | Push for this dynamic / this device | On when configured | Partner messages while the app is closed |
 

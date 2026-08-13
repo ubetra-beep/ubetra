@@ -2,7 +2,7 @@
 
 Route: `/#/dynamic/{id}/track`
 
-Hub for history, chastity, orgasm logging, feelings, sleep, punishment, journaling, and the image vault.
+Hub for history, chastity, orgasm logging, feelings, sleep, cycle, punishment, journaling, and the image vault.
 
 ![Tracking hub — Dom](images/11-tracking-hub.png)
 
@@ -16,9 +16,21 @@ Collapsed **Setup / Dynamic** holds ground rules, interview, kink survey, knowle
 
 Route: `/#/dynamic/{id}/history`
 
-Reports and dashboards (weekly, orgasm, chastity stats). Demo data includes ~3 months of synthetic history plus recent wiki seed events.
+Reports and dashboards (weekly, orgasm, chastity stats, **Days in chastity**). Demo data includes ~3 months of synthetic history plus recent wiki seed events.
 
 ![History](images/23-history.png)
+
+### Days in chastity
+
+Route: `/#/dynamic/{id}/history/chastity-days`
+
+Calendar of full / partial / free lock days. When a night of sleep is tied to that morning:
+
+- Ring color: **red** under 6.6h · **yellow** 6.6–7.2h · **green** over 7.2h  
+- **Solid** ring = slept locked · **dotted** = slept unlocked  
+- Dots under the day: **red** denied / milking / partial-milking · **blue** ruined orgasm · **green** full orgasm  
+
+![Days in chastity](images/39-chastity-days.png)
 
 ---
 
@@ -56,9 +68,21 @@ Wheel check-ins (before/after play, end of day). Dom can set soft vs hard prompt
 
 Route: `/#/dynamic/{id}/sleep`
 
-**Off by default** — enable under Application features. Manual nights + Google / Garmin OAuth; Apple via iOS HealthKit.
+**Off by default** — enable under Application features. Nights are collapsible log-cards (one line each). Sessions within **6 hours awake** are one night; hours are sleep time only.
+
+On Android, **Health Connect** reads sleep from apps on the phone (Samsung Health, Fitbit, Pixel Watch, …). Cycle permission is **not** required. Manual logging always works in the browser. Garmin/Apple remain optional extras.
 
 ![Sleep](images/29-sleep.png)
+
+---
+
+## Cycle tracking
+
+Route: `/#/dynamic/{id}/cycle`
+
+**Off by default.** Period flow and symptoms for you; your partner can see the log. Health Connect can import menstruation days on Android.
+
+![Cycle](images/38-cycle.png)
 
 ---
 

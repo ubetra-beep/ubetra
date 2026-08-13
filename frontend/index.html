@@ -9,11 +9,27 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Space" />
     <meta name="description" content="Private shared planner" />
-    <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="manifest" href="/manifest.webmanifest?style=violet" />
+    <link rel="apple-touch-icon" href="/icons/violet/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/violet/icon-192.png" />
     <title>Shared space</title>
     <link rel="stylesheet" href="/assets/styles.css" />
+    <script>
+      (function () {
+        try {
+          var allowed = { violet: 1, sage: 1, midnight: 1, ember: 1, cream: 1 };
+          var s = localStorage.getItem("ubetra_icon_style") || "violet";
+          if (!allowed[s]) s = "violet";
+          document.cookie = "ubetra_icon_style=" + s + ";path=/;max-age=31536000;SameSite=Lax";
+          var man = document.querySelector('link[rel="manifest"]');
+          if (man) man.href = "/manifest.webmanifest?style=" + encodeURIComponent(s);
+          var icon = "/icons/" + s + "/icon-192.png";
+          document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach(function (n) {
+            n.href = icon;
+          });
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="app">

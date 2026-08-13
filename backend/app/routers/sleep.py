@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, get_membership
 from ..config import settings
 from ..database import get_db
-from ..models import Dynamic, SleepSession, User
+from ..models import ChastityLockup, Dynamic, FeelingCheckIn, OrgTrackingEntry, SleepSession, User
 from ..services.features import is_feature_enabled
 from ..services.sleep_sync import (
     build_garmin_auth_url,
@@ -21,6 +22,7 @@ from ..services.sleep_sync import (
     garmin_configured,
     google_fitness_configured,
     import_apple_sessions,
+    import_device_sessions,
     pop_oauth_state,
     store_garmin_tokens,
     store_google_sleep_tokens,
@@ -35,6 +37,7 @@ router = APIRouter(prefix="/dynamics", tags=["sleep"])
 
 class SleepSessionOut(BaseModel):
     id: str
+    subject_membership_id: str = ""
     source: str
     start_at: datetime
     end_at: datetime
@@ -67,6 +70,8 @@ class SleepStatusOut(BaseModel):
     garmin_connected: bool
     apple_connected: bool
     apple_native_required: bool = True
+    history_since: str = ""
+    history_days: int = 30
 
 
 class SleepSyncOut(BaseModel):
@@ -82,6 +87,39 @@ def _require_sleep(dynamic: Dynamic) -> None:
         )
 
 
+def _as_naive(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=None) if value.tzinfo else value
+
+
+def earliest_dynamic_log_at(db: Session, dynamic_id: str) -> datetime:
+    stamps: list[datetime] = []
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic and dynamic.created_at:
+        stamps.append(_as_naive(dynamic.created_at))
+    queries = [
+        db.query(func.min(OrgTrackingEntry.occurred_at)).filter(OrgTrackingEntry.dynamic_id == dynamic_id),
+        db.query(func.min(ChastityLockup.started_at)).filter(ChastityLockup.dynamic_id == dynamic_id),
+        db.query(func.min(SleepSession.start_at)).filter(SleepSession.dynamic_id == dynamic_id),
+        db.query(func.min(FeelingCheckIn.created_at)).filter(FeelingCheckIn.dynamic_id == dynamic_id),
+    ]
+    for query in queries:
+        value = _as_naive(query.scalar())
+        if value:
+            stamps.append(value)
+    stamps = [item for item in stamps if item]
+    if not stamps:
+        return datetime.utcnow() - timedelta(days=30)
+    return min(stamps)
+
+
+def sleep_history_window(db: Session, dynamic_id: str) -> tuple[str, int]:
+    start = earliest_dynamic_log_at(db, dynamic_id).date()
+    days = max(30, (date.today() - start).days + 1)
+    return start.isoformat(), days
+
+
 @router.get("/{dynamic_id}/sleep/status", response_model=SleepStatusOut)
 def sleep_status(
     dynamic_id: str,
@@ -92,6 +130,7 @@ def sleep_status(
     dynamic = db.get(Dynamic, dynamic_id)
     if dynamic is None:
         raise HTTPException(status_code=404, detail="Dynamic not found")
+    history_since, history_days = sleep_history_window(db, dynamic_id)
     return SleepStatusOut(
         feature_enabled=is_feature_enabled(dynamic, "sleep_tracking"),
         google_configured=google_fitness_configured(),
@@ -104,6 +143,8 @@ def sleep_status(
         garmin_connected=bool((user.garmin_access_token or "").strip()),
         apple_connected=bool(user.apple_health_connected),
         apple_native_required=True,
+        history_since=history_since,
+        history_days=history_days,
     )
 
 
@@ -122,7 +163,7 @@ def list_sleep(
         db.query(SleepSession)
         .filter(SleepSession.dynamic_id == dynamic_id)
         .order_by(SleepSession.start_at.desc())
-        .limit(60)
+        .limit(2000)
         .all()
     )
     return [SleepSessionOut.model_validate(r) for r in rows]
@@ -189,7 +230,7 @@ def google_sleep_connect(
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
     get_membership(dynamic_id, user, db)
-    return {"auth_url": build_google_sleep_auth_url(user_id=user.id, dynamic_id=dynamic_id)}
+    return {"auth_url": build_google_sleep_auth_url(user_id=user.id, dynamic_id=dynamic_id, next_page="sleep")}
 
 
 @router.post("/{dynamic_id}/sleep/google/sync", response_model=SleepSyncOut)
@@ -257,6 +298,29 @@ def apple_sleep_import(
     return SleepSyncOut(imported=imported, source="apple")
 
 
+@router.post("/{dynamic_id}/sleep/healthconnect/import", response_model=SleepSyncOut)
+def healthconnect_sleep_import(
+    dynamic_id: str,
+    payload: SleepAppleImport,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SleepSyncOut:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=404, detail="Dynamic not found")
+    _require_sleep(dynamic)
+    imported = import_device_sessions(
+        db,
+        membership=membership,
+        dynamic_id=dynamic_id,
+        sessions=payload.sessions,
+        source="healthconnect",
+    )
+    db.commit()
+    return SleepSyncOut(imported=imported, source="healthconnect")
+
+
 # OAuth callbacks live at /api/sleep/... (mounted separately)
 callback_router = APIRouter(prefix="/sleep", tags=["sleep-oauth"])
 
@@ -284,7 +348,10 @@ def google_sleep_callback(
     except Exception:
         return RedirectResponse(f"{app_url}/#/settings?sleep=google_error")
     dyn = pending.get("dynamic_id") or ""
-    return RedirectResponse(f"{app_url}/#/dynamic/{dyn}/sleep?sleep=google_ok")
+    nxt = pending.get("next") or "sleep"
+    if nxt not in ("sleep", "cycle"):
+        nxt = "sleep"
+    return RedirectResponse(f"{app_url}/#/dynamic/{dyn}/{nxt}?health=google_ok")
 
 
 @callback_router.get("/garmin/callback")

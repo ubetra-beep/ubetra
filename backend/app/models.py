@@ -412,6 +412,7 @@ class Membership(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     # Last time this member dismissed the frosted inbox overlay
     inbox_acked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    chat_bubble_color: Mapped[str] = mapped_column(String(16), default="")
 
     user: Mapped[User] = relationship(back_populates="memberships")
     dynamic: Mapped[Dynamic] = relationship(
@@ -557,6 +558,7 @@ class ChatMessage(Base):
     action: Mapped[str] = mapped_column(String(64), default="")
     payload_json: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     dynamic: Mapped[Dynamic] = relationship(back_populates="chat_messages")
@@ -929,6 +931,25 @@ class SleepSession(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CycleLog(Base):
+    __tablename__ = "cycle_logs"
+    __table_args__ = (
+        UniqueConstraint("dynamic_id", "subject_membership_id", "day", name="uq_cycle_person_day"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    subject_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"), index=True)
+    day: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
+    flow: Mapped[str] = mapped_column(String(16), default="none")  # none|spotting|light|medium|heavy
+    symptoms_json: Mapped[str] = mapped_column(Text, default="[]")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(32), default="manual")  # manual|google
+    external_id: Mapped[str] = mapped_column(String(191), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class MangaComic(Base):

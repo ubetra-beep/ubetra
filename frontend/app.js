@@ -7,6 +7,15 @@ const THEME_OPTIONS = [
   { id: "forest", label: "Forest", themeColor: "#121a16", swatchA: "#5dba8a", swatchB: "#3d9a6a" },
   { id: "slate", label: "Slate", themeColor: "#16181d", swatchA: "#7eb0d8", swatchB: "#5a94c0" },
 ];
+const ICON_STYLE_KEY = "ubetra_icon_style";
+const ICON_STYLES = [
+  { id: "violet", label: "Violet", hint: "Android default" },
+  { id: "sage", label: "Sage", hint: "Original" },
+  { id: "midnight", label: "Midnight", hint: "Dark" },
+  { id: "ember", label: "Ember", hint: "Warm" },
+  { id: "cream", label: "Cream", hint: "Light" },
+];
+const DEFAULT_ICON_STYLE = "violet";
 
 const state = {
   token: localStorage.getItem(TOKEN_KEY),
@@ -32,6 +41,103 @@ function applyTheme(themeId) {
 }
 
 applyTheme(localStorage.getItem(THEME_KEY) || "midnight");
+
+function getIconStyle() {
+  try {
+    const saved = localStorage.getItem(ICON_STYLE_KEY);
+    if (ICON_STYLES.some((item) => item.id === saved)) return saved;
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_ICON_STYLE;
+}
+
+function applyIconStyle(styleId, { persist = true } = {}) {
+  const id = ICON_STYLES.some((item) => item.id === styleId) ? styleId : DEFAULT_ICON_STYLE;
+  if (persist) {
+    try {
+      localStorage.setItem(ICON_STYLE_KEY, id);
+    } catch {
+      /* ignore */
+    }
+    document.cookie = `ubetra_icon_style=${id};path=/;max-age=31536000;SameSite=Lax`;
+  }
+  const manifestHref = `/manifest.webmanifest?style=${encodeURIComponent(id)}`;
+  document.querySelectorAll('link[rel="manifest"]').forEach((node) => node.remove());
+  const link = document.createElement("link");
+  link.rel = "manifest";
+  link.href = manifestHref;
+  document.head.appendChild(link);
+  const iconHref = `/icons/${id}/icon-192.png`;
+  document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach((node) => {
+    node.setAttribute("href", iconHref);
+  });
+  return id;
+}
+
+function buildIconStylePicker(selectedId, onPick) {
+  const picker = el("div", { className: "icon-style-picker" });
+  ICON_STYLES.forEach((style) => {
+    const btn = el("button", {
+      type: "button",
+      className: `icon-style-option${style.id === selectedId ? " active" : ""}`,
+      onClick: () => {
+        picker.querySelectorAll(".icon-style-option").forEach((node) => {
+          node.classList.toggle("active", node.dataset.iconStyle === style.id);
+        });
+        onPick(style.id);
+      },
+    }, [
+      el("img", {
+        className: "icon-style-preview",
+        src: `/icons/${style.id}/icon-192.png`,
+        alt: "",
+      }),
+      el("span", { className: "icon-style-copy" }, [
+        el("strong", {}, style.label),
+        el("span", { className: "muted" }, style.hint),
+      ]),
+    ]);
+    btn.dataset.iconStyle = style.id;
+    picker.appendChild(btn);
+  });
+  return picker;
+}
+
+function showIconStylePicker({ title, confirmLabel, initial } = {}) {
+  return new Promise((resolve) => {
+    let chosen = initial || getIconStyle();
+    const backdrop = el("div", { className: "chat-image-sheet-backdrop icon-style-sheet-backdrop" });
+    const finish = (value) => {
+      backdrop.remove();
+      resolve(value);
+    };
+    const sheet = el("div", { className: "chat-image-sheet card stack icon-style-sheet" }, [
+      el("strong", {}, title || "Choose your app icon"),
+      el("p", { className: "muted" }, "Violet is the Android default. You can change this later in Settings."),
+      buildIconStylePicker(chosen, (id) => {
+        chosen = id;
+      }),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => finish(chosen),
+      }, confirmLabel || "Use this icon"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => finish(null),
+      }, "Cancel"),
+    ]);
+    backdrop.appendChild(sheet);
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) finish(null);
+    });
+    document.body.appendChild(backdrop);
+  });
+}
+
+applyIconStyle(getIconStyle(), { persist: true });
 
 const NAV_TABS = [
   { id: "tracking", label: "Tracking", icon: "📈", enabled: true, requiresDynamic: true },
@@ -72,8 +178,15 @@ const TRACKING_FACETS = [
     id: "sleep_tracking",
     icon: "😴",
     title: "Sleep tracking",
-    subtitle: "Manual log + Google / Garmin / Apple sync",
+    subtitle: "Manual log + Health Connect on Android",
     route: "sleep",
+  },
+  {
+    id: "cycle_tracking",
+    icon: "🌸",
+    title: "Cycle tracking",
+    subtitle: "Period log for you and your partner",
+    route: "cycle",
   },
   {
     id: "punishment",
@@ -281,13 +394,12 @@ function navigateAfterAuth() {
   const last = getLastRoute();
   if (last) {
     navigate(last);
-    return;
-  }
-  if (state.dynamics.length) {
+  } else if (state.dynamics.length) {
     navigate(`/dynamic/${state.dynamics[0].id}/track`);
   } else {
     navigate("/home");
   }
+  maybeShowPunishmentReminders();
 }
 
 const LAST_ROUTE_KEY = "ubetra_last_route";
@@ -390,14 +502,14 @@ async function maybeShowInbox(dynamicId) {
   if (!state.token || !dynamicId) return;
   try {
     const data = await api(`/dynamics/${dynamicId}/inbox`);
-    if (!data?.items?.length) {
+    const items = (data?.items || []).filter((i) => !String(i.kind || "").includes("punishment"));
+    if (!items.length) {
       inboxCheckedDynamics.add(dynamicId);
       return;
     }
-    const hasPunishment = data.items.some((i) => String(i.kind || "").includes("punishment"));
-    if (inboxCheckedDynamics.has(dynamicId) && !hasPunishment) return;
+    if (inboxCheckedDynamics.has(dynamicId)) return;
     inboxCheckedDynamics.add(dynamicId);
-    showInboxOverlay(dynamicId, data.items);
+    showInboxOverlay(dynamicId, items);
   } catch {
     /* ignore */
   }
@@ -455,6 +567,142 @@ function showInboxOverlay(dynamicId, items) {
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) dismiss();
   });
+  document.body.appendChild(overlay);
+}
+
+function punishmentNeedsDommeResponse(report) {
+  if (!report) return false;
+  if (report.status === "pending") return true;
+  if (report.status === "remind") {
+    if (!report.remind_at) return true;
+    const when = new Date(report.remind_at).getTime();
+    return Number.isFinite(when) && when <= Date.now();
+  }
+  return false;
+}
+
+async function maybeShowPunishmentReminders() {
+  if (!state.token || !state.user?.onboarding_completed) return;
+  if (document.visibilityState !== "visible") return;
+  if (document.getElementById("punishment-remind-overlay")) return;
+  const { parts } = parseRoute();
+  if (parts[2] === "punishment" && parts[3]) return;
+  const dynamics = state.dynamics || [];
+  if (!dynamics.length) return;
+  const pending = [];
+  const results = await Promise.all(
+    dynamics.map((dyn) =>
+      api(`/dynamics/${dyn.id}/punishments`)
+        .then((data) => ({ dyn, data }))
+        .catch(() => null)
+    )
+  );
+  results.forEach((row) => {
+    if (!row?.data?.you_are_dominant) return;
+    const reports = row.data.open || row.data.pending || row.data.reports || [];
+    reports.forEach((report) => {
+      if (!punishmentNeedsDommeResponse(report)) return;
+      pending.push({
+        ...report,
+        dynamicId: row.dyn.id,
+        dynamicName: row.dyn.name || "",
+      });
+    });
+  });
+  if (!pending.length) return;
+  pending.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  showPunishmentRemindOverlay(pending);
+}
+
+function showPunishmentRemindOverlay(items) {
+  const existing = document.getElementById("punishment-remind-overlay");
+  if (existing) existing.remove();
+
+  const list = el("div", { className: "inbox-log" });
+  const error = el("p", { className: "error hidden" });
+
+  function closeOverlay() {
+    overlay.remove();
+  }
+
+  async function snoozeReport(item) {
+    error.classList.add("hidden");
+    try {
+      await api(`/dynamics/${item.dynamicId}/punishments/${item.id}/remind`, { method: "POST" });
+      return true;
+    } catch (err) {
+      error.textContent = err.message || "Could not snooze this reminder.";
+      error.classList.remove("hidden");
+      return false;
+    }
+  }
+
+  items.forEach((item) => {
+    const when = item.created_at
+      ? formatLocalDateTime(item.created_at, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+      : "";
+    const row = el("div", { className: "inbox-log-item punishment_pending" }, [
+      el("div", { className: "inbox-log-title" }, "Punishment needed"),
+      el(
+        "div",
+        { className: "inbox-log-body" },
+        `${item.reporter_name || "Partner"}: ${item.action_text || ""}`
+      ),
+      when ? el("div", { className: "inbox-log-when" }, when) : null,
+      el("div", { className: "row wrap punishment-remind-actions" }, [
+        el("button", {
+          type: "button",
+          className: "primary-btn",
+          onClick: () => {
+            closeOverlay();
+            navigate(`/dynamic/${item.dynamicId}/punishment/${item.id}`);
+          },
+        }, "Respond"),
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: async () => {
+            if (await snoozeReport(item)) {
+              row.remove();
+              if (!list.querySelector(".inbox-log-item")) closeOverlay();
+            }
+          },
+        }, "Remind me tomorrow"),
+      ]),
+    ]);
+    list.appendChild(row);
+  });
+
+  const overlay = el("div", {
+    id: "punishment-remind-overlay",
+    className: "inbox-overlay punishment-remind-overlay",
+  });
+  overlay.appendChild(
+    el("div", { className: "inbox-panel" }, [
+      el("h2", {}, items.length > 1 ? "Pending punishments" : "Pending punishment"),
+      el("p", { className: "muted" }, "Respond to close this, or snooze until tomorrow."),
+      list,
+      error,
+      items.length > 1
+        ? el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: async () => {
+            const rows = [...items];
+            for (const item of rows) {
+              if (!(await snoozeReport(item))) return;
+            }
+            closeOverlay();
+          },
+        }, "Remind me tomorrow")
+        : null,
+    ])
+  );
   document.body.appendChild(overlay);
 }
 
@@ -1840,6 +2088,307 @@ function attachBlurReveal(img, { id, revealedSet, locked = false }) {
   }
 }
 
+let chatImageViewerEl = null;
+
+function closeChatImageViewer() {
+  if (chatImageViewerEl?._onKey) {
+    document.removeEventListener("keydown", chatImageViewerEl._onKey);
+  }
+  chatImageViewerEl?.remove();
+  chatImageViewerEl = null;
+}
+
+function normalizeBubbleHex(value) {
+  const s = String(value || "").trim();
+  return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : "";
+}
+
+function hexToRgb(hex) {
+  const n = parseInt(String(hex || "").slice(1), 16);
+  if (!Number.isFinite(n)) return null;
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function styleChatBubble(node, msg) {
+  if (!node) return;
+  const hex = normalizeBubbleHex(msg?.sender_bubble_color);
+  const rgb = hexToRgb(hex);
+  if (!rgb) {
+    node.style.removeProperty("background");
+    node.style.removeProperty("border");
+    node.classList.remove("has-bubble-tint");
+    return;
+  }
+  node.classList.add("has-bubble-tint");
+  node.style.background = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.42)`;
+  node.style.border = `1px solid rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.72)`;
+}
+
+function chatBubbleEl(msg, extraClass, kids) {
+  const extra = extraClass ? ` ${extraClass}` : "";
+  const node = el("div", {
+    className: `chat-bubble ${msg.is_yours ? "user" : "assistant"}${extra}`,
+  }, kids);
+  styleChatBubble(node, msg);
+  return node;
+}
+
+function setChatImageBlur(nodes, on) {
+  nodes.filter(Boolean).forEach((node) => node.classList.toggle("blurred", on));
+}
+
+function attachHoldUnblur(img, { id, revealedSet, also = [], holdUnblur = true }) {
+  if (!holdUnblur) return;
+  img.classList.add("chat-image-protected");
+  img.setAttribute("draggable", "false");
+  img.addEventListener("contextmenu", (e) => e.preventDefault());
+  img.addEventListener("dragstart", (e) => e.preventDefault());
+
+  const targets = () => [img, ...also.filter(Boolean)];
+  const anyBlurred = () =>
+    !revealedSet.has(id) && targets().some((node) => node.classList.contains("blurred"));
+
+  let holdTimer = null;
+  let holding = false;
+  let timed5Timer = null;
+
+  const clearHoldTimer = () => {
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+  };
+
+  img.addEventListener("pointerdown", (e) => {
+    if (e.button != null && e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!anyBlurred()) return;
+    try {
+      img.setPointerCapture(e.pointerId);
+    } catch (_) {
+      /* ignore */
+    }
+    holdTimer = setTimeout(() => {
+      holding = true;
+      if (timed5Timer) {
+        clearTimeout(timed5Timer);
+        timed5Timer = null;
+      }
+      setChatImageBlur(targets(), false);
+    }, 280);
+  });
+
+  const endHold = (e) => {
+    const wasHolding = holding;
+    clearHoldTimer();
+    holding = false;
+    if (!wasHolding) return;
+    const mode = getChatBlurMode();
+    if (mode === "session") {
+      revealedSet.add(id);
+      setChatImageBlur(targets(), false);
+      return;
+    }
+    if (mode === "timed5") {
+      setChatImageBlur(targets(), false);
+      timed5Timer = setTimeout(() => {
+        if (!revealedSet.has(id)) setChatImageBlur(targets(), true);
+      }, 5000);
+      return;
+    }
+    if (!revealedSet.has(id)) setChatImageBlur(targets(), true);
+  };
+
+  img.addEventListener("pointerup", endHold);
+  img.addEventListener("pointercancel", () => {
+    clearHoldTimer();
+    if (holding && !revealedSet.has(id) && getChatBlurMode() === "hold") {
+      setChatImageBlur(targets(), true);
+    }
+    holding = false;
+  });
+}
+
+function openChatImageViewer(srcImg, opts = {}) {
+  closeChatImageViewer();
+  const { id, revealedSet, locked = false, holdUnblur = true } = opts;
+  const blurred = srcImg.classList.contains("blurred");
+  const viewerImg = el("img", {
+    className: `chat-image-viewer-img chat-image-protected${blurred ? " blurred" : ""}`,
+    src: srcImg.src,
+    alt: srcImg.alt || "Shared image",
+  });
+  viewerImg.setAttribute("draggable", "false");
+  const closeBtn = el("button", {
+    type: "button",
+    className: "chat-image-viewer-close",
+    title: "Close",
+    "aria-label": "Close zoomed image",
+  }, "✕");
+  closeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeChatImageViewer();
+  });
+  const viewer = el("div", {
+    className: "chat-image-viewer",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": "Zoomed image",
+  }, [viewerImg, closeBtn]);
+  viewer.addEventListener("click", (e) => {
+    if (e.target === viewer) closeChatImageViewer();
+  });
+  if (!locked) {
+    attachHoldUnblur(viewerImg, { id, revealedSet, also: [srcImg], holdUnblur });
+  } else {
+    viewerImg.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
+  const onKey = (e) => {
+    if (e.key === "Escape") closeChatImageViewer();
+  };
+  viewer._onKey = onKey;
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(viewer);
+  chatImageViewerEl = viewer;
+  return viewer;
+}
+
+function attachChatImageGestures(img, opts) {
+  img.classList.add("chat-image-thumb", "chat-image-protected");
+  img.setAttribute("draggable", "false");
+  img.addEventListener("contextmenu", (e) => e.preventDefault());
+  img.addEventListener("dragstart", (e) => e.preventDefault());
+  img.addEventListener("pointerdown", (e) => e.stopPropagation());
+  if (opts.locked) {
+    img.classList.add("blurred");
+    img.title = "Locked — use zoom to enlarge (still blurred)";
+    return;
+  }
+  img.title = opts.holdUnblur ? "Hold to unblur" : "";
+  attachHoldUnblur(img, opts);
+}
+
+function wrapChatImage(img, opts) {
+  attachChatImageGestures(img, opts);
+  const wrap = el("div", { className: "chat-image-wrap" }, [img]);
+  const zoomBtn = el("button", {
+    type: "button",
+    className: "chat-image-zoom-btn",
+    title: "Zoom",
+    "aria-label": "Zoom image",
+  }, "⤢");
+  zoomBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+  zoomBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openChatImageViewer(img, opts);
+  });
+  wrap.appendChild(zoomBtn);
+  return wrap;
+}
+
+function attachOwnMessageHold(bubble, onHold) {
+  let timer = null;
+  let startX = 0;
+  let startY = 0;
+  bubble.classList.add("chat-bubble-own");
+  bubble.title = bubble.title || "Hold to edit or delete";
+  const clear = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  bubble.addEventListener("pointerdown", (e) => {
+    if (e.button != null && e.button !== 0) return;
+    startX = e.clientX;
+    startY = e.clientY;
+    clear();
+    timer = setTimeout(() => {
+      timer = null;
+      onHold();
+    }, 420);
+  });
+  bubble.addEventListener("pointermove", (e) => {
+    if (!timer) return;
+    if (Math.abs(e.clientX - startX) > 14 || Math.abs(e.clientY - startY) > 14) clear();
+  });
+  bubble.addEventListener("pointerup", clear);
+  bubble.addEventListener("pointercancel", clear);
+}
+
+function showChatMessageActionSheet({ canEdit = false } = {}) {
+  return new Promise((resolve) => {
+    const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
+    const finish = (value) => {
+      backdrop.remove();
+      resolve(value);
+    };
+    const buttons = [el("strong", {}, "Message")];
+    if (canEdit) {
+      buttons.push(el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => finish("edit"),
+      }, "Edit"));
+    }
+    buttons.push(
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => finish("delete"),
+      }, "Delete"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => finish(null),
+      }, "Cancel"),
+    );
+    const sheet = el("div", { className: "chat-image-sheet card stack" }, buttons);
+    backdrop.appendChild(sheet);
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) finish(null);
+    });
+    document.body.appendChild(backdrop);
+  });
+}
+
+function promptChatMessageEdit(currentText) {
+  return new Promise((resolve) => {
+    const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
+    const input = el("textarea", {
+      className: "chat-input",
+      rows: "4",
+    });
+    input.value = currentText || "";
+    const finish = (value) => {
+      backdrop.remove();
+      resolve(value);
+    };
+    const sheet = el("div", { className: "chat-image-sheet card stack" }, [
+      el("strong", {}, "Edit message"),
+      input,
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => finish(input.value),
+      }, "Save"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => finish(null),
+      }, "Cancel"),
+    ]);
+    backdrop.appendChild(sheet);
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) finish(null);
+    });
+    document.body.appendChild(backdrop);
+    requestAnimationFrame(() => input.focus());
+  });
+}
+
 function loadPartnerContact(dynamicId) {
   try {
     return JSON.parse(localStorage.getItem(partnerContactStorage(dynamicId)) || "{}");
@@ -1991,6 +2540,167 @@ function isNativeApp() {
     return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform());
   } catch {
     return false;
+  }
+}
+
+function nativePlugin(name) {
+  try {
+    return window.Capacitor?.Plugins?.[name] || null;
+  } catch {
+    return null;
+  }
+}
+
+async function openOAuthUrl(url) {
+  if (!url) throw new Error("Missing sign-in URL");
+  if (isNativeApp()) {
+    const App = nativePlugin("App");
+    if (App?.openUrl) {
+      await App.openUrl({ url });
+      showToast("Finish Google sign-in in the browser, then return here and tap Sync.");
+      return;
+    }
+  }
+  window.location.href = url;
+}
+
+function googleHealthSetupHint() {
+  return healthConnectHint();
+}
+
+function healthConnectHint(kind) {
+  const native = isNativeApp();
+  let nativeCopy =
+    "Reads sleep and cycle from apps on this phone (Samsung Health, Fitbit, Pixel Watch, and others that write to Health Connect). Google Fit cloud login is not used.";
+  if (kind === "sleep") {
+    nativeCopy =
+      "Reads sleep from apps on this phone (Samsung Health, Fitbit, Pixel Watch, and others that write to Health Connect). Cycle permission is not required.";
+  } else if (kind === "cycle") {
+    nativeCopy =
+      "Reads menstruation days from apps on this phone. Sleep permission is not required.";
+  }
+  return el(
+    "p",
+    { className: "muted" },
+    native
+      ? nativeCopy
+      : "Health Connect only works in the UBETRA Android app, not in the browser. Install the APK from Settings, then open Sleep or Cycle there. Until then, log nights and cycle days here by hand."
+  );
+}
+
+const HEALTH_CONNECT_STORE = "https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata";
+
+async function syncHealthConnect(kind, dynamicId, options = {}) {
+  const plugin = nativePlugin("UbetraHealthConnect");
+  if (!plugin?.checkAvailability) {
+    throw new Error("Health Connect needs the UBETRA Android app. Install the APK from Settings, then try again.");
+  }
+  const { availability } = await plugin.checkAvailability();
+  if (availability === "NotInstalled") {
+    const App = nativePlugin("App");
+    if (App?.openUrl) await App.openUrl({ url: HEALTH_CONNECT_STORE });
+    throw new Error("Install Health Connect from the Play Store, then return here and tap Connect again.");
+  }
+  if (availability !== "Available") {
+    throw new Error("Health Connect is not supported on this phone.");
+  }
+  const access = await plugin.requestAccess({ kind });
+  const need = kind === "cycle" ? "cycle" : "sleep";
+  const label = kind === "cycle" ? "Cycle / Menstruation" : "Sleep";
+  if (access && access[need] === false) {
+    throw new Error(`Allow ${label} in the Health Connect permission screen.`);
+  }
+  if (access && access.granted === false && access[need] == null) {
+    throw new Error(`Allow ${label} in the Health Connect permission screen.`);
+  }
+  const since = options.since || "";
+  const days = Math.max(30, Number(options.days) || (kind === "cycle" ? 90 : 30));
+  if (kind === "cycle") {
+    const raw = await plugin.exportCycle({ days, since });
+    return api(`/dynamics/${dynamicId}/cycle/healthconnect/import`, {
+      method: "POST",
+      body: JSON.stringify({ days: raw?.days || [] }),
+    });
+  }
+  const raw = await plugin.exportSleep({ days, since });
+  const out = await api(`/dynamics/${dynamicId}/sleep/healthconnect/import`, {
+    method: "POST",
+    body: JSON.stringify({ sessions: raw?.sessions || [] }),
+  });
+  if (raw && raw.history === false && days > 30) {
+    out.history_limited = true;
+  }
+  out.since = since || raw?.since || "";
+  return out;
+}
+
+async function getInstalledApkInfo() {
+  const App = nativePlugin("App");
+  if (!App?.getInfo) return null;
+  try {
+    return await App.getInfo();
+  } catch {
+    return null;
+  }
+}
+
+async function openAndroidApkDownload(url) {
+  const abs = new URL(url || "/apk/ubetra.apk", window.location.origin).href;
+  if (isNativeApp()) {
+    // Stay in the WebView so MainActivity's DownloadManager listener can catch the APK.
+    window.location.assign(abs);
+    return;
+  }
+  const link = el("a", { href: abs, download: "ubetra.apk", rel: "noopener" });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function appendAndroidAppCard(stack, androidApp) {
+  const native = isNativeApp();
+  const available = !!androidApp?.available;
+  const status = el("p", { className: "muted" });
+  if (!available) {
+    status.textContent = native
+      ? "No APK is on the server yet. After it is published, use Download update."
+      : "The Android APK is not published on this server yet.";
+  } else if (native) {
+    status.textContent =
+      "Downloads to your phone, then close UBETRA completely before installing. Play Protect may warn because this is a sideloaded app — tap Install anyway. If you still see “App not installed”, uninstall the old UBETRA once (the signing key is now stable), then install this APK.";
+  } else {
+    status.textContent = `Android APK ${androidApp.version || ""} — more reliable notifications than the browser PWA. Play Protect may warn on sideload; tap Install anyway. If install fails, uninstall the old UBETRA once, then install this file.`;
+  }
+  const btn = el("button", {
+    type: "button",
+    className: "primary-btn",
+    disabled: !available,
+    onClick: async () => {
+      if (!available) return;
+      try {
+        status.textContent = native
+          ? "Starting download… when it finishes, swipe UBETRA closed, then tap the download notification to install."
+          : "Downloading APK…";
+        await openAndroidApkDownload(androidApp.url || "/apk/ubetra.apk");
+      } catch (err) {
+        status.textContent = err.message || "Could not start download.";
+      }
+    },
+  }, native ? "Download update" : "Download Android app");
+  stack.appendChild(el("div", { className: "card stack", id: "android-app-card" }, [
+    el("h2", {}, native ? "Update app" : "Android app"),
+    status,
+    btn,
+  ]));
+  if (native && available) {
+    getInstalledApkInfo().then((info) => {
+      if (!info) return;
+      const installed = info.version || info.build || "unknown";
+      const serverCode = Number(androidApp.version_code || 0);
+      const localCode = Number(info.build || 0);
+      const newer = serverCode && localCode && serverCode > localCode;
+      btn.textContent = newer ? "Download update" : "Re-download APK";
+    }).catch(() => {});
   }
 }
 
@@ -2332,7 +3042,7 @@ function isFacetEnabled(facet, enabledFeatures) {
   if (facet.core) return true;
   // Empty list historically meant "all on" — but opt-in features stay gated by their id.
   if (!enabledFeatures || !enabledFeatures.length) {
-    return facet.id !== "sleep_tracking" && facet.id !== "manga_comics";
+    return facet.id !== "sleep_tracking" && facet.id !== "manga_comics" && facet.id !== "cycle_tracking";
   }
   if (enabledFeatures.includes(facet.id)) return true;
   if (Array.isArray(facet.alsoEnabledBy)) {
@@ -2396,6 +3106,14 @@ async function bootstrap() {
       updateInstallPwaButton();
     });
     installPwaBtn.addEventListener("click", async () => {
+      const style = await showIconStylePicker({
+        title: "Choose your app icon",
+        confirmLabel: deferredPwaPrompt ? "Install" : "Continue",
+        initial: getIconStyle(),
+      });
+      if (!style) return;
+      applyIconStyle(style);
+      await new Promise((resolve) => setTimeout(resolve, 250));
       if (deferredPwaPrompt) {
         deferredPwaPrompt.prompt();
         await deferredPwaPrompt.userChoice;
@@ -2469,6 +3187,11 @@ async function bootstrap() {
   }
 
   window.addEventListener("hashchange", renderRoute);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible" || !state.token) return;
+    maybeShowPunishmentReminders();
+  });
 
   // Render login immediately so buttons work while token validation runs
   if (!state.token) {
@@ -3173,6 +3896,70 @@ function buildDaysPicker(days, onChange) {
   return el("label", {}, ["Period", select]);
 }
 
+function sleepHoursBand(hours) {
+  const n = Number(hours);
+  if (!(n >= 0)) return "";
+  if (n < 6.6) return "sleep-red";
+  if (n <= 7.2) return "sleep-yellow";
+  return "sleep-green";
+}
+
+function sleepRingDash(hours, locked) {
+  const r = 15.2;
+  const c = 2 * Math.PI * r;
+  const pct = Math.min(Math.max(Number(hours) / 8, 0), 1);
+  const filled = pct * c;
+  if (locked) return `${filled.toFixed(2)} ${c.toFixed(2)}`;
+  const on = 2.15;
+  const off = 1.95;
+  const parts = [];
+  let left = filled;
+  while (left > 0.12) {
+    const draw = Math.min(on, left);
+    parts.push(draw.toFixed(2));
+    left -= draw;
+    if (left <= 0) break;
+    const skip = Math.min(off, left);
+    parts.push(skip.toFixed(2));
+    left -= skip;
+  }
+  parts.push(0, c.toFixed(2));
+  return parts.join(" ");
+}
+
+function renderChastityDayCell(day) {
+  const dayNum = String(new Date(`${day.date}T12:00:00`).getDate());
+  const hours = day.sleep_hours;
+  const hasSleep = hours != null && Number(hours) > 0;
+  const title = [`${day.date} · ${day.status}`];
+  if (hasSleep) {
+    title.push(`${Number(hours).toFixed(1)}h sleep${day.sleep_locked ? " locked" : " unlocked"}`);
+  }
+  const host = el("div", { className: "chastity-day", title: title.join(" · ") });
+  if (hasSleep) {
+    const locked = !!day.sleep_locked;
+    const wrap = el("div", {
+      className: `sleep-ring ${sleepHoursBand(hours)} ${locked ? "sleep-locked" : "sleep-unlocked"}`,
+    });
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 36 36");
+    svg.setAttribute("aria-hidden", "true");
+    svg.innerHTML = `<circle class="sleep-ring-track" cx="18" cy="18" r="15.2"></circle><circle class="sleep-ring-value" cx="18" cy="18" r="15.2" stroke-dasharray="${sleepRingDash(hours, locked)}"></circle>`;
+    wrap.appendChild(svg);
+    wrap.appendChild(el("span", { className: `chastity-day-cell ${day.status}` }, dayNum));
+    host.appendChild(wrap);
+  } else {
+    host.appendChild(el("span", { className: `chastity-day-cell ${day.status}` }, dayNum));
+  }
+  const dots = el("div", { className: "chastity-sex-dots" });
+  (day.sex_dots || []).forEach((kind) => {
+    const label = kind === "denied" ? "Denied / milking" : kind === "ruined" ? "Ruined orgasm" : "Full orgasm";
+    dots.appendChild(el("span", { className: `chastity-sex-dot ${kind}`, title: label }));
+  });
+  host.appendChild(dots);
+  return host;
+}
+
 function renderChastityCalendar(days) {
   const byMonth = {};
   days.forEach((d) => {
@@ -3187,15 +3974,14 @@ function renderChastityCalendar(days) {
     ]);
     const grid = el("div", { className: "chastity-day-grid" });
     byMonth[monthKey].forEach((day) => {
-      grid.appendChild(el("span", {
-        className: `chastity-day-cell ${day.status}`,
-        title: `${day.date} · ${day.status}`,
-      }, String(new Date(`${day.date}T12:00:00`).getDate())));
+      grid.appendChild(renderChastityDayCell(day));
     });
     monthEl.appendChild(grid);
     wrap.appendChild(monthEl);
   });
   wrap.appendChild(el("p", { className: "muted" }, "Bright = full calendar day locked (breaks ≤20m) · Outlined = partial (2h+) · Dim = free · Whole days = rolling 24h streaks"));
+  wrap.appendChild(el("p", { className: "muted" }, "Sleep ring = night ending that morning. Solid = slept locked · Dotted = slept unlocked. Red < 6.6h · Yellow 6.6–7.2h · Green > 7.2h"));
+  wrap.appendChild(el("p", { className: "muted" }, "Dots: red = denied / milking / partial-milking · blue = ruined orgasm · green = full orgasm"));
   return wrap;
 }
 
@@ -12293,6 +13079,189 @@ function renderActs(dynamicId) {
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
+const NIGHT_AWAKE_MS = 6 * 60 * 60 * 1000;
+
+function sleepTimeMs(value) {
+  const d = parseServerDate(value);
+  return d ? d.getTime() : 0;
+}
+
+function mergedSleepMinutes(sessions) {
+  const intervals = (sessions || [])
+    .map((s) => [sleepTimeMs(s.start_at), sleepTimeMs(s.end_at)])
+    .filter(([start, end]) => end > start)
+    .sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  intervals.forEach(([start, end]) => {
+    if (!merged.length || start > merged[merged.length - 1][1]) merged.push([start, end]);
+    else merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], end);
+  });
+  return Math.round(merged.reduce((sum, [start, end]) => sum + (end - start), 0) / 60000);
+}
+
+function groupSleepNights(sessions) {
+  const bySubject = {};
+  (sessions || []).forEach((s) => {
+    const key = s.subject_membership_id || "_";
+    (bySubject[key] ||= []).push(s);
+  });
+  const nights = [];
+  Object.entries(bySubject).forEach(([subjectId, rows]) => {
+    const sorted = [...rows].sort((a, b) => sleepTimeMs(a.start_at) - sleepTimeMs(b.start_at));
+    let cluster = [];
+    const flush = () => {
+      if (!cluster.length) return;
+      const end = cluster.reduce(
+        (latest, s) => (sleepTimeMs(s.end_at) > sleepTimeMs(latest) ? s.end_at : latest),
+        cluster[0].end_at
+      );
+      const sources = [...new Set(cluster.map((s) => s.source).filter(Boolean))];
+      const scores = cluster.map((s) => s.sleep_score).filter((n) => n != null);
+      const notes = cluster.map((s) => (s.notes || "").trim()).filter(Boolean);
+      nights.push({
+        subject_membership_id: subjectId === "_" ? "" : subjectId,
+        start_at: cluster[0].start_at,
+        end_at: end,
+        duration_min: mergedSleepMinutes(cluster),
+        sources,
+        sleep_score: scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
+        notes: notes.join(" · "),
+        segments: cluster,
+      });
+      cluster = [];
+    };
+    sorted.forEach((s) => {
+      if (!cluster.length) {
+        cluster = [s];
+        return;
+      }
+      const gap = sleepTimeMs(s.start_at) - sleepTimeMs(cluster[cluster.length - 1].end_at);
+      if (gap <= NIGHT_AWAKE_MS) cluster.push(s);
+      else {
+        flush();
+        cluster = [s];
+      }
+    });
+    flush();
+  });
+  nights.sort((a, b) => sleepTimeMs(b.start_at) - sleepTimeMs(a.start_at));
+  return nights;
+}
+
+function formatSleepClock(value) {
+  const d = parseServerDate(value);
+  if (!d) return "—";
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function formatSleepNightTitle(endAt) {
+  const d = parseServerDate(endAt);
+  if (!d) return "Night";
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+function formatSleepSource(source) {
+  const labels = {
+    healthconnect: "Health Connect",
+    google: "Google",
+    garmin: "Garmin",
+    apple: "Apple Health",
+    manual: "Manual",
+  };
+  return labels[source] || source || "Sleep";
+}
+
+function renderSleepNightCard(night, { dynamicId, canDelete, who } = {}) {
+  let expanded = false;
+  const hours = (night.duration_min / 60).toFixed(1);
+  const host = el("div");
+
+  function paint() {
+    const card = el("div", {
+      className: `card log-card sleep-log-card ${expanded ? "log-card-expanded" : "log-card-collapsed"}`,
+    });
+    const headerRow = el(
+      "button",
+      {
+        type: "button",
+        className: "log-card-toggle row wrap",
+        onClick: () => {
+          expanded = !expanded;
+          paint();
+        },
+      },
+      [
+        el("div", { className: "stack log-card-main" }, [
+          el("strong", {}, who ? `${who} · ${formatSleepNightTitle(night.end_at)}` : formatSleepNightTitle(night.end_at)),
+          el(
+            "span",
+            { className: "muted log-card-when" },
+            `${formatSleepClock(night.start_at)} → ${formatSleepClock(night.end_at)}`
+          ),
+        ]),
+        el("span", { className: `pill ${sleepHoursBand(hours) === "sleep-green" ? "ok" : ""}` }, `${hours}h`),
+      ]
+    );
+    const topRow = el("div", { className: "row log-card-top" }, [headerRow]);
+    if (canDelete) {
+      topRow.appendChild(
+        buildKebabMenu([
+          {
+            label: "Delete night",
+            danger: true,
+            onClick: async () => {
+              const n = night.segments.length;
+              if (!confirm(n > 1 ? `Delete this night (${n} segments)?` : "Delete this sleep entry?")) return;
+              try {
+                for (const seg of night.segments) {
+                  await api(`/dynamics/${dynamicId}/sleep/${seg.id}`, { method: "DELETE" });
+                }
+                renderSleep(dynamicId);
+              } catch (err) {
+                showToast(err.message || "Could not delete.");
+              }
+            },
+          },
+        ])
+      );
+    }
+    card.appendChild(topRow);
+    if (!expanded) {
+      host.replaceChildren(card);
+      return;
+    }
+    const details = el("div", { className: "stack log-card-details" });
+    details.appendChild(
+      el(
+        "p",
+        { className: "muted" },
+        night.sources.map(formatSleepSource).join(" · ") || "Sleep"
+      )
+    );
+    if (night.sleep_score != null) {
+      details.appendChild(el("p", { className: "muted" }, `Score ${night.sleep_score}`));
+    }
+    if (night.notes) details.appendChild(el("p", {}, night.notes));
+    if (night.segments.length > 1) {
+      night.segments.forEach((seg) => {
+        const hrs = ((seg.duration_min || 0) / 60).toFixed(1);
+        details.appendChild(
+          el(
+            "p",
+            { className: "muted log-card-orgasm" },
+            `${formatSleepClock(seg.start_at)} → ${formatSleepClock(seg.end_at)} · ${hrs}h · ${formatSleepSource(seg.source)}`
+          )
+        );
+      });
+    }
+    card.appendChild(details);
+    host.replaceChildren(card);
+  }
+
+  paint();
+  return host;
+}
+
 function renderSleep(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading sleep…"));
   Promise.all([
@@ -12304,6 +13273,8 @@ function renderSleep(dynamicId) {
     loadDynamic(dynamicId),
   ])
     .then(async ([status, sessions]) => {
+      const healthOk = parseRoute().query.get("health") === "google_ok" || parseRoute().query.get("sleep") === "google_ok";
+      if (healthOk) showToast("Health data connected. Tap Sync if nights did not import.");
       const stack = el("div", { className: "stack" }, [
         buildHubHeader(dynamicId, "Sleep tracking", {
           subtitle: "Off by default. Either partner can enable it in Application features.",
@@ -12329,31 +13300,48 @@ function renderSleep(dynamicId) {
       }
 
       const error = el("div", { className: "error hidden" });
+      const since = status.history_since || "";
+      const days = status.history_days || 30;
+      const you = state.currentDynamic?.partners?.find((p) => p.is_you);
+      const partnerName = (mid) =>
+        state.currentDynamic?.partners?.find((p) => p.id === mid)?.display_name || "";
       const syncCard = el("div", { className: "card stack" }, [
-        el("h2", {}, "Sync"),
-        el("p", { className: "muted" }, "Google is the primary sync. Garmin needs developer OAuth credentials on the server. Apple Health requires the iOS app (HealthKit) — not available in the browser."),
-        el("div", { className: "row wrap" }, [
+        el("h2", {}, "Health Connect"),
+        el(
+          "p",
+          { className: "muted" },
+          since
+            ? `Sync reads nights from ${since} (first UBETRA log) through today. Allow “past data” / history in Health Connect or only the last 30 days will come in.`
+            : "Sync reads recent nights from Health Connect."
+        ),
+      ]);
+      syncCard.appendChild(healthConnectHint("sleep"));
+      syncCard.appendChild(el("div", { className: "row wrap" }, [
           el("button", {
             className: "primary-btn",
             type: "button",
-            disabled: !status.google_configured,
             onClick: async () => {
               error.classList.add("hidden");
               try {
-                if (!status.google_connected) {
-                  const { auth_url } = await api(`/dynamics/${dynamicId}/sleep/google/connect`);
-                  location.href = auth_url;
-                  return;
+                const out = await syncHealthConnect("sleep", dynamicId, { since, days });
+                let msg = `Health Connect imported ${out.imported} night(s)`;
+                if (since) msg += ` since ${since}`;
+                msg += ".";
+                if (out.history_limited) {
+                  msg += " Older nights need “past data” allowed in Health Connect.";
                 }
-                const out = await api(`/dynamics/${dynamicId}/sleep/google/sync`, { method: "POST" });
-                showToast(`Google sync imported ${out.imported} night(s).`);
+                showToast(msg);
                 renderSleep(dynamicId);
               } catch (err) {
                 error.textContent = err.message;
                 error.classList.remove("hidden");
               }
             },
-          }, status.google_connected ? "Sync Google sleep" : "Connect Google"),
+          }, isNativeApp() ? "Sync Health Connect" : "Connect Health Connect"),
+      ]));
+      const extraSync = el("details", { className: "hub-setup-details" }, [
+        el("summary", {}, "Garmin / Apple Health"),
+        el("div", { className: "row wrap" }, [
           el("button", {
             className: "ghost-btn",
             type: "button",
@@ -12363,7 +13351,7 @@ function renderSleep(dynamicId) {
               try {
                 if (!status.garmin_connected) {
                   const { auth_url } = await api(`/dynamics/${dynamicId}/sleep/garmin/connect`);
-                  location.href = auth_url;
+                  await openOAuthUrl(auth_url);
                   return;
                 }
                 const out = await api(`/dynamics/${dynamicId}/sleep/garmin/sync`, { method: "POST" });
@@ -12391,7 +13379,7 @@ function renderSleep(dynamicId) {
                   renderSleep(dynamicId);
                   return;
                 }
-                error.textContent = "Apple Health sync needs the UBETRA iOS app with HealthKit. Use manual logging here, or Google/Garmin.";
+                error.textContent = "Apple Health sync needs the UBETRA iOS app with HealthKit. Use manual logging here, or Garmin.";
                 error.classList.remove("hidden");
               } catch (err) {
                 error.textContent = err.message;
@@ -12400,8 +13388,9 @@ function renderSleep(dynamicId) {
             },
           }, status.apple_connected ? "Import from Apple Health" : "Apple Health (iOS app)"),
         ]),
-        error,
       ]);
+      syncCard.appendChild(extraSync);
+      syncCard.appendChild(error);
       stack.appendChild(syncCard);
 
       const startInput = el("input", { type: "datetime-local" });
@@ -12409,8 +13398,8 @@ function renderSleep(dynamicId) {
       const scoreInput = el("input", { type: "number", min: "0", max: "100", placeholder: "Score (optional)" });
       const notesInput = el("textarea", { rows: "2", placeholder: "Notes (optional)" });
       const manualError = el("div", { className: "error hidden" });
-      stack.appendChild(el("div", { className: "card stack" }, [
-        el("h2", {}, "Log a night"),
+      stack.appendChild(el("details", { className: "card stack hub-setup-details" }, [
+        el("summary", {}, "Log a night manually"),
         el("label", {}, ["Fell asleep", startInput]),
         el("label", {}, ["Woke up", endInput]),
         el("label", {}, ["Sleep score", scoreInput]),
@@ -12441,30 +13430,298 @@ function renderSleep(dynamicId) {
         }, "Save night"),
       ]));
 
-      const list = el("div", { className: "stack" }, [el("h2", {}, "Recent nights")]);
-      if (!sessions || !sessions.length) {
-        list.appendChild(el("p", { className: "muted" }, "No sleep sessions yet."));
+      const nights = groupSleepNights(sessions || []);
+      const list = el("div", { className: "stack sleep-log" }, [
+        el("h2", {}, "Sleep log"),
+        el("p", { className: "muted" }, "Sessions within 6 hours awake are one night. Hours are sleep time only."),
+      ]);
+      if (!nights.length) {
+        list.appendChild(el("p", { className: "muted" }, "No sleep nights yet."));
       } else {
-        sessions.forEach((s) => {
-          const when = new Date(s.start_at).toLocaleString();
-          const hrs = (s.duration_min / 60).toFixed(1);
-          list.appendChild(el("div", { className: "card stack" }, [
-            el("strong", {}, `${when} · ${hrs}h · ${s.source}`),
-            s.sleep_score != null ? el("p", { className: "muted" }, `Score ${s.sleep_score}`) : null,
-            s.notes ? el("p", {}, s.notes) : null,
+        const logList = el("div", { className: "stack sleep-log-list" });
+        nights.forEach((night) => {
+          const who = night.subject_membership_id && night.subject_membership_id !== you?.id
+            ? partnerName(night.subject_membership_id)
+            : "";
+          const canDelete = !!you && night.segments.every((s) => !s.subject_membership_id || s.subject_membership_id === you.id);
+          logList.appendChild(renderSleepNightCard(night, { dynamicId, canDelete, who }));
+        });
+        list.appendChild(logList);
+      }
+      stack.appendChild(list);
+      setViewContent(stack);
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+}
+
+const CYCLE_FLOW_OPTIONS = [
+  ["none", "None"],
+  ["spotting", "Spotting"],
+  ["light", "Light"],
+  ["medium", "Medium"],
+  ["heavy", "Heavy"],
+];
+const CYCLE_SYMPTOMS = [
+  "Cramps",
+  "Headache",
+  "Bloating",
+  "Fatigue",
+  "Mood",
+  "Tender breasts",
+  "Nausea",
+  "Backache",
+  "Acne",
+  "Insomnia",
+  "Cravings",
+  "Ovulation pain",
+];
+
+function localISODate(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function cycleFlowLabel(flow) {
+  return CYCLE_FLOW_OPTIONS.find(([value]) => value === flow)?.[1] || flow || "None";
+}
+
+function cycleSummaryCard(person) {
+  const summary = person.summary || {};
+  const bits = [];
+  if (summary.on_period) bits.push(el("span", { className: "pill ok" }, "On period"));
+  if (summary.cycle_day) bits.push(el("span", { className: "pill" }, `Day ${summary.cycle_day}`));
+  if (summary.last_period_start) bits.push(el("span", { className: "pill" }, `Last start ${summary.last_period_start}`));
+  if (summary.predicted_next) bits.push(el("span", { className: "pill" }, `Next ~${summary.predicted_next}`));
+  bits.push(el("span", { className: "pill" }, `${summary.logged_days || 0} day(s) logged`));
+  return el("div", { className: "cycle-summary-row" }, bits);
+}
+
+function renderCycle(dynamicId) {
+  setViewContent(el("p", { className: "muted" }, "Loading cycle…"));
+  Promise.all([api(`/dynamics/${dynamicId}/cycle`), loadDynamic(dynamicId)])
+    .then(([status]) => {
+      const healthOk = parseRoute().query.get("health") === "google_ok";
+      if (healthOk) showToast("Health data connected. Tap Sync if days did not import.");
+      const stack = el("div", { className: "stack" }, [
+        buildHubHeader(dynamicId, "Cycle tracking", {
+          subtitle: "Period log for you. Your partner can see it. Off by default.",
+          sectionFilter: "tracking",
+        }),
+        el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: () => navigate(`/dynamic/${dynamicId}/track`),
+        }, "← Back to Tracking"),
+      ]);
+      if (!status.feature_enabled) {
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("p", {}, "Cycle tracking is off for this dynamic. Enable it so you can log days and your partner can see them."),
+          el("button", {
+            className: "primary-btn",
+            type: "button",
+            onClick: () => openAppFeaturesPanel(dynamicId, "tracking"),
+          }, "Enable in Application features"),
+        ]));
+        setViewContent(stack);
+        return;
+      }
+
+      const error = el("div", { className: "error hidden" });
+      const since = status.history_since || "";
+      const days = status.history_days || 90;
+      const syncCard = el("div", { className: "card stack" }, [
+        el("h2", {}, "Health Connect"),
+        el("p", { className: "muted" }, "Optional. Imports menstruation days from apps on this phone. Manual logging always works."),
+        since ? el("p", { className: "muted" }, `Sync reads from ${since} (first UBETRA log) through today.`) : null,
+      ]);
+      syncCard.appendChild(healthConnectHint("cycle"));
+      syncCard.appendChild(el("div", { className: "row wrap" }, [
+        el("button", {
+          className: "primary-btn",
+          type: "button",
+          onClick: async () => {
+            error.classList.add("hidden");
+            try {
+              const out = await syncHealthConnect("cycle", dynamicId, { since, days });
+              showToast(`Health Connect imported ${out.imported} day(s).`);
+              renderCycle(dynamicId);
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, isNativeApp() ? "Sync Health Connect" : "Connect Health Connect"),
+      ]));
+      syncCard.appendChild(error);
+      stack.appendChild(syncCard);
+
+      const you = (status.people || []).find((person) => person.is_you);
+      const partners = (status.people || []).filter((person) => !person.is_you);
+
+      if (you) {
+        const dayInput = el("input", { type: "date", value: localISODate() });
+        const notesInput = el("textarea", { rows: "2", placeholder: "Notes (optional)" });
+        const saveError = el("div", { className: "error hidden" });
+        let flow = "none";
+        const selectedSymptoms = new Set();
+
+        const flowRow = el("div", { className: "row wrap" });
+        const symptomRow = el("div", { className: "row wrap" });
+        const existingHint = el("p", { className: "muted" }, "");
+
+        const paintFlow = () => {
+          flowRow.querySelectorAll(".tag-chip").forEach((chip) => {
+            chip.classList.toggle("active", chip.dataset.flow === flow);
+          });
+        };
+        CYCLE_FLOW_OPTIONS.forEach(([value, label]) => {
+          const chip = el("button", {
+            type: "button",
+            className: "tag-chip",
+            onClick: () => {
+              flow = value;
+              paintFlow();
+            },
+          }, [el("span", { className: `cycle-flow-dot ${value}` }), label]);
+          chip.dataset.flow = value;
+          flowRow.appendChild(chip);
+        });
+
+        const paintSymptoms = () => {
+          symptomRow.querySelectorAll(".tag-chip").forEach((chip) => {
+            chip.classList.toggle("active", selectedSymptoms.has(chip.dataset.symptom));
+          });
+        };
+        CYCLE_SYMPTOMS.forEach((name) => {
+          const chip = el("button", {
+            type: "button",
+            className: "tag-chip",
+            onClick: () => {
+              if (selectedSymptoms.has(name)) selectedSymptoms.delete(name);
+              else selectedSymptoms.add(name);
+              paintSymptoms();
+            },
+          }, name);
+          chip.dataset.symptom = name;
+          symptomRow.appendChild(chip);
+        });
+
+        const fillDay = () => {
+          const match = (you.logs || []).find((row) => row.day === dayInput.value);
+          flow = match?.flow || "none";
+          selectedSymptoms.clear();
+          (match?.symptoms || []).forEach((item) => selectedSymptoms.add(item));
+          notesInput.value = match?.notes || "";
+          existingHint.textContent = match
+            ? `Editing ${match.day} (${match.source}).`
+            : "New day — your partner will see this.";
+          paintFlow();
+          paintSymptoms();
+        };
+        dayInput.addEventListener("change", fillDay);
+        fillDay();
+
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Your cycle"),
+          cycleSummaryCard(you),
+          el("p", { className: "muted" }, "Your partner can see flow, symptoms, and notes."),
+          el("label", {}, ["Day", dayInput]),
+          el("p", { className: "muted" }, "Flow"),
+          flowRow,
+          el("p", { className: "muted" }, "Symptoms"),
+          symptomRow,
+          notesInput,
+          existingHint,
+          saveError,
+          el("div", { className: "row wrap" }, [
+            el("button", {
+              className: "primary-btn",
+              type: "button",
+              onClick: async () => {
+                saveError.classList.add("hidden");
+                try {
+                  await api(`/dynamics/${dynamicId}/cycle/day`, {
+                    method: "PUT",
+                    body: JSON.stringify({
+                      day: dayInput.value,
+                      flow,
+                      symptoms: [...selectedSymptoms],
+                      notes: notesInput.value,
+                    }),
+                  });
+                  showToast("Cycle day saved.");
+                  renderCycle(dynamicId);
+                } catch (err) {
+                  saveError.textContent = err.message;
+                  saveError.classList.remove("hidden");
+                }
+              },
+            }, "Save day"),
             el("button", {
               className: "ghost-btn",
               type: "button",
               onClick: async () => {
-                if (!confirm("Delete this sleep entry?")) return;
-                await api(`/dynamics/${dynamicId}/sleep/${s.id}`, { method: "DELETE" });
-                renderSleep(dynamicId);
+                if (!confirm("Delete this day’s cycle log?")) return;
+                saveError.classList.add("hidden");
+                try {
+                  await api(`/dynamics/${dynamicId}/cycle/day/${dayInput.value}`, { method: "DELETE" });
+                  showToast("Day removed.");
+                  renderCycle(dynamicId);
+                } catch (err) {
+                  saveError.textContent = err.message;
+                  saveError.classList.remove("hidden");
+                }
               },
-            }, "Delete"),
-          ]));
-        });
+            }, "Delete day"),
+          ]),
+        ]));
+
+        const recent = el("div", { className: "stack" }, [el("h3", {}, "Your recent days")]);
+        if (!(you.logs || []).length) {
+          recent.appendChild(el("p", { className: "muted" }, "No days logged yet."));
+        } else {
+          you.logs.slice(0, 21).forEach((row) => {
+            recent.appendChild(el("div", { className: "card stack" }, [
+              el("strong", {}, [
+                el("span", { className: `cycle-flow-dot ${row.flow}` }),
+                `${row.day} · ${cycleFlowLabel(row.flow)} · ${row.source}`,
+              ]),
+              (row.symptoms || []).length
+                ? el("p", { className: "muted" }, row.symptoms.join(", "))
+                : null,
+              row.notes ? el("p", {}, row.notes) : null,
+            ]));
+          });
+        }
+        stack.appendChild(recent);
       }
-      stack.appendChild(list);
+
+      partners.forEach((person) => {
+        const card = el("div", { className: "card stack" }, [
+          el("h2", {}, `${person.display_name}’s cycle`),
+          cycleSummaryCard(person),
+        ]);
+        if (!(person.logs || []).length) {
+          card.appendChild(el("p", { className: "muted" }, "No days logged yet."));
+        } else {
+          person.logs.slice(0, 21).forEach((row) => {
+            card.appendChild(el("div", { className: "stack" }, [
+              el("strong", {}, [
+                el("span", { className: `cycle-flow-dot ${row.flow}` }),
+                `${row.day} · ${cycleFlowLabel(row.flow)}`,
+              ]),
+              (row.symptoms || []).length
+                ? el("p", { className: "muted" }, row.symptoms.join(", "))
+                : null,
+              row.notes ? el("p", {}, row.notes) : null,
+            ]));
+          });
+        }
+        stack.appendChild(card);
+      });
+
       setViewContent(stack);
     })
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
@@ -12983,9 +14240,15 @@ function renderVault(dynamicId) {
           className: "ghost-btn",
           type: "button",
           onClick: async () => {
-            if (!confirm("Delete this vault image? A chat log entry will be posted.")) return;
-            await api(`/dynamics/${dynamicId}/vault/${image.id}`, { method: "DELETE" });
-            load();
+            if (!confirm("Delete this image from the vault and chat?")) return;
+            error.classList.add("hidden");
+            try {
+              await api(`/dynamics/${dynamicId}/vault/${image.id}`, { method: "DELETE" });
+              load();
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
           },
         }, "Delete"),
       ]));
@@ -13130,6 +14393,59 @@ async function openInAppCamera({ onCapture, onFallback } = {}) {
   });
 }
 
+function trimChatUrlMatch(raw) {
+  return String(raw || "").replace(/[.,;:!?]+$/g, "");
+}
+
+function linkifyText(text) {
+  const source = String(text || "");
+  const nodes = [];
+  const re = /\b((?:https?:\/\/|www\.)[^\s<>"'`)\]]+)/gi;
+  let last = 0;
+  let match;
+  while ((match = re.exec(source)) !== null) {
+    const raw = trimChatUrlMatch(match[1]);
+    const start = match.index;
+    if (start > last) nodes.push(source.slice(last, start));
+    const href = raw.toLowerCase().startsWith("http") ? raw : `https://${raw}`;
+    if (!/^https?:\/\//i.test(href)) {
+      nodes.push(match[0]);
+    } else {
+      nodes.push(
+        el(
+          "a",
+          {
+            className: "chat-text-link",
+            href,
+            target: "_blank",
+            rel: "noopener noreferrer",
+          },
+          raw
+        )
+      );
+    }
+    last = start + raw.length;
+    re.lastIndex = last;
+  }
+  if (last < source.length) nodes.push(source.slice(last));
+  if (!nodes.length) nodes.push(source);
+  return nodes;
+}
+
+function stripChatMarkers(body) {
+  return String(body || "")
+    .replace(/\[\[from:[^\]]+\]\]\s*/g, "")
+    .replace(/\[\[ubetra:[^|\]]+\|[^\]]+\]\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateChat(text, limit = 72) {
+  const cleaned = String(text || "").trim();
+  if (cleaned.length <= limit) return cleaned;
+  return `${cleaned.slice(0, Math.max(1, limit - 1))}…`;
+}
+
 function parseChatActionBody(body, dynamicId) {
   const text = String(body || "");
   const re = /\[\[ubetra:([^|\]]+)\|([^\]]+)\]\]/g;
@@ -13138,7 +14454,7 @@ function parseChatActionBody(body, dynamicId) {
   let match;
   while ((match = re.exec(text)) !== null) {
     if (match.index > last) {
-      nodes.push(text.slice(last, match.index));
+      nodes.push(...linkifyText(text.slice(last, match.index)));
     }
     const path = match[1].trim();
     const label = match[2].trim() || "Open";
@@ -13148,7 +14464,11 @@ function parseChatActionBody(body, dynamicId) {
         {
           className: "chat-action-link",
           type: "button",
-          onClick: () => navigate(path.startsWith("/") ? path : `/${path}`),
+          onClick: (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            navigate(path.startsWith("/") ? path : `/${path}`);
+          },
         },
         label
       )
@@ -13156,10 +14476,10 @@ function parseChatActionBody(body, dynamicId) {
     last = match.index + match[0].length;
   }
   if (last < text.length) {
-    nodes.push(text.slice(last));
+    nodes.push(...linkifyText(text.slice(last)));
   }
   if (!nodes.length) {
-    nodes.push(text);
+    nodes.push(...linkifyText(text));
   }
   return nodes;
 }
@@ -13173,6 +14493,99 @@ function parseSystemEventBody(body) {
     text = text.slice(fromMatch[0].length);
   }
   return { fromLabel, text };
+}
+
+function punishmentReportIdFromLog(msg) {
+  const path = msg?.payload?.path || "";
+  const match = String(path).match(/\/punishment\/([^/?#]+)/);
+  return match ? match[1] : "";
+}
+
+function collectUnrespondedPunishmentIds(data) {
+  const ids = new Set();
+  (data?.reports || []).forEach((report) => {
+    if (report.status === "pending" || report.status === "remind") ids.add(report.id);
+  });
+  return ids;
+}
+
+function isUnrespondedPunishmentLog(msg, pendingIds) {
+  const reportId = punishmentReportIdFromLog(msg);
+  return !!(reportId && pendingIds?.has(reportId));
+}
+
+function renderChatLogLine(msg, dynamicId, pendingPunishmentIds) {
+  const parsed = parseSystemEventBody(msg.body);
+  const who = parsed.fromLabel || msg.sender_display_name || "Log";
+  const pending = isUnrespondedPunishmentLog(msg, pendingPunishmentIds);
+  return el("div", {
+    className: "chat-log-line" + (pending ? " chat-log-punishment-pending" : ""),
+  }, [
+    el("strong", {}, who),
+    " ",
+    ...parseChatActionBody(parsed.text, dynamicId),
+  ]);
+}
+
+function isActivityLogMessage(msg) {
+  return (
+    msg.message_type === "system" ||
+    msg.action === "settings_request_resolved" ||
+    msg.action === "image_unlock_resolved"
+  );
+}
+
+function activityLogPreview(msg) {
+  const parsed = parseSystemEventBody(msg.body);
+  const who = parsed.fromLabel || msg.sender_display_name || "Log";
+  const plain = stripChatMarkers(parsed.text);
+  return truncateChat(`${who} ${plain}`.trim(), 80);
+}
+
+function renderChatLogGroup(messages, dynamicId, expandedGroups, pendingPunishmentIds) {
+  if (messages.length === 1) return renderChatLogLine(messages[0], dynamicId, pendingPunishmentIds);
+  const key = `${messages[0].id}:${messages[messages.length - 1].id}`;
+  const startOpen = !!expandedGroups?.has(key);
+  const hasPending = messages.some((m) => isUnrespondedPunishmentLog(m, pendingPunishmentIds));
+  const wrap = el("div", {
+    className:
+      "chat-log-group"
+      + (startOpen ? " expanded" : "")
+      + (hasPending ? " chat-log-group-punishment-pending" : ""),
+  });
+  const chevron = el("span", { className: "chat-log-group-chevron", "aria-hidden": "true" }, startOpen ? "▾" : "▸");
+  const preview = el("span", { className: "chat-log-group-preview" }, activityLogPreview(messages[messages.length - 1]));
+  const toggle = el("button", {
+    type: "button",
+    className: "chat-log-group-toggle",
+    title: startOpen ? "Hide activity logs" : "Show activity logs",
+    "aria-expanded": startOpen ? "true" : "false",
+  }, [
+    el("span", { className: "chat-log-group-title" }, [
+      chevron,
+      el("strong", {}, `${messages.length} activity logs`),
+    ]),
+    preview,
+  ]);
+  const body = el(
+    "div",
+    { className: "chat-log-group-body" + (startOpen ? "" : " hidden") },
+    messages.map((m) => renderChatLogLine(m, dynamicId, pendingPunishmentIds))
+  );
+  toggle.addEventListener("click", () => {
+    const open = !wrap.classList.contains("expanded");
+    wrap.classList.toggle("expanded", open);
+    body.classList.toggle("hidden", !open);
+    chevron.textContent = open ? "▾" : "▸";
+    toggle.title = open ? "Hide activity logs" : "Show activity logs";
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (expandedGroups) {
+      if (open) expandedGroups.add(key);
+      else expandedGroups.delete(key);
+    }
+  });
+  wrap.append(toggle, body);
+  return wrap;
 }
 
 function settingsHelp(text) {
@@ -13442,8 +14855,10 @@ function renderChat(dynamicId) {
   state.activeDynamicId = id;
   setViewContent(el("p", { className: "muted" }, "Loading chat..."));
 
-  let settings = { retain_history: false, e2e_enabled: false, expire_hours: 720, system_events: true, push_enabled: true, you_are_dominant: false };
+  let settings = { retain_history: false, e2e_enabled: false, expire_hours: 720, system_events: true, push_enabled: true, you_are_dominant: false, bubble_color: "" };
   const revealedImages = new Set();
+  const expandedLogGroups = new Set();
+  let pendingPunishmentIds = new Set();
   let blurImages = localStorage.getItem(chatBlurStorage()) !== "false";
   let blurMode = getChatBlurMode();
   const logsKey = () => `ubetra_chat_show_logs_${id}`;
@@ -13464,11 +14879,23 @@ function renderChat(dynamicId) {
       chatLog.scrollHeight <= chatLog.clientHeight + 4;
     const youAreDom = !!settings.you_are_dominant;
     const nodes = [];
+    const pendingLogs = [];
+    const flushPendingLogs = () => {
+      if (!pendingLogs.length) return;
+      nodes.push(renderChatLogGroup(pendingLogs.splice(0), id, expandedLogGroups, pendingPunishmentIds));
+    };
     for (const msg of lastMessages) {
+      if (isActivityLogMessage(msg)) {
+        if (showActivityLogs) pendingLogs.push(msg);
+        continue;
+      }
+      flushPendingLogs();
+      if (msg.is_yours) {
+        msg.sender_bubble_color = settings.bubble_color || msg.sender_bubble_color || "";
+      }
       if (msg.message_type === "image" && !showImages) {
         nodes.push(
-          el("div", { className: `chat-bubble ${msg.is_yours ? "user" : "assistant"}` }, [
-            el("span", { className: "muted chat-sender" }, msg.sender_display_name),
+          chatBubbleEl(msg, "", [
             el(
               "button",
               {
@@ -13482,36 +14909,11 @@ function renderChat(dynamicId) {
         );
         continue;
       }
-      if (msg.message_type === "system" || msg.action === "settings_request_resolved" || msg.action === "image_unlock_resolved") {
-        if (!showActivityLogs) continue;
-        const parsed = parseSystemEventBody(msg.body);
-        const path = msg.payload?.path;
-        const row = el(
-          path ? "button" : "div",
-          {
-            className: "chat-log-line" + (path ? " chat-system-clickable" : ""),
-            type: path ? "button" : undefined,
-            onClick: path
-              ? () => navigate(path.startsWith("/") ? path : `/${path}`)
-              : undefined,
-          },
-          [
-            el("strong", {}, parsed.fromLabel || msg.sender_display_name),
-            " ",
-            ...parseChatActionBody(parsed.text, id),
-          ]
-        );
-        nodes.push(row);
-        continue;
-      }
 
       if (msg.action === "settings_request") {
         const payload = msg.payload || {};
         const pending = !payload.status || payload.status === "pending";
-        const card = el("div", {
-          className: `chat-bubble ${msg.is_yours ? "user" : "assistant"} chat-settings-request`,
-        }, [
-          el("span", { className: "muted chat-sender" }, msg.sender_display_name),
+        const card = chatBubbleEl(msg, "chat-settings-request", [
           el("strong", {}, "Settings request"),
           el("p", {}, payload.setting_label || msg.body),
           payload.note ? el("p", { className: "muted" }, payload.note) : null,
@@ -13580,10 +14982,7 @@ function renderChat(dynamicId) {
       if (msg.action === "image_unlock_request") {
         const payload = msg.payload || {};
         const pending = !payload.status || payload.status === "pending";
-        const card = el("div", {
-          className: `chat-bubble ${msg.is_yours ? "user" : "assistant"} chat-settings-request`,
-        }, [
-          el("span", { className: "muted chat-sender" }, msg.sender_display_name),
+        const card = chatBubbleEl(msg, "chat-settings-request", [
           el("strong", {}, "Image unlock request"),
           el("p", {}, msg.body || "Permission requested to view a locked image."),
         ]);
@@ -13666,9 +15065,7 @@ function renderChat(dynamicId) {
           }
         }
         const isDecryptError = typeof imageSrc === "string" && imageSrc.startsWith("[Unable");
-        const bubbleKids = [
-          el("span", { className: "muted chat-sender" }, msg.sender_display_name),
-        ];
+        const bubbleKids = [];
         if (isDecryptError) {
           bubbleKids.push(el("p", { className: "muted" }, imageSrc));
         } else {
@@ -13677,10 +15074,9 @@ function renderChat(dynamicId) {
             src: imageSrc,
             alt: "Shared image",
           });
-          bubbleKids.push(img);
           if (permissionBlocked) {
-            attachBlurReveal(img, { id: msg.id, revealedSet: revealedImages, locked: true });
             bubbleKids.push(
+              wrapChatImage(img, { id: msg.id, revealedSet: revealedImages, locked: true }),
               el("p", { className: "muted" }, "Locked — permission required to view."),
               el("button", {
                 type: "button",
@@ -13702,8 +15098,15 @@ function renderChat(dynamicId) {
                 },
               }, "Request unlock")
             );
-          } else if (msg.image_blurred && !revealedImages.has(msg.id)) {
-            attachBlurReveal(img, { id: msg.id, revealedSet: revealedImages });
+          } else {
+            bubbleKids.push(
+              wrapChatImage(img, {
+                id: msg.id,
+                revealedSet: revealedImages,
+                locked: false,
+                holdUnblur: true,
+              })
+            );
           }
         }
         if (msg.image_locked && msg.is_yours) {
@@ -13715,18 +15118,29 @@ function renderChat(dynamicId) {
             )
           );
         }
-        nodes.push(
-          el("div", { className: `chat-bubble ${msg.is_yours ? "user" : "assistant"}` }, bubbleKids)
-        );
+        if (msg.edited_at) {
+          bubbleKids.push(el("span", { className: "muted chat-edited-flag" }, "edited"));
+        }
+        const imageBubble = chatBubbleEl(msg, "", bubbleKids);
+        if (msg.is_yours) attachOwnMessageHold(imageBubble, () => handleOwnMessageHold(msg, ""));
+        nodes.push(imageBubble);
       } else {
-        nodes.push(
-          el("div", { className: `chat-bubble ${msg.is_yours ? "user" : "assistant"}` }, [
-            el("span", { className: "muted chat-sender" }, msg.sender_display_name),
-            isCryptoPlaceholder(text) ? renderCryptoPlaceholder(id, text) : el("span", {}, text),
-          ])
-        );
+        const textKids = [
+          isCryptoPlaceholder(text)
+            ? renderCryptoPlaceholder(id, text)
+            : el("span", { className: "chat-bubble-text" }, linkifyText(text)),
+        ];
+        if (msg.edited_at) {
+          textKids.push(el("span", { className: "muted chat-edited-flag" }, "edited"));
+        }
+        const textBubble = chatBubbleEl(msg, "", textKids);
+        if (msg.is_yours && !isCryptoPlaceholder(text)) {
+          attachOwnMessageHold(textBubble, () => handleOwnMessageHold(msg, text));
+        }
+        nodes.push(textBubble);
       }
     }
+    flushPendingLogs();
     chatLog.replaceChildren(...nodes);
     if (typingPartners.length) {
       const names = typingPartners.map((t) => t.display_name).filter(Boolean);
@@ -13748,6 +15162,47 @@ function renderChat(dynamicId) {
     requestAnimationFrame(() => {
       if (stickToBottom) chatLog.scrollTop = chatLog.scrollHeight;
     });
+  }
+
+  async function handleOwnMessageHold(msg, currentText) {
+    const canEdit = msg.message_type === "text" && !isCryptoPlaceholder(currentText);
+    const choice = await showChatMessageActionSheet({ canEdit });
+    if (!choice) return;
+    const errEl = document.querySelector(".chat-screen .error");
+    try {
+      if (choice === "edit") {
+        const next = await promptChatMessageEdit(currentText);
+        if (next == null) return;
+        const trimmed = String(next).trim();
+        if (!trimmed) return;
+        const body = { body: trimmed, body_encrypted: "" };
+        if (settings.e2e_enabled) {
+          if (!cryptoSubtleAvailable()) throw encryptionUnavailableError();
+          body.body = "";
+          body.body_encrypted = await encryptChatText(id, trimmed);
+        }
+        await api(`/dynamics/${id}/chat/messages/${msg.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        });
+      } else if (choice === "delete") {
+        const ok = confirm(msg.message_type === "image"
+          ? "Delete this image from chat and the vault?"
+          : "Delete this message?");
+        if (!ok) return;
+        await api(`/dynamics/${id}/chat/messages/${msg.id}`, { method: "DELETE" });
+      }
+      if (errEl) {
+        errEl.textContent = "";
+        errEl.classList.add("hidden");
+      }
+      await refresh({ forceScroll: false });
+    } catch (err) {
+      if (errEl) {
+        errEl.textContent = err.message;
+        errEl.classList.remove("hidden");
+      }
+    }
   }
 
   async function sendText(input) {
@@ -13839,8 +15294,10 @@ function renderChat(dynamicId) {
     return Promise.all([
       api(`/dynamics/${id}/chat/settings`),
       api(`/dynamics/${id}/chat/messages`),
-    ]).then(([chatSettings, messages]) => {
+      api(`/dynamics/${id}/punishments`).catch(() => null),
+    ]).then(([chatSettings, messages, punish]) => {
       settings = chatSettings;
+      pendingPunishmentIds = collectUnrespondedPunishmentIds(punish);
       refreshE2eDeviceBanner();
       return paintMessages(messages, opts);
     });
@@ -13850,9 +15307,11 @@ function renderChat(dynamicId) {
     api(`/dynamics/${id}/chat/settings`),
     api(`/dynamics/${id}/chat/messages`),
     loadDynamic(id),
+    api(`/dynamics/${id}/punishments`).catch(() => null),
   ])
-    .then(async ([chatSettings, messages]) => {
+    .then(async ([chatSettings, messages, _dyn, punish]) => {
       settings = chatSettings;
+      pendingPunishmentIds = collectUnrespondedPunishmentIds(punish);
       if (chatSettings.e2e_enabled) {
         await ensureChatCryptoKey(id, {
           createIfMissing: !chatSettings.key_configured,
@@ -14117,6 +15576,74 @@ function renderChat(dynamicId) {
         syncToggleLabels();
         paintMessages(lastMessages);
       });
+      const CHAT_BUBBLE_PRESETS = ["#a855f7", "#3b82f6", "#14b8a6", "#22c55e", "#f59e0b", "#ef4444", "#ec4899", "#64748b"];
+      let chosenBubbleColor = normalizeBubbleHex(settings.bubble_color);
+      let bubbleSaveTimer = null;
+      const colorNative = el("input", {
+        type: "color",
+        value: chosenBubbleColor || "#a855f7",
+        "aria-label": "Custom bubble color",
+      });
+      const colorRow = el("div", { className: "chat-bubble-color-row" });
+      const swatchBtns = [];
+      const paintColorSwatches = () => {
+        swatchBtns.forEach((btn) => {
+          btn.classList.toggle("selected", btn.dataset.color === chosenBubbleColor);
+        });
+      };
+      const applyBubbleColorNow = (hex) => {
+        chosenBubbleColor = normalizeBubbleHex(hex);
+        settings = { ...settings, bubble_color: chosenBubbleColor };
+        lastMessages = lastMessages.map((m) => (
+          m.is_yours ? { ...m, sender_bubble_color: chosenBubbleColor } : m
+        ));
+        paintColorSwatches();
+        paintMessages(lastMessages);
+        clearTimeout(bubbleSaveTimer);
+        bubbleSaveTimer = setTimeout(async () => {
+          try {
+            settings = await api(`/dynamics/${id}/chat/settings`, {
+              method: "PUT",
+              body: JSON.stringify({ bubble_color: chosenBubbleColor }),
+            });
+            chosenBubbleColor = normalizeBubbleHex(settings.bubble_color);
+          } catch (err) {
+            panelError.textContent = err.message;
+            panelError.classList.remove("hidden");
+          }
+        }, 200);
+      };
+      CHAT_BUBBLE_PRESETS.forEach((hex) => {
+        const btn = el("button", {
+          type: "button",
+          className: "chat-bubble-color-swatch",
+          title: hex,
+          "aria-label": `Bubble color ${hex}`,
+        });
+        btn.dataset.color = hex;
+        btn.style.background = hex;
+        btn.addEventListener("click", () => {
+          colorNative.value = hex;
+          applyBubbleColorNow(hex);
+        });
+        swatchBtns.push(btn);
+        colorRow.appendChild(btn);
+      });
+      colorNative.addEventListener("input", () => {
+        applyBubbleColorNow(colorNative.value);
+      });
+      colorRow.appendChild(colorNative);
+      colorRow.appendChild(
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => {
+            colorNative.value = "#a855f7";
+            applyBubbleColorNow("");
+          },
+        }, "Default")
+      );
+      paintColorSwatches();
       blurByDefault.addEventListener("change", () => {
         blurImages = blurByDefault.checked;
         localStorage.setItem(chatBlurStorage(), blurImages ? "true" : "false");
@@ -14161,8 +15688,18 @@ function renderChat(dynamicId) {
 
       settingsPanel.append(
         el("h3", {}, "Chat settings"),
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => {
+            settingsPanel.classList.add("hidden");
+            openAppFeaturesPanel(id, "chat");
+          },
+        }, "Application features…"),
         el("label", { className: "checkbox-label" }, [panelLogsToggle, " Show activity logs"]),
         el("label", { className: "checkbox-label" }, [panelImagesToggle, " Show images in chat"]),
+        el("p", { className: "muted" }, "Your bubble color — applies as soon as you pick it. Your partner sees it too."),
+        colorRow,
         el("label", { className: "checkbox-label" }, [blurByDefault, " Blur shared images"]),
         el("label", {}, ["When blurred", blurModeSelect]),
         el(
@@ -14251,8 +15788,12 @@ function renderChat(dynamicId) {
                   system_events: systemEvents.checked,
                   push_enabled: chatPushEnabled.checked,
                   clear_dom_only: clearDomOnly.checked,
+                  bubble_color: chosenBubbleColor,
                 }),
               });
+              lastMessages = lastMessages.map((m) => (
+                m.is_yours ? { ...m, sender_bubble_color: settings.bubble_color || "" } : m
+              ));
               panelStatus.textContent = "Saved.";
               paintMessages(lastMessages);
             } catch (err) {
@@ -14277,17 +15818,6 @@ function renderChat(dynamicId) {
         }, "Full settings…")
       );
 
-      const featuresBtnChat = el("button", {
-        className: "ghost-btn hub-features-btn chat-features-btn",
-        type: "button",
-        title: "Application features",
-        "aria-label": "Application features",
-        onClick: (e) => {
-          e.stopPropagation();
-          openAppFeaturesPanel(id, "chat");
-        },
-      }, "☰");
-
       const settingsBtnChat = el("button", {
         className: "ghost-btn chat-settings-link chat-hamburger",
         type: "button",
@@ -14304,7 +15834,7 @@ function renderChat(dynamicId) {
           el("h1", {}, "Chat"),
           el("p", { className: "muted" }, formatDynamicTitle(state.currentDynamic)),
         ]),
-        el("div", { className: "chat-header-actions" }, [logsToggle, imagesToggle, featuresBtnChat, settingsBtnChat]),
+        el("div", { className: "chat-header-actions" }, [logsToggle, imagesToggle, settingsBtnChat]),
       ]);
 
       const headerWrap = el("div", { className: "chat-header-wrap" }, [header, settingsPanel]);
@@ -14383,12 +15913,16 @@ function renderChat(dynamicId) {
         if (!alive || liveInFlight) return;
         liveInFlight = true;
         try {
-          const [msgs, presence] = await Promise.all([
+          const [msgs, presence, punish] = await Promise.all([
             api(`/dynamics/${id}/chat/messages`),
             api(`/dynamics/${id}/chat/presence`).catch(() => ({ typing: [] })),
+            api(`/dynamics/${id}/punishments`).catch(() => null),
           ]);
           typingPartners = presence.typing || [];
-          const sig = `${msgs.map((m) => m.id).join(",")}|${typingPartners.map((t) => t.membership_id).join(",")}`;
+          pendingPunishmentIds = collectUnrespondedPunishmentIds(punish);
+          const punishSig = [...pendingPunishmentIds].sort().join(",");
+          const colorSig = msgs.map((m) => m.sender_bubble_color || "").join(",");
+          const sig = `${msgs.map((m) => m.id).join(",")}|${typingPartners.map((t) => t.membership_id).join(",")}|${punishSig}|${colorSig}`;
           if (sig !== liveSig) {
             liveSig = sig;
             await paintMessages(msgs);
@@ -14541,8 +16075,9 @@ function renderSettings() {
     initialDynamicId
       ? api(`/dynamics/${initialDynamicId}/features`).catch(() => null)
       : Promise.resolve(null),
+    api("/app/android").catch(() => ({ available: false })),
   ])
-    .then(([settings, providers, assistantSettings, tones, dynamics, googleStatus, policy, featuresBundle]) => {
+    .then(([settings, providers, assistantSettings, tones, dynamics, googleStatus, policy, featuresBundle, androidApp]) => {
       if (dynamics.length) state.dynamics = dynamics;
       const providerMap = Object.fromEntries(providers.map((p) => [p.id, p]));
       const isSubmissive = !!(policy && policy.you_are_dominant === false);
@@ -15034,6 +16569,7 @@ function renderSettings() {
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Settings"),
       ]);
+      appendAndroidAppCard(stack, androidApp || { available: false });
 
       const usernameInput = el("input", {
         type: "text",
@@ -15087,6 +16623,9 @@ function renderSettings() {
         el("h2", {}, "Appearance"),
         el("p", { className: "muted" }, "Color theme for this device. Saved locally — not synced yet."),
         themePicker,
+        el("h3", {}, "App icon"),
+        el("p", { className: "muted" }, "Used on the home screen when you install the PWA. Violet is the Android default. If an already-installed icon doesn’t update, wait for Chrome to refresh it or reinstall."),
+        buildIconStylePicker(getIconStyle(), (id) => applyIconStyle(id)),
       ]));
       let usernameBaseline = state.user?.username || "";
       draft.register({
@@ -16427,6 +17966,7 @@ async function renderRoute() {
     }
     if (parts[2] === "feelings") return renderFeelings(dynamicId);
     if (parts[2] === "sleep") return renderSleep(dynamicId);
+    if (parts[2] === "cycle") return renderCycle(dynamicId);
     if (parts[2] === "manga") return renderManga(dynamicId);
     if (parts[2] === "punishment") {
       if (parts[3]) return renderPunishment(dynamicId, parts[3]);

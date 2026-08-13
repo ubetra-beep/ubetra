@@ -16,7 +16,8 @@ Partner messaging for the active dynamic. Demo screenshots show a seeded WikiDom
 - **Logs on/off** — system activity posts (tasks, tracking, chastity…)
 - **Images on/off** — hide image bodies but keep an **Open in vault** link for each photo
 - **☰** — Application features for this hub (e.g. Image vault)
-- **⋯** — quick chat privacy settings (blur, retain, encryption, push, **clear chat**, clear-chat policy)
+- **⋯** — quick chat privacy settings (blur, retain, encryption, push, **clear chat**, clear-chat policy) plus **bubble color** (yours, live)
+- Edit or delete **your own** text messages from the message ⋮ menu
 - **Take photo** uses the in-app camera; **Choose from library** uses the file picker
 
 Task requests for Subs live under [Playtime](Playtime), not Chat.

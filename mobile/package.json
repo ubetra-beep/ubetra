@@ -1,8 +1,8 @@
 {
   "name": "ubetra-android",
-  "version": "0.80.0",
+  "version": "0.85.0",
   "private": true,
-  "description": "UBETRA Capacitor Android shell — loads the HTTPS PWA with native FCM for reliable push and future calls",
+  "description": "UBETRA Capacitor Android shell — loads the HTTPS PWA with native FCM for reliable push and Health Connect",
   "scripts": {
     "sync": "npx cap sync android",
     "open": "npx cap open android",
@@ -12,7 +12,8 @@
     "@capacitor/android": "^7.4.2",
     "@capacitor/app": "^7.0.1",
     "@capacitor/core": "^7.4.2",
-    "@capacitor/push-notifications": "^7.0.1"
+    "@capacitor/push-notifications": "^7.0.1",
+    "@ubetra/health-connect": "file:plugins/ubetra-health-connect"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.2"

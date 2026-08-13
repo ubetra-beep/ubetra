@@ -35,6 +35,10 @@ Use **Install app** in the header (Chrome/Edge). Prefer “Install app” / “I
 
 Push notifications need a **secure context** (HTTPS or localhost). Plain `http://192.168…` will not allow web push.
 
+## Android app
+
+Settings can **Download Android app** when the server has published an APK (`mobile/dist`). The APK wraps the PWA with native FCM push and **Health Connect** for sleep/cycle. Play Protect may warn on sideload — that’s expected for a self-hosted signing key.
+
 ## Tip the developer
 
 UBETRA is free. Tips: [ko-fi.com/ubetradev](https://ko-fi.com/ubetradev).

@@ -1,8 +1,9 @@
 from pathlib import Path
+import json
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .catalog import ensure_data_dir, seed_catalog
@@ -35,6 +36,7 @@ from .routers import (
     punishments,
     settings as settings_router,
     sleep,
+    cycle,
     tasks,
     vault,
 )
@@ -44,6 +46,8 @@ HAR_CATALOG = Path(
 )
 
 FRONTEND_DIR = ROOT_DIR / "frontend"
+ICON_STYLES = ("violet", "sage", "midnight", "ember", "cream")
+DEFAULT_ICON_STYLE = "violet"
 
 app = FastAPI(title="UBETRA", version="0.75")
 
@@ -78,6 +82,7 @@ app.include_router(vault.router, prefix="/api")
 app.include_router(google_tasks.router, prefix="/api")
 app.include_router(sleep.router, prefix="/api")
 app.include_router(sleep.callback_router, prefix="/api")
+app.include_router(cycle.router, prefix="/api")
 app.include_router(manga.router, prefix="/api")
 app.include_router(push.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
@@ -106,6 +111,61 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+APK_DIST = ROOT_DIR / "mobile" / "dist"
+
+
+def _published_apk() -> Path | None:
+    for name in ("ubetra.apk", "ubetra-debug.apk"):
+        path = APK_DIST / name
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+@app.get("/api/app/android")
+def android_apk_status() -> dict:
+    apk = _published_apk()
+    meta: dict = {}
+    meta_path = APK_DIST / "ubetra.json"
+    if meta_path.is_file():
+        try:
+            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                meta = loaded
+        except json.JSONDecodeError:
+            meta = {}
+    if apk is None:
+        return {
+            "available": False,
+            "version": meta.get("version") or "",
+            "version_code": int(meta.get("version_code") or 0),
+            "built_at": meta.get("built_at") or "",
+            "size": 0,
+            "url": "/apk/ubetra.apk",
+        }
+    return {
+        "available": True,
+        "version": str(meta.get("version") or "debug"),
+        "version_code": int(meta.get("version_code") or 0),
+        "built_at": str(meta.get("built_at") or ""),
+        "size": apk.stat().st_size,
+        "url": "/apk/ubetra.apk",
+    }
+
+
+@app.get("/apk/ubetra.apk")
+def download_android_apk() -> FileResponse:
+    apk = _published_apk()
+    if apk is None:
+        raise HTTPException(status_code=404, detail="Android APK is not published on this server.")
+    return FileResponse(
+        apk,
+        media_type="application/vnd.android.package-archive",
+        filename="ubetra.apk",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 if FRONTEND_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
 
@@ -114,10 +174,47 @@ if FRONTEND_DIR.exists():
         return FileResponse(FRONTEND_DIR / "index.html")
 
     @app.get("/manifest.webmanifest")
-    def manifest() -> FileResponse:
-        return FileResponse(
-            FRONTEND_DIR / "manifest.webmanifest",
+    def manifest(request: Request, style: str = "") -> JSONResponse:
+        chosen = (style or request.cookies.get("ubetra_icon_style") or DEFAULT_ICON_STYLE).strip().lower()
+        if chosen not in ICON_STYLES:
+            chosen = DEFAULT_ICON_STYLE
+        prefix = f"/icons/{chosen}"
+        return JSONResponse(
+            {
+                "id": "/",
+                "name": "Shared space",
+                "short_name": "Space",
+                "description": "Private shared planner",
+                "start_url": "/",
+                "scope": "/",
+                "display": "standalone",
+                "display_override": ["standalone", "minimal-ui"],
+                "background_color": "#1a1a1a",
+                "theme_color": "#1a1a1a",
+                "orientation": "portrait-primary",
+                "icons": [
+                    {
+                        "src": f"{prefix}/icon-192.png",
+                        "sizes": "192x192",
+                        "type": "image/png",
+                        "purpose": "any",
+                    },
+                    {
+                        "src": f"{prefix}/icon-512.png",
+                        "sizes": "512x512",
+                        "type": "image/png",
+                        "purpose": "any",
+                    },
+                    {
+                        "src": f"{prefix}/icon-512-maskable.png",
+                        "sizes": "512x512",
+                        "type": "image/png",
+                        "purpose": "maskable",
+                    },
+                ],
+            },
             media_type="application/manifest+json",
+            headers={"Cache-Control": "no-cache"},
         )
 
     @app.get("/sw.js")

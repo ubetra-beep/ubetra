@@ -207,6 +207,7 @@ def main():
         "scene_workshop",
         "journal",
         "sleep_tracking",
+        "cycle_tracking",
     ]
     try:
         api(base, "PUT", f"/dynamics/{dynamic_id}/features", token=dom_token, json={"enabled_optional": enabled})
@@ -224,8 +225,19 @@ def main():
             "system_events": True,
             "push_enabled": True,
             "retain_history": True,
+            "bubble_color": "#7c3aed",
         },
     )
+    try:
+        api(
+            base,
+            "PUT",
+            f"/dynamics/{dynamic_id}/chat/settings",
+            token=sub_token,
+            json={"bubble_color": "#0ea5e9"},
+        )
+    except Exception as e:
+        print("sub bubble color warn", e)
 
     # Clear prior chat by import? Skip — append conversation
     chat_lines = [
@@ -428,17 +440,18 @@ def main():
     # Tracking
     print("tracking…")
     tracking_samples = [
-        (sub_token, sub_mid, "orgasm", ["Vibrator", "Full Orgasm"], "Solo evening — Dom approved"),
-        (dom_token, sub_mid, "orgasm", ["Handjob", "Ruined Orgasm"], "Video session ruined"),
-        (sub_token, sub_mid, "no_orgasm", ["Edging"], "Denied after tease"),
-        (dom_token, dom_mid, "orgasm", ["PiV", "Full Orgasm"], "Together weekend"),
+        (sub_token, sub_mid, "orgasm", ["Vibrator", "Full Orgasm"], "Solo evening — Dom approved", 0),
+        (dom_token, sub_mid, "orgasm", ["Handjob", "Ruined Orgasm"], "Video session ruined", 1),
+        (sub_token, sub_mid, "no_orgasm", ["Denied", "Milking"], "Denied after tease", 0),
+        (dom_token, dom_mid, "orgasm", ["PiV", "Full Orgasm"], "Together weekend", 6),
+        (sub_token, sub_mid, "no_orgasm", ["Partial-Milking"], "Partial milking, no orgasm", 4),
     ]
-    for i, (token, mid, et, tags, notes) in enumerate(tracking_samples):
+    for i, (token, mid, et, tags, notes, days_ago) in enumerate(tracking_samples):
         body = {
             "for_membership_id": mid,
             "event_type": et,
             "notes": notes,
-            "occurred_at": (now - timedelta(days=6 - i, hours=2)).isoformat(timespec="seconds"),
+            "occurred_at": (now - timedelta(days=days_ago, hours=2)).isoformat(timespec="seconds"),
             "satisfaction": 4,
         }
         if et == "orgasm":
@@ -449,6 +462,70 @@ def main():
             api(base, "POST", f"/dynamics/{dynamic_id}/tracking", token=token, json=body)
         except Exception as e:
             print("tracking warn", e)
+
+    # Sleep — fragmented Health Connect-style sessions grouped into nights
+    print("sleep…")
+    def _iso(dt):
+        return dt.isoformat(timespec="seconds") + "Z"
+
+    sleep_nights = [
+        # This morning: two sessions 20m apart, ~7.8h, during active lock
+        [
+            (now.replace(hour=23, minute=10, second=0, microsecond=0) - timedelta(days=1), now.replace(hour=1, minute=5, second=0, microsecond=0)),
+            (now.replace(hour=1, minute=25, second=0, microsecond=0), now.replace(hour=7, minute=18, second=0, microsecond=0)),
+        ],
+        # Yesterday morning: ~6.9h locked
+        [
+            (now.replace(hour=22, minute=40, second=0, microsecond=0) - timedelta(days=2), now.replace(hour=6, minute=35, second=0, microsecond=0) - timedelta(days=1)),
+        ],
+        # Four days ago (still in prior lock): short night
+        [
+            (now.replace(hour=0, minute=30, second=0, microsecond=0) - timedelta(days=4), now.replace(hour=6, minute=0, second=0, microsecond=0) - timedelta(days=4)),
+        ],
+        # Twelve days ago, unlocked
+        [
+            (now.replace(hour=23, minute=0, second=0, microsecond=0) - timedelta(days=13), now.replace(hour=7, minute=20, second=0, microsecond=0) - timedelta(days=12)),
+        ],
+    ]
+    for night in sleep_nights:
+        for start, end in night:
+            if end <= start:
+                end = start + timedelta(hours=6)
+            try:
+                api(
+                    base,
+                    "POST",
+                    f"/dynamics/{dynamic_id}/sleep",
+                    token=sub_token,
+                    json={
+                        "start_at": _iso(start),
+                        "end_at": _iso(end),
+                        "sleep_score": 82,
+                        "notes": "Wiki demo night",
+                    },
+                )
+            except Exception as e:
+                print("sleep warn", e)
+
+    # Cycle (Sub)
+    print("cycle…")
+    today = now.date()
+    for offset, flow, symptoms in (
+        (2, "medium", ["Cramps", "Fatigue"]),
+        (1, "light", ["Cramps"]),
+        (0, "spotting", []),
+    ):
+        day = (today - timedelta(days=offset)).isoformat()
+        try:
+            api(
+                base,
+                "PUT",
+                f"/dynamics/{dynamic_id}/cycle/day",
+                token=sub_token,
+                json={"day": day, "flow": flow, "symptoms": symptoms, "notes": "Wiki demo cycle"},
+            )
+        except Exception as e:
+            print("cycle warn", e)
 
     # Feelings
     print("feelings…")

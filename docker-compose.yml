@@ -13,6 +13,7 @@ services:
       UBETRA_DATABASE_URL: sqlite:////app/backend/data/ubetra.db
     volumes:
       - ubetra-data:/app/backend/data
+      - ./mobile/dist:/app/mobile/dist:ro
     ports:
       - "${UBETRA_HOST_PORT:-8000}:8000"
 

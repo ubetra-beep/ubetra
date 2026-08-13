@@ -5,7 +5,13 @@
   "server": {
     "url": "https://ubeneeko.duckdns.org",
     "cleartext": false,
-    "allowNavigation": ["ubeneeko.duckdns.org", "*.duckdns.org"]
+    "allowNavigation": [
+      "ubeneeko.duckdns.org",
+      "*.duckdns.org",
+      "accounts.google.com",
+      "*.google.com",
+      "*.googleapis.com"
+    ]
   },
   "plugins": {
     "PushNotifications": {

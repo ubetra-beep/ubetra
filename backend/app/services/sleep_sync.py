@@ -11,12 +11,15 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import Membership, SleepSession, User
+from ..models import CycleLog, Membership, SleepSession, User
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 FITNESS_SLEEP_SCOPE = "https://www.googleapis.com/auth/fitness.sleep.read"
+FITNESS_REPRO_SCOPE = "https://www.googleapis.com/auth/fitness.reproductive_health.read"
+FITNESS_HEALTH_SCOPES = f"{FITNESS_SLEEP_SCOPE} {FITNESS_REPRO_SCOPE}"
 FITNESS_SESSIONS_URL = "https://www.googleapis.com/fitness/v1/users/me/sessions"
+FITNESS_AGGREGATE_URL = "https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate"
 
 GARMIN_AUTH_URL = "https://connect.garmin.com/oauthConfirm"
 # Garmin Wellness API OAuth2 (Connect developer program)
@@ -35,7 +38,7 @@ def garmin_configured() -> bool:
     return bool(settings.garmin_client_id.strip() and settings.garmin_client_secret.strip())
 
 
-def build_google_sleep_auth_url(*, user_id: str, dynamic_id: str) -> str:
+def build_google_sleep_auth_url(*, user_id: str, dynamic_id: str, next_page: str = "sleep") -> str:
     if not google_fitness_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -46,15 +49,17 @@ def build_google_sleep_auth_url(*, user_id: str, dynamic_id: str) -> str:
         "provider": "google",
         "user_id": user_id,
         "dynamic_id": dynamic_id,
+        "next": next_page if next_page in ("sleep", "cycle") else "sleep",
     }
     params = urllib.parse.urlencode(
         {
             "client_id": settings.google_client_id,
             "redirect_uri": settings.google_fitness_redirect_uri,
             "response_type": "code",
-            "scope": FITNESS_SLEEP_SCOPE,
+            "scope": FITNESS_HEALTH_SCOPES,
             "access_type": "offline",
             "prompt": "consent",
+            "include_granted_scopes": "true",
             "state": state,
         }
     )
@@ -145,7 +150,7 @@ def store_google_sleep_tokens(user: User, tokens: dict) -> None:
     refresh = (tokens.get("refresh_token") or "").strip()
     if refresh:
         user.google_refresh_token = refresh
-    scopes = (tokens.get("scope") or FITNESS_SLEEP_SCOPE).strip()
+    scopes = (tokens.get("scope") or FITNESS_HEALTH_SCOPES).strip()
     user.google_fitness_scopes = scopes
 
 
@@ -363,12 +368,13 @@ def sync_garmin_sleep(
     return count
 
 
-def import_apple_sessions(
+def import_device_sessions(
     db: Session,
     *,
     membership: Membership,
     dynamic_id: str,
     sessions: list[dict],
+    source: str,
 ) -> int:
     count = 0
     for item in sessions:
@@ -382,15 +388,15 @@ def import_apple_sessions(
         except (KeyError, ValueError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid Apple sleep session: {exc}",
+                detail=f"Invalid {source} sleep session: {exc}",
             ) from exc
-        external_id = str(item.get("external_id") or f"apple-{start_at.isoformat()}")
+        external_id = str(item.get("external_id") or f"{source}-{start_at.isoformat()}")
         score = item.get("sleep_score")
         _upsert_session(
             db,
             dynamic_id=dynamic_id,
             membership_id=membership.id,
-            source="apple",
+            source=source,
             external_id=external_id,
             start_at=start_at,
             end_at=end_at,
@@ -399,4 +405,168 @@ def import_apple_sessions(
             notes=str(item.get("notes") or ""),
         )
         count += 1
+    return count
+
+
+def import_apple_sessions(
+    db: Session,
+    *,
+    membership: Membership,
+    dynamic_id: str,
+    sessions: list[dict],
+) -> int:
+    return import_device_sessions(
+        db,
+        membership=membership,
+        dynamic_id=dynamic_id,
+        sessions=sessions,
+        source="apple",
+    )
+
+
+MENSTRUATION_FLOW = {1: "spotting", 2: "light", 3: "medium", 4: "heavy"}
+CYCLE_FLOW_VALUES = {"none", "spotting", "light", "medium", "heavy"}
+
+
+def upsert_cycle_day(
+    db: Session,
+    *,
+    membership: Membership,
+    dynamic_id: str,
+    day: str,
+    flow: str,
+    source: str,
+    external_id: str = "",
+    symptoms: list[str] | None = None,
+    notes: str = "",
+) -> bool:
+    if flow not in CYCLE_FLOW_VALUES or flow == "none":
+        return False
+    existing = (
+        db.query(CycleLog)
+        .filter(
+            CycleLog.dynamic_id == dynamic_id,
+            CycleLog.subject_membership_id == membership.id,
+            CycleLog.day == day,
+        )
+        .first()
+    )
+    if existing:
+        if existing.source == "manual" and existing.flow not in ("", "none"):
+            return False
+        existing.flow = flow
+        existing.source = source
+        existing.external_id = external_id or existing.external_id
+        existing.updated_at = datetime.utcnow()
+        if symptoms is not None:
+            existing.symptoms_json = json.dumps(symptoms)
+        if notes:
+            existing.notes = notes
+        return True
+    db.add(
+        CycleLog(
+            dynamic_id=dynamic_id,
+            subject_membership_id=membership.id,
+            day=day,
+            flow=flow,
+            source=source,
+            external_id=external_id,
+            symptoms_json=json.dumps(symptoms or []),
+            notes=notes or "",
+        )
+    )
+    return True
+
+
+def import_cycle_days(
+    db: Session,
+    *,
+    membership: Membership,
+    dynamic_id: str,
+    days: list[dict],
+    source: str = "healthconnect",
+) -> int:
+    count = 0
+    for item in days or []:
+        day = str(item.get("day") or "")[:10]
+        try:
+            datetime.strptime(day, "%Y-%m-%d")
+        except ValueError:
+            continue
+        flow = str(item.get("flow") or "none").strip().lower()
+        external_id = str(item.get("external_id") or f"{source}-{day}")
+        if upsert_cycle_day(
+            db,
+            membership=membership,
+            dynamic_id=dynamic_id,
+            day=day,
+            flow=flow,
+            source=source,
+            external_id=external_id,
+        ):
+            count += 1
+    return count
+
+
+def sync_google_cycle(
+    db: Session,
+    *,
+    user: User,
+    membership: Membership,
+    dynamic_id: str,
+    days: int = 90,
+) -> int:
+    token = _google_access_token(user)
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    payload = {
+        "aggregateBy": [{"dataTypeName": "com.google.menstruation"}],
+        "bucketByTime": {"durationMillis": 86400000},
+        "startTimeMillis": int(start.timestamp() * 1000),
+        "endTimeMillis": int(end.timestamp() * 1000),
+    }
+    req = urllib.request.Request(
+        FITNESS_AGGREGATE_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Google Fit cycle error: {detail[:400]}",
+        ) from exc
+
+    count = 0
+    for bucket in body.get("bucket") or []:
+        start_ms = int(bucket.get("startTimeMillis") or 0)
+        if not start_ms:
+            continue
+        day = datetime.utcfromtimestamp(start_ms / 1000.0).strftime("%Y-%m-%d")
+        flow = "none"
+        for dataset in bucket.get("dataset") or []:
+            for point in dataset.get("point") or []:
+                for value in point.get("value") or []:
+                    raw = value.get("intVal")
+                    if raw in MENSTRUATION_FLOW:
+                        flow = MENSTRUATION_FLOW[raw]
+        if flow == "none":
+            continue
+        if upsert_cycle_day(
+            db,
+            membership=membership,
+            dynamic_id=dynamic_id,
+            day=day,
+            flow=flow,
+            source="google",
+            external_id=f"gfit-menses-{day}",
+        ):
+            count += 1
     return count

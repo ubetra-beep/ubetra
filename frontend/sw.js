@@ -1,4 +1,4 @@
-const CACHE = "ubetra-v88";
+const CACHE = "ubetra-v101";
 const ASSETS = [
   "/",
   "/assets/styles.css",
@@ -6,6 +6,8 @@ const ASSETS = [
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
+  "/icons/violet/icon-192.png",
+  "/icons/violet/icon-512.png",
 ];
 
 self.addEventListener("install", (event) => {
@@ -39,7 +41,7 @@ self.addEventListener("pushsubscriptionchange", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const { request } = event;
-  if (request.method !== "GET" || request.url.includes("/api/")) {
+  if (request.method !== "GET" || request.url.includes("/api/") || request.url.includes("/apk/")) {
     return;
   }
   // Network-first for app shell so nav/UI fixes apply without a stuck History tab.

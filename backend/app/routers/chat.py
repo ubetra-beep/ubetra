@@ -32,6 +32,7 @@ from ..schemas import (
     ChatKeyShareOut,
     ChatMessageCreate,
     ChatMessageOut,
+    ChatMessageUpdate,
     ChatSettingsOut,
     ChatSettingsUpdate,
     ChatSharedKeyIn,
@@ -53,6 +54,16 @@ from ..services.settings_policy import (
 router = APIRouter(tags=["chat"])
 
 _SHARE_TTL = timedelta(minutes=30)
+_BUBBLE_HEX = set("0123456789abcdefABCDEF")
+
+
+def _normalize_bubble_color(value: str | None) -> str:
+    raw = (value or "").strip()
+    if len(raw) == 7 and raw.startswith("#") and all(c in _BUBBLE_HEX for c in raw[1:]):
+        return raw.lower()
+    return ""
+
+
 _CODE_ALPHABET = string.ascii_uppercase + string.digits
 
 
@@ -78,6 +89,11 @@ def _message_out(message: ChatMessage, viewer: Membership) -> ChatMessageOut:
     # System events: show live membership name (or Game via body [[from:]])
     if message.message_type == ChatMessageType.system and hasattr(message, "sender") and message.sender:
         display = message.sender.display_name
+    sender_bubble_color = ""
+    if hasattr(message, "sender") and message.sender:
+        sender_bubble_color = _normalize_bubble_color(
+            getattr(message.sender, "chat_bubble_color", "") or ""
+        )
     payload = {}
     raw = getattr(message, "payload_json", None) or ""
     if raw:
@@ -101,6 +117,8 @@ def _message_out(message: ChatMessage, viewer: Membership) -> ChatMessageOut:
         action=getattr(message, "action", None) or "",
         payload=payload,
         created_at=message.created_at,
+        edited_at=getattr(message, "edited_at", None),
+        sender_bubble_color=sender_bubble_color,
     )
 
 
@@ -129,6 +147,7 @@ def _chat_settings_out(dynamic: Dynamic, membership: Membership) -> ChatSettings
             getattr(dynamic, "chastity_sub_can_delete_breaks", True)
         ),
         clear_dom_only=bool(getattr(dynamic, "chat_clear_dom_only", False)),
+        bubble_color=_normalize_bubble_color(getattr(membership, "chat_bubble_color", "") or ""),
     )
 
 
@@ -181,6 +200,8 @@ def update_chat_settings(
         dynamic.chat_expire_hours = payload.expire_hours
     if payload.push_enabled is not None:
         dynamic.chat_push_enabled = payload.push_enabled
+    if payload.bubble_color is not None:
+        membership.chat_bubble_color = _normalize_bubble_color(payload.bubble_color)
 
     if was_retain and not bool(dynamic.chat_retain_history):
         db.query(ChatMessage).filter(ChatMessage.dynamic_id == dynamic_id).delete(
@@ -520,6 +541,89 @@ def send_message(
     )
 
     return _message_out(message, membership)
+
+
+def _delete_vault_copies_of_chat_message(db: Session, dynamic_id: str, message_id: str) -> None:
+    db.query(VaultImage).filter(
+        VaultImage.dynamic_id == dynamic_id,
+        VaultImage.source_chat_message_id == message_id,
+    ).delete(synchronize_session=False)
+    db.flush()
+
+
+@router.patch(
+    "/dynamics/{dynamic_id}/chat/messages/{message_id}",
+    response_model=ChatMessageOut,
+)
+def edit_message(
+    dynamic_id: str,
+    message_id: str,
+    payload: ChatMessageUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ChatMessageOut:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    message = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.id == message_id, ChatMessage.dynamic_id == dynamic_id)
+        .first()
+    )
+    if dynamic is None or message is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    if message.sender_membership_id != membership.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only edit your own messages.")
+    if message.message_type != ChatMessageType.text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only text messages can be edited.")
+    if dynamic.chat_e2e_enabled:
+        if not (payload.body_encrypted or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Encrypted body required when end-to-end mode is on",
+            )
+        message.body = ""
+        message.body_encrypted = payload.body_encrypted.strip()
+    else:
+        text = (payload.body or "").strip()
+        if not text:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message body required")
+        message.body = text
+        message.body_encrypted = ""
+    message.edited_at = datetime.utcnow()
+    db.commit()
+    db.refresh(message)
+    message.sender = membership
+    return _message_out(message, membership)
+
+
+@router.delete(
+    "/dynamics/{dynamic_id}/chat/messages/{message_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def delete_message(
+    dynamic_id: str,
+    message_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    membership = get_membership(dynamic_id, user, db)
+    message = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.id == message_id, ChatMessage.dynamic_id == dynamic_id)
+        .first()
+    )
+    if message is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    if message.sender_membership_id != membership.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only delete your own messages.")
+    if message.message_type == ChatMessageType.system:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Activity logs cannot be deleted this way.")
+    if message.message_type == ChatMessageType.image:
+        _delete_vault_copies_of_chat_message(db, dynamic_id, message.id)
+    db.delete(message)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
