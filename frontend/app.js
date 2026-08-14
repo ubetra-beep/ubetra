@@ -502,7 +502,7 @@ async function maybeShowInbox(dynamicId) {
   if (!state.token || !dynamicId) return;
   try {
     const data = await api(`/dynamics/${dynamicId}/inbox`);
-    const items = (data?.items || []).filter((i) => !String(i.kind || "").includes("punishment"));
+    const items = data?.items || [];
     if (!items.length) {
       inboxCheckedDynamics.add(dynamicId);
       return;
@@ -515,11 +515,48 @@ async function maybeShowInbox(dynamicId) {
   }
 }
 
+function punishmentReportIdFromInboxItem(item) {
+  const fromId = String(item?.id || "");
+  const idMatch = fromId.match(/^punish-(?:remind-)?(.+)$/);
+  if (idMatch) return idMatch[1];
+  const path = String(item?.path || "");
+  const pathMatch = path.match(/\/punishment\/([^/?#]+)/);
+  return pathMatch ? pathMatch[1] : "";
+}
+
+function isPunishmentInboxItem(item) {
+  return String(item?.kind || "").includes("punishment") || !!punishmentReportIdFromInboxItem(item);
+}
+
 function showInboxOverlay(dynamicId, items) {
   const existing = document.getElementById("inbox-overlay");
   if (existing) existing.remove();
 
+  const punishItems = items.filter(isPunishmentInboxItem);
   const log = el("div", { className: "inbox-log" });
+  const error = el("p", { className: "error hidden" });
+
+  const overlay = el("div", { id: "inbox-overlay", className: "inbox-overlay" });
+
+  const dismiss = async ({ snoozePunishments = false } = {}) => {
+    error.classList.add("hidden");
+    try {
+      if (snoozePunishments) {
+        for (const item of punishItems) {
+          const reportId = punishmentReportIdFromInboxItem(item);
+          if (!reportId) continue;
+          await api(`/dynamics/${dynamicId}/punishments/${reportId}/remind`, { method: "POST" });
+        }
+      }
+      await api(`/dynamics/${dynamicId}/inbox/ack`, { method: "POST" });
+    } catch (err) {
+      error.textContent = err.message || "Could not update this reminder.";
+      error.classList.remove("hidden");
+      if (snoozePunishments) return;
+    }
+    overlay.remove();
+  };
+
   items.forEach((item) => {
     const when = item.occurred_at
       ? formatLocalDateTime(item.occurred_at, {
@@ -537,33 +574,39 @@ function showInboxOverlay(dynamicId, items) {
       item.body ? el("div", { className: "inbox-log-body" }, item.body) : null,
       when ? el("div", { className: "inbox-log-when" }, when) : null,
     ]);
-    row.addEventListener("click", () => {
+    row.addEventListener("click", async () => {
+      await dismiss();
       if (item.path) navigate(item.path.startsWith("/") ? item.path : `/${item.path}`);
     });
     log.appendChild(row);
   });
 
-  const dismiss = async () => {
-    try {
-      await api(`/dynamics/${dynamicId}/inbox/ack`, { method: "POST" });
-    } catch {
-      /* still close */
-    }
-    overlay.remove();
-  };
-
-  const panel = el("div", { className: "inbox-panel" }, [
-    el("h2", {}, "While you were away"),
-    el("p", { className: "muted" }, "Activity and tasks that need your eye."),
-    log,
+  const actions = el("div", { className: "stack" }, [
+    error,
+    punishItems.length
+      ? el("button", {
+        className: "ghost-btn",
+        type: "button",
+        onClick: () => dismiss({ snoozePunishments: true }),
+      }, "Remind me tomorrow")
+      : null,
     el("button", {
       className: "primary-btn",
       type: "button",
-      onClick: () => { dismiss(); },
+      onClick: () => dismiss(),
     }, "Got it"),
   ]);
 
-  const overlay = el("div", { id: "inbox-overlay", className: "inbox-overlay" }, [panel]);
+  const panel = el("div", { className: "inbox-panel" }, [
+    el("h2", {}, "While you were away"),
+    el("p", { className: "muted" }, punishItems.length
+      ? "Tap an item to handle it. Snooze punishments until tomorrow if you are not ready."
+      : "Activity and tasks that need your eye."),
+    log,
+    actions,
+  ]);
+
+  overlay.appendChild(panel);
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) dismiss();
   });
@@ -584,9 +627,12 @@ function punishmentNeedsDommeResponse(report) {
 async function maybeShowPunishmentReminders() {
   if (!state.token || !state.user?.onboarding_completed) return;
   if (document.visibilityState !== "visible") return;
+  if (document.getElementById("inbox-overlay")) return;
   if (document.getElementById("punishment-remind-overlay")) return;
   const { parts } = parseRoute();
-  if (parts[2] === "punishment" && parts[3]) return;
+  if (parts[2] === "punishment") return;
+  // Confessions already appear in While you were away. Only nudge if that overlay
+  // was already dismissed and a punishment is still waiting this session.
   const dynamics = state.dynamics || [];
   if (!dynamics.length) return;
   const pending = [];
@@ -599,6 +645,7 @@ async function maybeShowPunishmentReminders() {
   );
   results.forEach((row) => {
     if (!row?.data?.you_are_dominant) return;
+    if (!inboxCheckedDynamics.has(row.dyn.id)) return;
     const reports = row.data.open || row.data.pending || row.data.reports || [];
     reports.forEach((report) => {
       if (!punishmentNeedsDommeResponse(report)) return;
@@ -646,7 +693,16 @@ function showPunishmentRemindOverlay(items) {
         minute: "2-digit",
       })
       : "";
-    const row = el("div", { className: "inbox-log-item punishment_pending" }, [
+    const row = el("div", { className: "inbox-log-item punishment_pending" });
+    const go = () => {
+      closeOverlay();
+      navigate(`/dynamic/${item.dynamicId}/punishment/${item.id}`);
+    };
+    row.appendChild(el("button", {
+      type: "button",
+      className: "inbox-log-hit",
+      onClick: go,
+    }, [
       el("div", { className: "inbox-log-title" }, "Punishment needed"),
       el(
         "div",
@@ -654,27 +710,24 @@ function showPunishmentRemindOverlay(items) {
         `${item.reporter_name || "Partner"}: ${item.action_text || ""}`
       ),
       when ? el("div", { className: "inbox-log-when" }, when) : null,
-      el("div", { className: "row wrap punishment-remind-actions" }, [
-        el("button", {
-          type: "button",
-          className: "primary-btn",
-          onClick: () => {
-            closeOverlay();
-            navigate(`/dynamic/${item.dynamicId}/punishment/${item.id}`);
-          },
-        }, "Respond"),
-        el("button", {
-          type: "button",
-          className: "ghost-btn",
-          onClick: async () => {
-            if (await snoozeReport(item)) {
-              row.remove();
-              if (!list.querySelector(".inbox-log-item")) closeOverlay();
-            }
-          },
-        }, "Remind me tomorrow"),
-      ]),
-    ]);
+    ]));
+    row.appendChild(el("div", { className: "row wrap punishment-remind-actions" }, [
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: go,
+      }, "Respond"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          if (await snoozeReport(item)) {
+            row.remove();
+            if (!list.querySelector(".inbox-log-item")) closeOverlay();
+          }
+        },
+      }, "Remind me tomorrow"),
+    ]));
     list.appendChild(row);
   });
 
@@ -688,21 +741,21 @@ function showPunishmentRemindOverlay(items) {
       el("p", { className: "muted" }, "Respond to close this, or snooze until tomorrow."),
       list,
       error,
-      items.length > 1
-        ? el("button", {
-          type: "button",
-          className: "ghost-btn",
-          onClick: async () => {
-            const rows = [...items];
-            for (const item of rows) {
-              if (!(await snoozeReport(item))) return;
-            }
-            closeOverlay();
-          },
-        }, "Remind me tomorrow")
-        : null,
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          for (const item of items) {
+            if (!(await snoozeReport(item))) return;
+          }
+          closeOverlay();
+        },
+      }, "Remind me tomorrow"),
     ])
   );
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) closeOverlay();
+  });
   document.body.appendChild(overlay);
 }
 
@@ -3220,8 +3273,8 @@ function renderLogin() {
   const error = el("div", { className: "error hidden" });
   const form = el("form", { className: "stack auth-card" }, [
     el("h1", {}, "Sign in"),
-    el("p", { className: "muted" }, "Use the email address for your account."),
-    el("label", {}, ["Email", el("input", { name: "email", type: "email", required: "true", autocomplete: "email" })]),
+    el("p", { className: "muted" }, "Use your email or username."),
+    el("label", {}, ["Email or username", el("input", { name: "email", type: "text", required: "true", autocomplete: "username" })]),
     el("label", {}, ["Password", el("input", { name: "password", type: "password", required: "true", autocomplete: "current-password" })]),
     error,
     el("button", { className: "primary-btn", type: "submit" }, "Continue"),
@@ -3286,7 +3339,7 @@ function renderForgotPassword() {
   const ok = el("div", { className: "muted hidden" });
   const form = el("form", { className: "stack auth-card" }, [
     el("h1", {}, "Forgot password"),
-    el("p", { className: "muted" }, "We’ll email a one-time code and a reset link (SMTP must be configured on the server)."),
+    el("p", { className: "muted" }, "We’ll email a one-time code and a reset link when mail is configured on the server."),
     el("label", {}, ["Email", el("input", { name: "email", type: "email", required: "true", autocomplete: "email" })]),
     error,
     ok,
@@ -3298,6 +3351,12 @@ function renderForgotPassword() {
     }, "I already have a code"),
     el("button", { className: "ghost-btn", type: "button", onClick: () => navigate("/login") }, "Back to sign in"),
   ]);
+  api("/auth/config").then((cfg) => {
+    if (cfg.smtp_configured === false) {
+      ok.textContent = "This server is not sending email. Use a reset code from the host, then tap “I already have a code”.";
+      ok.classList.remove("hidden");
+    }
+  }).catch(() => {});
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     error.classList.add("hidden");
@@ -3330,7 +3389,7 @@ function renderResetPassword() {
     el("h1", {}, "Set new password"),
     el("p", { className: "muted" }, prefillToken
       ? "Link detected — enter a new password (or paste the email code instead)."
-      : "Enter the email code from your inbox, or open the reset link."),
+      : "Enter the 6-digit code and a new password."),
     el("label", {}, ["Email", el("input", {
       name: "email",
       type: "email",
@@ -3338,11 +3397,13 @@ function renderResetPassword() {
       autocomplete: "email",
       value: prefillEmail,
     })]),
-    el("label", {}, ["One-time code (optional if using link)", el("input", {
+    el("label", {}, ["One-time code", el("input", {
       name: "code",
       inputmode: "numeric",
       autocomplete: "one-time-code",
       placeholder: "6-digit code",
+      required: prefillToken ? null : "true",
+      value: query.get("code") || "",
     })]),
     el("input", { name: "token", type: "hidden", value: prefillToken }),
     el("label", {}, ["New password", el("input", {
@@ -5550,6 +5611,164 @@ function renderTrackingHub(dynamicId) {
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
+function appendCreateTaskForm(stack, {
+  dynamicId,
+  dynamic,
+  presets,
+  preselectedTags = [],
+  confession = null,
+}) {
+  const you = dynamic?.partners?.find((p) => p.is_you);
+  if (you?.role !== "dominant") return;
+  const error = el("div", { className: "error hidden" });
+  const title = el("input", {
+    placeholder: confession ? "List title (e.g. Punishment)" : "List title (e.g. Tonight)",
+    value: confession ? `Punishment · ${confession.reporter_name || "confession"}` : "",
+  });
+  const tasksBox = el("textarea", {
+    rows: "4",
+    placeholder: confession
+      ? "Punishment task(s). One per line."
+      : "One task per line",
+  });
+  const recurrence = el("select");
+  [["none", "One-time"], ["daily", "Daily"], ["weekly", "Weekly"]].forEach(([v, l]) => {
+    recurrence.appendChild(el("option", { value: v }, l));
+  });
+  const assignee = buildAssigneeSelect(dynamic.partners, { includeDefault: false });
+  const defaultAssignee = confession?.reported_by_membership_id
+    || dynamic.partners?.find((p) => !p.is_you)?.id
+    || "";
+  if (defaultAssignee) assignee.value = defaultAssignee;
+  const dueAt = el("input", { type: "datetime-local" });
+  const tagPresets = [...(presets || DEFAULT_TASK_CATEGORY_TAGS)];
+  const punishSelected = (preselectedTags || []).some((t) => String(t).toLowerCase() === "punishment");
+  if (punishSelected && !tagPresets.some((t) => String(t).toLowerCase() === "punishment")) {
+    tagPresets.unshift("Punishment");
+  }
+  const categoryPicker = buildTagPicker(tagPresets, preselectedTags);
+  const ideasHost = el("div", { className: "stack" });
+  const cardKids = [
+    el("h2", {}, confession ? "Assign a punishment task" : "Create tasks"),
+    confession
+      ? el("p", { className: "muted" }, `For the confession: “${(confession.action_text || "").slice(0, 160)}”`)
+      : el("p", { className: "muted" }, "At least one category tag is required. Due date is optional."),
+    title,
+    tasksBox,
+    el("label", { className: "stack" }, ["Recurrence", recurrence]),
+    el("label", { className: "stack" }, ["Assign to", assignee]),
+    el("label", { className: "stack" }, ["Due by (optional)", dueAt]),
+    el("p", { className: "muted" }, "Category tags (pick at least one)"),
+    categoryPicker.row,
+    categoryPicker.custom,
+  ];
+  if (confession?.id) {
+    cardKids.push(el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: async () => {
+        error.classList.add("hidden");
+        try {
+          const result = await api(`/dynamics/${dynamicId}/punishments/${confession.id}/ideas`, { method: "POST" });
+          const ideas = result.ideas || [];
+          ideasHost.replaceChildren();
+          if (!ideas.length) {
+            ideasHost.appendChild(el("p", { className: "muted" }, "No ideas returned."));
+            return;
+          }
+          ideasHost.appendChild(el("h3", {}, "Assistant ideas"));
+          ideas.forEach((idea) => {
+            const suggestion = idea.task_suggestion || idea.summary || idea.title || "";
+            ideasHost.appendChild(el("div", { className: "card stack" }, [
+              el("strong", {}, idea.title || "Idea"),
+              el("p", {}, idea.summary || ""),
+              suggestion ? el("p", { className: "muted" }, `Task: ${suggestion}`) : null,
+              suggestion
+                ? el("button", {
+                  type: "button",
+                  className: "ghost-btn",
+                  onClick: () => {
+                    const cur = tasksBox.value.trim();
+                    tasksBox.value = cur ? `${cur}\n${suggestion}` : suggestion;
+                  },
+                }, "Use this task")
+                : null,
+            ]));
+          });
+        } catch (err) {
+          error.textContent = err.message;
+          error.classList.remove("hidden");
+        }
+      },
+    }, "Ask assistant for punishment task ideas"));
+    cardKids.push(ideasHost);
+  }
+  cardKids.push(error);
+  cardKids.push(el("button", {
+    className: "primary-btn",
+    type: "button",
+    onClick: async () => {
+      error.classList.add("hidden");
+      const lines = tasksBox.value.split("\n").map((l) => l.trim()).filter(Boolean);
+      if (!title.value.trim() || !lines.length) {
+        error.textContent = "Add a title and at least one task.";
+        error.classList.remove("hidden");
+        return;
+      }
+      const tags = categoryPicker.getTags();
+      if (!tags.length) {
+        error.textContent = "Pick at least one category tag.";
+        error.classList.remove("hidden");
+        return;
+      }
+      if (!assignee.value) {
+        error.textContent = "Choose who this is assigned to.";
+        error.classList.remove("hidden");
+        return;
+      }
+      const payload = {
+        title: title.value.trim(),
+        assigned_to_membership_id: assignee.value,
+        tasks: lines.map((content, index) => {
+          const row = {
+            content,
+            visibility: index === 0 ? "visible" : "after_prior",
+            recurrence: recurrence.value,
+            tags,
+          };
+          if (dueAt.value) row.due_at = new Date(dueAt.value).toISOString();
+          return row;
+        }),
+      };
+      try {
+        await api(`/dynamics/${dynamicId}/tasks`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (confession?.id) {
+          try {
+            await api(`/dynamics/${dynamicId}/punishments/${confession.id}/covered`, { method: "POST" });
+          } catch {
+            /* task still created */
+          }
+          showToast("Task assigned and confession marked covered.");
+          navigate(`/dynamic/${dynamicId}/tasks`);
+          return;
+        }
+        title.value = "";
+        tasksBox.value = "";
+        dueAt.value = "";
+        showToast("Task list created.");
+        renderTasks(dynamicId);
+      } catch (err) {
+        error.textContent = err.message;
+        error.classList.remove("hidden");
+      }
+    },
+  }, confession ? "Assign task" : "Create task list"));
+  stack.appendChild(el("div", { className: "card stack" }, cardKids));
+}
+
 function renderTasksActsSwitcher(dynamicId, active) {
   return el("div", { className: "row wrap feelings-when-row" }, [
     el(
@@ -5570,7 +5789,76 @@ function renderTasksActsSwitcher(dynamicId, active) {
       },
       "Acts of submission"
     ),
+    el(
+      "button",
+      {
+        type: "button",
+        className: active === "goals" ? "primary-btn" : "ghost-btn",
+        onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=goals`),
+      },
+      "Goals"
+    ),
   ]);
+}
+
+function renderTaskGoals(dynamicId) {
+  const { query } = parseRoute();
+  const punishId = query.get("punish") || "";
+  setViewContent(el("p", { className: "muted" }, "Loading goals…"));
+  Promise.all([
+    loadDynamic(dynamicId),
+    api(`/dynamics/${dynamicId}/chastity-goals`).catch(() => null),
+    punishId
+      ? api(`/dynamics/${dynamicId}/punishments/${punishId}`).catch(() => null)
+      : Promise.resolve(null),
+  ])
+    .then(([, goalsData, punishData]) => {
+      const dynamic = state.currentDynamic;
+      const you = dynamic?.partners?.find((p) => p.is_you);
+      const confession = punishData?.report || null;
+      const stack = el("div", { className: "stack" }, [
+        el("h1", {}, "Tasks & acts"),
+        renderTasksActsSwitcher(dynamicId, "goals"),
+        el("p", { className: "muted" }, "Keyholder goals for grants and gifts. Progress also shows in the header."),
+      ]);
+      if (confession) {
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Confession"),
+          el("p", {}, confession.action_text || ""),
+          el("p", { className: "muted" }, "Set a goal as the punishment, then mark the confession covered when you are done."),
+          el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: async () => {
+              await api(`/dynamics/${dynamicId}/punishments/${confession.id}/covered`, { method: "POST" });
+              showToast("Confession marked covered.");
+              navigate(`/dynamic/${dynamicId}/tasks?tab=goals`);
+            },
+          }, "Mark confession covered"),
+        ]));
+      }
+      if (you?.role !== "dominant") {
+        stack.appendChild(el("p", { className: "muted" }, "Only the keyholder can set goals."));
+      } else if (!goalsData) {
+        stack.appendChild(el("p", { className: "muted" }, "Turn on Chastity in Features to use goals, or try again in a moment."));
+      } else {
+        stack.appendChild(renderChastityGoalsCard(dynamicId, goalsData, {
+          partners: dynamic.partners || [],
+          onSaved: () => {
+            refreshDomGoalHeader(dynamicId);
+            renderTaskGoals(dynamicId);
+          },
+        }));
+      }
+      stack.appendChild(el("button", {
+        className: "ghost-btn",
+        type: "button",
+        onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+      }, "Back to Playtime"));
+      setViewContent(stack);
+      updateBottomNav();
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
 async function loadDynamic(dynamicId) {
@@ -6067,25 +6355,44 @@ function renderOverlap(dynamicId) {
 }
 
 function renderTasks(dynamicId) {
+  const { query } = parseRoute();
+  if (query.get("tab") === "goals") {
+    renderTaskGoals(dynamicId);
+    return;
+  }
+  const punishId = query.get("punish") || "";
   viewEl.replaceChildren(el("p", { className: "muted" }, "Loading tasks..."));
   Promise.all([
     loadDynamic(dynamicId),
     api(`/dynamics/${dynamicId}/tags`).catch(() => ({ presets: [], task_presets: DEFAULT_TASK_CATEGORY_TAGS })),
+    punishId
+      ? api(`/dynamics/${dynamicId}/punishments/${punishId}`).catch(() => null)
+      : Promise.resolve(null),
   ])
-    .then(([, tagData]) => {
+    .then(([, tagData, punishData]) => {
       const dynamic = state.currentDynamic;
       const you = dynamic.partners.find((p) => p.is_you);
       const isDom = you?.role === "dominant";
       const taskCategoryPresets = (tagData.task_presets && tagData.task_presets.length)
         ? tagData.task_presets
         : DEFAULT_TASK_CATEGORY_TAGS;
+      const confession = punishData?.report || null;
       const error = el("div", { className: "error hidden" });
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Tasks & acts"),
         renderTasksActsSwitcher(dynamicId, "tasks"),
-        el("p", { className: "muted" }, "Open and missed work. Create tasks from Playtime."),
+        el("p", { className: "muted" }, confession
+          ? "Assign a punishment task for this confession."
+          : "Create tasks here. Open, missed, and paused work is below."),
         error,
       ]);
+      appendCreateTaskForm(stack, {
+        dynamicId,
+        dynamic,
+        presets: taskCategoryPresets,
+        preselectedTags: confession ? ["Punishment"] : [],
+        confession,
+      });
 
       const now = Date.now();
       const missed = [];
@@ -6245,11 +6552,13 @@ function renderTasks(dynamicId) {
           ],
           primaryLabel: "Save",
           onPrimary: async () => {
+            const tags = tagPicker.getTags();
+            if (!tags.length) throw new Error("Pick at least one category tag.");
             await api(`/tasks/${list.id}/items/${task.id}`, {
               method: "PATCH",
               body: JSON.stringify({
                 content: content.value.trim(),
-                tags: tagPicker.getTags(),
+                tags,
                 paused: pausedBox.checked,
               }),
             });
@@ -6542,16 +6851,6 @@ function renderTasks(dynamicId) {
         }
       }
       if (isDom) stack.appendChild(bulkBar);
-
-      stack.appendChild(el("div", { className: "card stack" }, [
-        el("h2", {}, "Create tasks in Playtime"),
-        el("p", { className: "muted" }, "Task creation and requests live under Playtime."),
-        el("button", {
-          className: "primary-btn",
-          type: "button",
-          onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
-        }, "Open Playtime"),
-      ]));
 
       if ((state.taskLists || []).length) {
         const listsCard = el("details", { className: "task-timeline-section stack" }, [
@@ -7015,67 +7314,6 @@ function renderAssistant(dynamicId) {
         if (!isFacetEnabled(facet, enabledFeatures)) return;
         stack.appendChild(renderFacetRow(facet, dynamicId, state.currentDynamic));
       });
-
-      const taskError = el("div", { className: "error hidden" });
-      if (you?.role === "dominant") {
-        const title = el("input", { placeholder: "List title (e.g. Tonight)" });
-        const tasksBox = el("textarea", { rows: "4", placeholder: "One task per line" });
-        const recurrence = el("select");
-        [["none", "One-time"], ["daily", "Daily"], ["weekly", "Weekly"]].forEach(([v, l]) => {
-          recurrence.appendChild(el("option", { value: v }, l));
-        });
-        const assignee = buildAssigneeSelect(dynamic.partners);
-        const categoryPicker = buildTagPicker(DEFAULT_TASK_CATEGORY_TAGS, []);
-        stack.appendChild(el("div", { className: "card stack" }, [
-          el("h2", {}, "Create tasks"),
-          el("p", { className: "muted" }, "Track open and overdue work under Playtime → Tasks & acts."),
-          title,
-          tasksBox,
-          el("label", {}, ["Recurrence", recurrence]),
-          el("label", {}, ["Assign to", assignee]),
-          el("p", { className: "muted" }, "Category tags"),
-          categoryPicker.row,
-          categoryPicker.custom,
-          taskError,
-          el("button", {
-            className: "primary-btn",
-            type: "button",
-            onClick: async () => {
-              taskError.classList.add("hidden");
-              const lines = tasksBox.value.split("\n").map((l) => l.trim()).filter(Boolean);
-              if (!title.value.trim() || !lines.length) {
-                taskError.textContent = "Add a title and at least one task.";
-                taskError.classList.remove("hidden");
-                return;
-              }
-              const tags = categoryPicker.getTags();
-              try {
-                await api(`/dynamics/${dynamicId}/tasks`, {
-                  method: "POST",
-                  body: JSON.stringify({
-                    title: title.value.trim(),
-                    assigned_to_membership_id: assignee.value || null,
-                    tasks: lines.map((content, index) => ({
-                      content,
-                      visibility: index === 0 ? "visible" : "after_prior",
-                      recurrence: recurrence.value,
-                      tags,
-                    })),
-                  }),
-                });
-                title.value = "";
-                tasksBox.value = "";
-                taskError.classList.add("hidden");
-                const ok = el("p", { className: "muted" }, "Created. Open Tasks & acts above to follow progress.");
-                taskError.replaceWith(ok);
-              } catch (err) {
-                taskError.textContent = err.message;
-                taskError.classList.remove("hidden");
-              }
-            },
-          }, "Create task list"),
-        ]));
-      }
 
       stack.appendChild(
         el("button", {
@@ -9860,7 +10098,7 @@ function renderPunishment(dynamicId, reportId = null) {
       const open = data.open || data.pending || [];
       const list = el("div", { className: "stack" }, [
         el("h1", {}, "Punishment dashboard"),
-        el("p", { className: "muted" }, "Confessions waiting for you. Assign goal increases, then choose a follow-up."),
+        el("p", { className: "muted" }, "Confessions waiting for you. Set a goal, assign a task, or close / snooze."),
       ]);
       if (!open.length) {
         list.appendChild(el("p", { className: "muted" }, "No open confessions."));
@@ -9906,6 +10144,25 @@ function renderPunishment(dynamicId, reportId = null) {
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
+function formatPunishmentApplied(entry) {
+  if (!entry || typeof entry !== "object") return "";
+  if (entry.kind === "task" || (entry.content && !entry.goal_title)) {
+    return `Task: ${entry.content}`;
+  }
+  if (entry.kind === "goal") {
+    const req = entry.requirement_title ? ` — ${entry.requirement_title}` : "";
+    return `Goal set: ${entry.goal_title || "Goal"}${req}`;
+  }
+  if (entry.goal_title || entry.requirement_title) {
+    const goal = entry.goal_title || "Goal";
+    const req = entry.requirement_title || entry.requirement_type || "";
+    const added = entry.added != null ? `+${entry.added}` : "";
+    const next = entry.new_target != null ? `→ ${entry.new_target}` : "";
+    return `${goal}: ${req} ${added} ${next}`.replace(/\s+/g, " ").trim();
+  }
+  return entry.title || entry.summary || "";
+}
+
 function renderPunishmentDetail(dynamicId, reportId) {
   const id = dynamicId;
   setViewContent(el("p", { className: "muted" }, "Loading confession…"));
@@ -9918,8 +10175,6 @@ function renderPunishmentDetail(dynamicId, reportId) {
       const isDom = !!data.you_are_dominant;
       const error = el("div", { className: "error hidden" });
       const status = el("div", { className: "muted" });
-      const followHost = el("div", { className: "stack" });
-      const ideasHost = el("div", { className: "stack" });
 
       const stack = el("div", { className: "stack" }, [
         el("div", { className: "row wrap" }, [
@@ -9943,7 +10198,7 @@ function renderPunishmentDetail(dynamicId, reportId) {
       if ((report.applied || []).length) {
         stack.appendChild(el("div", { className: "card stack" }, [
           el("h2", {}, "Assigned so far"),
-          ...report.applied.map((a) => el("p", {}, `${a.goal_title}: ${a.requirement_title} +${a.added} → ${a.new_target}`)),
+          ...report.applied.map((a) => el("p", {}, formatPunishmentApplied(a) || "Assigned")),
         ]));
       }
 
@@ -9954,188 +10209,70 @@ function renderPunishmentDetail(dynamicId, reportId) {
         return;
       }
 
-      const bumpInputs = new Map();
-      const goalsCard = el("div", { className: "card stack" }, [
-        el("h2", {}, "Assign to active goals"),
-        el("p", { className: "muted" }, "Increase requirement targets for this confession."),
-      ]);
       const goals = data.options?.goals || [];
-      if (!goals.length) {
-        goalsCard.appendChild(el("p", { className: "muted" }, "No active goals. Create some on Chastity first."));
-      } else {
-        goals.forEach((goal) => {
-          const block = el("div", { className: "stack" }, [el("h3", {}, goal.title)]);
-          (goal.requirements || []).forEach((req) => {
-            const input = el("input", {
-              type: "number",
-              min: "0",
-              step: req.kind === "duration" ? "0.5" : "1",
-              value: "0",
-              style: "max-width:6rem",
-            });
-            bumpInputs.set(`${goal.id}|${req.type}`, input);
-            const suggests = el("div", { className: "row wrap" });
-            (req.suggested_adds || [1, 2, 3]).forEach((n) => {
-              suggests.appendChild(el("button", {
-                type: "button",
-                className: "ghost-btn",
-                onClick: () => { input.value = String(n); },
-              }, `+${n}`));
-            });
-            const unit = req.unit === "days" ? "days" : req.unit || "";
-            block.appendChild(el("div", { className: "card stack" }, [
-              el("strong", {}, req.title),
-              el("p", { className: "muted" }, `Target ${req.target}${unit ? ` ${unit}` : ""}${req.current != null ? ` · now ${req.current}` : ""}`),
-              el("label", { className: "row wrap" }, ["Add", input, unit || ""]),
-              suggests,
-            ]));
-          });
-          goalsCard.appendChild(block);
-        });
-      }
+      const isOpen = ["pending", "assigned", "ideas", "remind"].includes(report.status);
 
-      function collectAdjustments() {
-        const adjustments = [];
-        bumpInputs.forEach((input, key) => {
-          const add = parseFloat(input.value || "0");
-          if (!add || add <= 0) return;
-          const [goalId, requirementType] = key.split("|");
-          adjustments.push({ goal_id: goalId, requirement_type: requirementType, add });
-        });
-        return adjustments;
-      }
-
-      function showFollowUp() {
-        followHost.replaceChildren(
-          el("div", { className: "card stack" }, [
-            el("h2", {}, "Next step"),
-            el("p", { className: "muted" }, "Goal values are saved. What do you want to do next?"),
-            el("button", {
-              className: "primary-btn",
-              type: "button",
-              onClick: async () => {
-                error.classList.add("hidden");
-                status.textContent = "Asking assistant…";
-                try {
-                  const result = await api(`/dynamics/${id}/punishments/${reportId}/ideas`, { method: "POST" });
-                  status.textContent = "Ideas ready.";
-                  renderIdeas(result.ideas || []);
-                } catch (err) {
-                  status.textContent = "";
-                  error.textContent = err.message;
-                  error.classList.remove("hidden");
-                }
-              },
-            }, "Ask the assistant for additional task or punishment ideas"),
-            el("button", {
-              className: "ghost-btn",
-              type: "button",
-              onClick: async () => {
-                try {
-                  await api(`/dynamics/${id}/punishments/${reportId}/remind`, { method: "POST" });
-                  status.textContent = "Reminder set for tomorrow.";
-                  setTimeout(() => navigate(`/dynamic/${id}/punishment`), 700);
-                } catch (err) {
-                  error.textContent = err.message;
-                  error.classList.remove("hidden");
-                }
-              },
-            }, "Remind me tomorrow about this"),
-            el("button", {
-              className: "ghost-btn",
-              type: "button",
-              onClick: async () => {
-                try {
-                  await api(`/dynamics/${id}/punishments/${reportId}/covered`, { method: "POST" });
-                  status.textContent = "Marked as covered.";
-                  refreshDomGoalHeader(id);
-                  setTimeout(() => navigate(`/dynamic/${id}/punishment`), 700);
-                } catch (err) {
-                  error.textContent = err.message;
-                  error.classList.remove("hidden");
-                }
-              },
-            }, "I've got it covered"),
+      if (isOpen) {
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Choose a response"),
+          el("p", { className: "muted" }, "Assign a task, or set a goal if you use them."),
+          el("button", {
+            className: "choice-btn playtime-option",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${id}/tasks?punish=${encodeURIComponent(report.id)}`),
+          }, [
+            el("strong", {}, "Assign a task"),
+            el("span", { className: "muted" }, "Opens the task creator with optional assistant ideas"),
           ]),
-        );
+          el("button", {
+            className: "choice-btn playtime-option",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${id}/tasks?tab=goals&punish=${encodeURIComponent(report.id)}`),
+          }, [
+            el("strong", {}, goals.length ? "Add or edit a goal" : "Add a goal"),
+            el("span", { className: "muted" }, goals.length
+              ? "Open goals under Tasks & acts"
+              : "No goals yet — create one from Tasks & acts"),
+          ]),
+        ]));
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Or close this"),
+          el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: async () => {
+              error.classList.add("hidden");
+              try {
+                await api(`/dynamics/${id}/punishments/${reportId}/remind`, { method: "POST" });
+                showToast("Reminder set for tomorrow.");
+                navigate(`/dynamic/${id}/punishment`);
+              } catch (err) {
+                error.textContent = err.message;
+                error.classList.remove("hidden");
+              }
+            },
+          }, "Remind me tomorrow"),
+          el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: async () => {
+              error.classList.add("hidden");
+              try {
+                await api(`/dynamics/${id}/punishments/${reportId}/covered`, { method: "POST" });
+                showToast("Marked as covered.");
+                refreshDomGoalHeader(id);
+                navigate(`/dynamic/${id}/punishment`);
+              } catch (err) {
+                error.textContent = err.message;
+                error.classList.remove("hidden");
+              }
+            },
+          }, "I've got it covered"),
+        ]));
+      } else {
+        stack.appendChild(el("p", { className: "muted" }, "This confession is closed."));
       }
 
-      function renderIdeas(ideas) {
-        ideasHost.replaceChildren();
-        if (!ideas?.length) {
-          ideasHost.appendChild(el("p", { className: "muted" }, "No ideas returned."));
-          return;
-        }
-        ideasHost.appendChild(el("h2", {}, "Assistant ideas"));
-        ideas.forEach((idea) => {
-          const card = el("div", { className: "card stack" }, [
-            el("strong", {}, idea.title || "Idea"),
-            el("p", {}, idea.summary || ""),
-          ]);
-          if (idea.task_suggestion) {
-            card.appendChild(el("p", { className: "muted" }, `Task: ${idea.task_suggestion}`));
-          }
-          if (idea.goal_id && idea.requirement_type && Number(idea.add) > 0) {
-            card.appendChild(el("button", {
-              className: "ghost-btn",
-              type: "button",
-              onClick: async () => {
-                try {
-                  await api(`/dynamics/${id}/punishments/${reportId}/apply-idea`, {
-                    method: "POST",
-                    body: JSON.stringify({ idea_id: idea.id }),
-                  });
-                  status.textContent = "Idea applied to goals.";
-                  refreshDomGoalHeader(id);
-                  renderPunishmentDetail(id, reportId);
-                } catch (err) {
-                  error.textContent = err.message;
-                  error.classList.remove("hidden");
-                }
-              },
-            }, `Also add +${idea.add} ${idea.requirement_type}`));
-          }
-          ideasHost.appendChild(card);
-        });
-      }
-
-      if (report.status === "pending") {
-        stack.appendChild(goalsCard);
-        stack.appendChild(el("button", {
-          className: "primary-btn",
-          type: "button",
-          onClick: async () => {
-            error.classList.add("hidden");
-            const adjustments = collectAdjustments();
-            if (!adjustments.length) {
-              error.textContent = "Choose at least one amount to add.";
-              error.classList.remove("hidden");
-              return;
-            }
-            try {
-              const result = await api(`/dynamics/${id}/punishments/${reportId}/assign`, {
-                method: "POST",
-                body: JSON.stringify({ adjustments }),
-              });
-              status.textContent = `Assigned: ${(result.applied || []).map((a) => `${a.requirement_title} +${a.added}`).join(", ")}`;
-              refreshDomGoalHeader(id);
-              bumpInputs.forEach((input) => { input.value = "0"; });
-              showFollowUp();
-            } catch (err) {
-              error.textContent = err.message;
-              error.classList.remove("hidden");
-            }
-          },
-        }, "Submit punishment values"));
-      }
-
-      if (report.needs_follow_up || report.status === "assigned" || report.status === "ideas" || report.status === "remind") {
-        showFollowUp();
-        if ((report.ideas || []).length) renderIdeas(report.ideas);
-      }
-
-      stack.appendChild(followHost);
-      stack.appendChild(ideasHost);
       stack.appendChild(status);
       stack.appendChild(error);
       setViewContent(stack);
@@ -11793,13 +11930,16 @@ function renderChastity(dynamicId) {
       ]);
 
       if (settings.you_are_dominant && goalsData) {
-        stack.appendChild(renderChastityGoalsCard(dynamicId, goalsData, {
-          partners: dynamic.partners || [],
-          onSaved: () => {
-            refreshDomGoalHeader(dynamicId);
-            renderChastity(dynamicId);
-          },
-        }));
+        const activeCount = Number(goalsData.active_count || (goalsData.goals || []).length || 0);
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Goals"),
+          el("p", { className: "muted" }, `${activeCount} active. Create and edit goals under Playtime → Tasks & acts.`),
+          el("button", {
+            className: "primary-btn",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=goals`),
+          }, "Open goals"),
+        ]));
       }
 
       const subs = settings.submissives || [];

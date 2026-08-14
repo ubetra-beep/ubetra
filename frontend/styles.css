@@ -2837,8 +2837,19 @@ details[open] summary {
 }
 
 .inbox-log-item.punishment_pending {
-  cursor: default;
+  cursor: pointer;
   border-color: rgba(192, 132, 252, 0.45);
+}
+
+.inbox-log-hit {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .punishment-remind-overlay {

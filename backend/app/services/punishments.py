@@ -14,8 +14,10 @@ from ..models import Dynamic, Membership, PartnerRole, PunishmentReport, User
 from .chastity_goals import (
     GOAL_KINDS,
     REQUIREMENT_TYPES,
+    START_MODES,
     build_goals_progress,
     parse_goals,
+    resolve_tracking_start,
     serialize_goals,
 )
 from .context import build_dynamic_context
@@ -72,6 +74,12 @@ def punishable_options(db: Session, dynamic: Dynamic, membership: Membership) ->
                 "suggested_adds": [1, 2, 3] if v["kind"] == "count" else [1, 2, 3, 7],
             }
             for k, v in REQUIREMENT_TYPES.items()
+        ],
+        "goal_kinds": [
+            {"id": k, "title": v["title"], "tone": v["tone"]} for k, v in GOAL_KINDS.items()
+        ],
+        "start_modes": [
+            {"id": k, "title": v["title"], "hint": v["hint"]} for k, v in START_MODES.items()
         ],
         "you_are_dominant": is_dom,
     }
@@ -201,6 +209,120 @@ def assign_punishment(
     }
 
 
+def _merge_applied(report: PunishmentReport, extra: list[dict]) -> None:
+    try:
+        prior = json.loads(report.applied_changes or "[]")
+    except json.JSONDecodeError:
+        prior = []
+    if not isinstance(prior, list):
+        prior = []
+    report.applied_changes = json.dumps([*prior, *extra])
+
+
+def set_goal_as_punishment(
+    db: Session,
+    *,
+    dynamic: Dynamic,
+    membership: Membership,
+    report: PunishmentReport,
+    payload: dict,
+) -> dict:
+    """Create an active chastity goal as the punishment."""
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can set a goal.")
+    if report.status == "covered":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This report is already closed.")
+
+    raw = payload if isinstance(payload, dict) else {}
+    kind = str(raw.get("kind") or "orgasm_grant")
+    if kind not in GOAL_KINDS:
+        kind = "orgasm_grant"
+    title = str(raw.get("title") or GOAL_KINDS[kind]["title"]).strip()[:80]
+    if len(title) < 2:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Give the goal a title.")
+    start_mode = str(raw.get("start_mode") or "now")
+    if start_mode not in START_MODES:
+        start_mode = "now"
+
+    for_id = str(raw.get("for_membership_id") or report.reported_by_membership_id or "")
+    if for_id:
+        target = db.get(Membership, for_id)
+        if target is None or target.dynamic_id != dynamic.id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid partner for this goal.")
+    else:
+        for_id = None
+
+    reqs_in = raw.get("requirements") if isinstance(raw.get("requirements"), list) else []
+    reqs = []
+    for item in reqs_in:
+        if not isinstance(item, dict):
+            continue
+        rtype = str(item.get("type") or "")
+        if rtype not in REQUIREMENT_TYPES:
+            continue
+        try:
+            value = float(item.get("value") or 0)
+        except (TypeError, ValueError):
+            continue
+        if value <= 0:
+            continue
+        meta = REQUIREMENT_TYPES[rtype]
+        reqs.append({"type": rtype, "value": int(value) if meta["kind"] == "count" else round(value, 2)})
+    if not reqs:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Add at least one requirement.")
+
+    now = datetime.utcnow().replace(microsecond=0)
+    now_iso = now.isoformat() + "Z"
+    reset_at, _label = resolve_tracking_start(
+        db,
+        dynamic_id=dynamic.id,
+        sub_id=for_id,
+        start_mode=start_mode,
+    )
+    goal = {
+        "id": str(uuid.uuid4()),
+        "kind": kind,
+        "title": title,
+        "for_membership_id": for_id,
+        "requirements": reqs,
+        "start_mode": start_mode,
+        "reset_at": reset_at.isoformat() + "Z",
+        "created_at": now_iso,
+        "active": True,
+        "archived_at": None,
+        "archive_reason": None,
+        "repeat_count": 0,
+    }
+    data = parse_goals(getattr(dynamic, "chastity_goals", None))
+    data.setdefault("goals", []).append(goal)
+    dynamic.chastity_goals = serialize_goals(data)
+
+    req_bits = ", ".join(
+        f"{REQUIREMENT_TYPES[r['type']]['title']} {r['value']}"
+        for r in reqs
+    )
+    applied = [
+        {
+            "kind": "goal",
+            "goal_id": goal["id"],
+            "goal_title": title,
+            "requirement_title": req_bits,
+            "created": True,
+        }
+    ]
+    _merge_applied(report, applied)
+    report.status = "assigned"
+    report.remind_at = None
+    db.flush()
+    return {
+        "report": report_out(db, report),
+        "applied": applied,
+        "options": punishable_options(db, dynamic, membership),
+        "follow_up": True,
+        "goal": goal,
+    }
+
+
 def generate_punishment_ideas(
     db: Session,
     *,
@@ -226,7 +348,13 @@ def generate_punishment_ideas(
     assigned_block = "(none yet)"
     if isinstance(applied, list) and applied:
         assigned_block = "\n".join(
-            f"- {a.get('goal_title')}: {a.get('requirement_title')} +{a.get('added')} → {a.get('new_target')}"
+            (
+                f"- Goal set: {a.get('goal_title')}: {a.get('requirement_title')}"
+                if a.get("kind") == "goal"
+                else f"- Task: {a.get('content')}"
+                if a.get("kind") == "task" or (a.get("content") and not a.get("goal_title"))
+                else f"- {a.get('goal_title')}: {a.get('requirement_title')} +{a.get('added')} → {a.get('new_target')}"
+            )
             for a in applied
             if isinstance(a, dict)
         )

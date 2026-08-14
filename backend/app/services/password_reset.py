@@ -99,7 +99,7 @@ def confirm_password_reset(
     token: str | None = None,
 ) -> User:
     normalized = (email or "").strip().lower()
-    code = (code or "").strip()
+    code = (code or "").strip().replace(" ", "").replace("-", "")
     token = (token or "").strip()
     if not normalized or not new_password:
         raise ValueError("Email and new password are required")

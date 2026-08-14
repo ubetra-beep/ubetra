@@ -3,6 +3,32 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [0.92] — 2026-08-13
+
+### Changed
+- While you were away: tapping an item (including Punishment needed) closes the overlay and opens it; **Remind me tomorrow** snoozes pending confessions
+- Confession detail is a short choice: assign a task (task creator + optional assistant ideas) or add/edit a goal
+- Task creation moved from the Playtime hub into **Tasks & acts**; optional due-by date; at least one category tag required; Punishment tag is preselected from a confession
+- Goals live under Playtime → Tasks & acts (Goals tab)
+- Service worker cache `ubetra-v106`
+
+## [0.91] — 2026-08-13
+
+### Added
+- Punishment confessions: set a new chastity goal (type, requirements, start now/rolling) or assign a task — both work even when there are no existing goals
+
+### Changed
+- Service worker cache `ubetra-v103`
+
+## [0.90] — 2026-08-13
+
+### Fixed
+- Punishment confessions with no active chastity goals were stuck: the Domme could see pending items but could not assign, close, or snooze them
+- Confession detail now always offers a task, assistant ideas, remind-tomorrow, and “I've got it covered”, even when there are no goals
+
+### Changed
+- Service worker cache `ubetra-v102`
+
 ## [0.89] — 2026-08-13
 
 ### Added

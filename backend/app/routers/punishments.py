@@ -18,6 +18,7 @@ from ..services.punishments import (
     punishable_options,
     remind_tomorrow,
     report_out,
+    set_goal_as_punishment,
 )
 
 router = APIRouter(prefix="/dynamics", tags=["punishments"])
@@ -130,6 +131,41 @@ def post_assign_punishment(
         actor=membership,
         action="punishment_assigned",
         text=f"{membership.display_name} assigned punishment: {'; '.join(bits)}",
+        path=f"/dynamic/{dynamic_id}/punishment/{report_id}",
+        link_label="Open punishment",
+        from_label="Punishment",
+    )
+    db.commit()
+    return result
+
+
+@router.post("/{dynamic_id}/punishments/{report_id}/set-goal")
+def post_set_punishment_goal(
+    dynamic_id: str,
+    report_id: str,
+    payload: dict[str, Any],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    report = get_report(db, dynamic_id, report_id)
+    if dynamic is None or report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+    result = set_goal_as_punishment(
+        db,
+        dynamic=dynamic,
+        membership=membership,
+        report=report,
+        payload=payload if isinstance(payload, dict) else {},
+    )
+    goal = result.get("goal") or {}
+    post_activity_event(
+        db,
+        dynamic_id=dynamic_id,
+        actor=membership,
+        action="punishment_assigned",
+        text=f"{membership.display_name} set a goal as punishment: {goal.get('title') or 'goal'}",
         path=f"/dynamic/{dynamic_id}/punishment/{report_id}",
         link_label="Open punishment",
         from_label="Punishment",

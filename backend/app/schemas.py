@@ -59,7 +59,7 @@ class UserCreate(BaseModel):
 
 
 class UserLogin(BaseModel):
-    email: str = Field(min_length=5, max_length=255)
+    email: str = Field(min_length=1, max_length=255)
     password: str
 
 

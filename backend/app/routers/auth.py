@@ -165,10 +165,25 @@ def register(payload: UserCreate, db: Annotated[Session, Depends(get_db)]) -> Lo
     return LoginResponse(access_token=create_access_token(user.id))
 
 
+def _find_login_user(db: Session, identifier: str) -> User | None:
+    ident = (identifier or "").strip()
+    if not ident:
+        return None
+    if "@" in ident:
+        email = _normalize_email(ident)
+        user = db.query(User).filter(User.email == email, User.email != "").first()
+        if user is not None:
+            return user
+    return (
+        db.query(User)
+        .filter(func.lower(User.username) == ident.lower())
+        .first()
+    )
+
+
 @router.post("/login", response_model=LoginResponse)
 def login(payload: UserLogin, db: Annotated[Session, Depends(get_db)]) -> LoginResponse:
-    email = _normalize_email(payload.email)
-    user = db.query(User).filter(User.email == email, User.email != "").first()
+    user = _find_login_user(db, payload.email)
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
