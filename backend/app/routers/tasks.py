@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_current_user, get_membership
@@ -21,33 +21,57 @@ from ..models import (
     User,
 )
 from ..schemas import (
+    AutoPunishSettingsIn,
+    AutoPunishSettingsOut,
     InboxOut,
     TagPresetsOut,
     TagPresetsUpdate,
+    TaskAssistIn,
+    TaskAssistOut,
+    TrainingRegimenAssignedIn,
+    TrainingRegimenGenerateIn,
+    TrainingRegimenOut,
+    TrainingRegimenReplyIn,
+    TrainingRegimenTagIn,
     TaskBulkActionIn,
     TaskCalendarItem,
     TaskCalendarOut,
+    TaskChangeRequestIn,
+    TaskChangeReviewIn,
+    TaskCompleteIn,
     TaskItemCreate,
     TaskItemUpdate,
+    TaskLateAckIn,
     TaskListCreate,
     TaskListOut,
     TaskMakeupAssistOut,
     TaskMakeupRequestIn,
     TaskMakeupReviewIn,
+    TaskRemindIn,
 )
 from ..services.tags import tags_to_list, tags_to_string
 from ..services.tasks_service import (
     ack_inbox,
+    apply_due_auto_punish,
     build_inbox,
     can_complete_task,
     clear_makeup,
+    parse_auto_punish_rules,
     resolve_due_at,
     schedule_next_occurrence,
+    serialize_auto_punish_rules,
     task_list_out,
     task_needs_makeup,
     task_visible,
 )
+from ..timeutil import as_naive_utc
 from ..services.chat_events import post_system_event, task_snippet
+from ..services.task_notify import (
+    notify_late_complete,
+    notify_task_assigned,
+    notify_task_available,
+    set_task_remind,
+)
 from ..services.google_tasks import (
     complete_google_task,
     push_task_to_google,
@@ -55,6 +79,19 @@ from ..services.google_tasks import (
 )
 from ..services.llm import generate_text, is_llm_configured
 from ..services.context import build_dynamic_context
+from ..services.training_regimen import (
+    add_tag as regimen_add_tag,
+    advance_to_focus,
+    empty_state as regimen_empty_state,
+    generate_lists as regimen_generate_lists,
+    mark_lists_assigned,
+    reply as regimen_reply,
+    reset_session as regimen_reset,
+    start_session as regimen_start,
+    state_out as regimen_state_out,
+    suggest_tags as regimen_suggest_tags,
+)
+
 
 
 def _maybe_push_task(db: Session, dynamic_id: str, actor: User, task: Task) -> None:
@@ -219,6 +256,8 @@ def list_task_lists(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[TaskListOut]:
     membership = get_membership(dynamic_id, user, db)
+    apply_due_auto_punish(db, dynamic_id)
+    db.commit()
     lists = (
         db.query(TaskList)
         .options(
@@ -364,6 +403,9 @@ def create_task_list(
             next_due_at=next_due if task_payload.recurrence != TaskRecurrence.none else None,
             assigned_to_membership_id=assignee,
             is_private=is_private,
+            web_url=(task_payload.web_url or "").strip()[:500],
+            web_minutes=task_payload.web_minutes,
+            due_notify_lead_minutes=task_payload.due_notify_lead_minutes,
         )
         db.add(task)
         created_tasks.append(task)
@@ -377,6 +419,7 @@ def create_task_list(
     db.flush()
     for task in created_tasks:
         _maybe_push_task(db, dynamic_id, user, task)
+        notify_task_assigned(db, dynamic_id=dynamic_id, task=task)
     db.commit()
     task_list = _task_list_query(db, task_list.id)
     return task_list_out(task_list, membership)
@@ -438,8 +481,7 @@ def add_task_item(
     if not hasattr(task_list, "tasks") or task_list.tasks is None:
         task_list = _task_list_query(db, task_list.id)
     position = len(task_list.tasks or [])
-    db.add(
-        Task(
+    task = Task(
             task_list_id=task_list.id,
             position=position,
             content=payload.content,
@@ -453,9 +495,15 @@ def add_task_item(
             next_due_at=next_due if payload.recurrence != TaskRecurrence.none else None,
             assigned_to_membership_id=assignee,
             is_private=is_private,
+            web_url=(payload.web_url or "").strip()[:500],
+            web_minutes=payload.web_minutes,
+            due_notify_lead_minutes=payload.due_notify_lead_minutes,
         )
-    )
+    db.add(task)
     post_system_event(db, dynamic_id, membership, event_text)
+    db.flush()
+    if approval == TaskApprovalStatus.approved:
+        notify_task_assigned(db, dynamic_id=dynamic_id, task=task)
     db.commit()
     task_list = _task_list_query(db, task_list.id)
     return task_list_out(task_list, membership)
@@ -481,6 +529,7 @@ def complete_task(
     task_id: str,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    payload: Annotated[TaskCompleteIn | None, Body()] = None,
 ) -> TaskListOut:
     task_list = _task_list_query(db, task_list_id)
     if task_list is None:
@@ -505,24 +554,33 @@ def complete_task(
             detail="You are not assigned to complete this task",
         )
 
-    if task_needs_makeup(task) and membership.role != PartnerRole.dominant:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This overdue task needs a make-up grant before it can be completed",
-        )
-    if task_needs_makeup(task) and membership.role == PartnerRole.dominant:
-        # Dom completing overdue counts as granting make-up.
-        task.makeup_status = "granted"
-        task.makeup_granted_at = datetime.utcnow()
-
     if not task_visible(task, tasks, membership):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Task is hidden")
 
     if task.completed_at is None:
         completed_at = datetime.utcnow()
+        if payload and payload.completed_at is not None:
+            completed_at = as_naive_utc(payload.completed_at)
+            if completed_at and completed_at > datetime.utcnow() + timedelta(minutes=2):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Completed on cannot be in the future",
+                )
+        due = _effective_due(task)
+        late = bool(due and due < completed_at)
+        if late and membership.role == PartnerRole.dominant and task_needs_makeup(task):
+            # Dom completing overdue (actually late) counts as granting make-up.
+            task.makeup_status = "granted"
+            task.makeup_granted_at = datetime.utcnow()
+        if membership.role == PartnerRole.submissive and late:
+            task.completed_late = True
+            task.late_ack_at = None
+            task.late_ack_action = ""
         if task.recurrence != TaskRecurrence.none:
             schedule_next_occurrence(task, from_time=task.next_due_at or task.due_at or completed_at)
             clear_makeup(task)
+            task.completed_late = False
+            task.due_soon_notified_at = None
             _maybe_push_task(db, task_list.dynamic_id, user, task)
         else:
             task.completed_at = completed_at
@@ -532,8 +590,20 @@ def complete_task(
             db,
             task_list.dynamic_id,
             membership,
-            f"completed task: {task_snippet(task.content)}",
+            f"completed task: {task_snippet(task.content)}" + (" (late)" if late else ""),
+            action="task_completed_late" if late and membership.role == PartnerRole.submissive else "",
+            payload={"path": f"/dynamic/{task_list.dynamic_id}/tasks?task={task.id}", "task_id": task.id},
         )
+        if late and membership.role == PartnerRole.submissive:
+            notify_late_complete(db, dynamic_id=task_list.dynamic_id, task=task)
+        db.flush()
+        for nxt in tasks:
+            if nxt.id == task.id:
+                continue
+            if getattr(nxt, "available_notified_at", None):
+                continue
+            if task_visible(nxt, tasks, membership):
+                notify_task_available(db, dynamic_id=task_list.dynamic_id, task=nxt)
         db.commit()
 
     task_list = _task_list_query(db, task_list_id)
@@ -578,6 +648,7 @@ def review_task(
     )
     if approved:
         _maybe_push_task(db, task_list.dynamic_id, user, task)
+        notify_task_assigned(db, dynamic_id=task_list.dynamic_id, task=task)
     db.commit()
 
     task_list = _task_list_query(db, task_list_id)
@@ -656,11 +727,87 @@ def update_task_item(
             task.next_due_at = None
         elif task.next_due_at is None:
             task.next_due_at = task.due_at or datetime.utcnow()
+    if payload.due_at is not None:
+        task.due_at = resolve_due_at(due_at=payload.due_at, due_in_amount=None, due_in_unit=None)
+        task.due_soon_notified_at = None
+        if task.recurrence != TaskRecurrence.none:
+            task.next_due_at = task.due_at
+    elif payload.due_in_amount and payload.due_in_unit:
+        task.due_at = resolve_due_at(
+            due_at=None,
+            due_in_amount=payload.due_in_amount,
+            due_in_unit=payload.due_in_unit,
+        )
+        task.due_soon_notified_at = None
+        if task.recurrence != TaskRecurrence.none:
+            task.next_due_at = task.due_at
+    if payload.due_notify_lead_minutes is not None:
+        task.due_notify_lead_minutes = payload.due_notify_lead_minutes
     post_system_event(
         db,
         task_list.dynamic_id,
         membership,
         f"updated task: {task_snippet(task.content)}",
+    )
+    db.commit()
+    task_list = _task_list_query(db, task_list_id)
+    return task_list_out(task_list, membership)
+
+
+@router.post("/tasks/{task_list_id}/items/{task_id}/late-ack", response_model=TaskListOut)
+def ack_late_task(
+    task_list_id: str,
+    task_id: str,
+    payload: TaskLateAckIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskListOut:
+    task_list = _task_list_query(db, task_list_id)
+    if task_list is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task list not found")
+    membership = get_membership(task_list.dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the keyholder can acknowledge a late completion",
+        )
+    task = _get_task_or_404(task_list, task_id)
+    task.late_ack_at = datetime.utcnow()
+    task.late_ack_action = payload.action
+    post_system_event(
+        db,
+        task_list.dynamic_id,
+        membership,
+        f"acknowledged late task ({payload.action}): {task_snippet(task.content)}",
+        action="task_late_acked",
+        payload={"path": f"/dynamic/{task_list.dynamic_id}/tasks?task={task.id}", "task_id": task.id},
+    )
+    db.commit()
+    task_list = _task_list_query(db, task_list_id)
+    return task_list_out(task_list, membership)
+
+
+@router.post("/tasks/{task_list_id}/items/{task_id}/remind", response_model=TaskListOut)
+def remind_task(
+    task_list_id: str,
+    task_id: str,
+    payload: TaskRemindIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskListOut:
+    task_list = _task_list_query(db, task_list_id)
+    if task_list is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task list not found")
+    membership = get_membership(task_list.dynamic_id, user, db)
+    task = _get_task_or_404(task_list, task_id)
+    if not can_complete_task(task, membership) and membership.role != PartnerRole.dominant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your task")
+    set_task_remind(
+        task,
+        in_amount=payload.in_amount,
+        in_unit=payload.in_unit,
+        every_amount=payload.every_amount,
+        every_unit=payload.every_unit,
     )
     db.commit()
     task_list = _task_list_query(db, task_list_id)
@@ -795,6 +942,400 @@ Write 2-4 sentences in assistant-domme tone: acknowledge the miss, set clear exp
         db=db,
     )
     return TaskMakeupAssistOut(note=(note or "").strip())
+
+
+TASK_ASSIST_PROMPTS = {
+    "sexualize": "Rewrite this task to be more sexual and intimate while keeping the same core obligation and staying within negotiated limits.",
+    "fun": "Rewrite this task to feel more playful and fun, keeping the same outcome.",
+    "degrade": "Rewrite this task to be more degrading and humiliating, staying within negotiated limits.",
+    "protocol": "Add clear ritual, posture, or protocol steps to this task.",
+    "specific": "Make this task more specific and measurable, with a clear done condition.",
+    "softer": "Rewrite this task in a warmer, caring Domme tone without dropping the obligation.",
+}
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/assist", response_model=TaskAssistOut)
+def assist_task_draft(
+    dynamic_id: str,
+    payload: TaskAssistIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskAssistOut:
+    membership = get_membership(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can use task assist",
+        )
+    if not getattr(user, "ai_enabled", True):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="AI features are turned off")
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None or not is_llm_configured(user, dynamic):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AI is not configured for this dynamic",
+        )
+    instruction = TASK_ASSIST_PROMPTS.get((payload.prompt_id or "").strip()) or (payload.custom_prompt or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose a prompt or write one")
+    draft = (payload.draft or "").strip()
+    if not draft:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Add task text first")
+    ctx = build_dynamic_context(db, dynamic, requesting_membership_id=membership.id)
+    prompt = f"""Rewrite the following task using this instruction: {instruction}
+
+Current task:
+{draft}
+
+Output only the rewritten task text, 1-4 sentences, no preamble."""
+    text = generate_text(
+        user=user,
+        user_prompt=prompt,
+        dynamic_context=ctx,
+        dynamic=dynamic,
+        tool_id="tasks",
+        db=db,
+    )
+    return TaskAssistOut(text=(text or "").strip())
+
+
+@router.post("/tasks/{task_list_id}/items/{task_id}/assist", response_model=TaskAssistOut)
+def assist_task_rewrite(
+    task_list_id: str,
+    task_id: str,
+    payload: TaskAssistIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskAssistOut:
+    task_list = _task_list_query(db, task_list_id)
+    if task_list is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task list not found")
+    membership = get_membership(task_list.dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can use task assist",
+        )
+    if not getattr(user, "ai_enabled", True):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="AI features are turned off")
+    task = _get_task_or_404(task_list, task_id)
+    dynamic = db.get(Dynamic, task_list.dynamic_id)
+    if dynamic is None or not is_llm_configured(user, dynamic):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AI is not configured for this dynamic",
+        )
+    instruction = TASK_ASSIST_PROMPTS.get((payload.prompt_id or "").strip()) or (payload.custom_prompt or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose a prompt or write one")
+    draft = (payload.draft or task.content or "").strip()
+    ctx = build_dynamic_context(db, dynamic, requesting_membership_id=membership.id)
+    prompt = f"""Rewrite the following task using this instruction: {instruction}
+
+Current task:
+{draft}
+
+Output only the rewritten task text, 1-4 sentences, no preamble."""
+    text = generate_text(
+        user=user,
+        user_prompt=prompt,
+        dynamic_context=ctx,
+        dynamic=dynamic,
+        tool_id="tasks",
+        db=db,
+    )
+    return TaskAssistOut(text=(text or "").strip())
+
+
+def _regimen_dynamic(
+    dynamic_id: str, user: User, db: Session
+) -> tuple[Dynamic, Membership]:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    return dynamic, membership
+
+
+@router.get("/dynamics/{dynamic_id}/tasks/regimen", response_model=TrainingRegimenOut)
+def get_training_regimen(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TrainingRegimenOut:
+    dynamic, membership = _regimen_dynamic(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        return regimen_state_out(
+            dynamic=dynamic,
+            membership=membership,
+            user=user,
+            state=regimen_empty_state(dynamic),
+        )
+    return regimen_state_out(dynamic=dynamic, membership=membership, user=user)
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/regimen/start", response_model=TrainingRegimenOut)
+def start_training_regimen(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    force: bool = False,
+) -> TrainingRegimenOut:
+    dynamic, membership = _regimen_dynamic(dynamic_id, user, db)
+    state = regimen_start(db, dynamic=dynamic, membership=membership, user=user, force=force)
+    db.commit()
+    return regimen_state_out(dynamic=dynamic, membership=membership, user=user, state=state)
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/regimen/tags", response_model=TrainingRegimenOut)
+def add_training_regimen_tag(
+    dynamic_id: str,
+    payload: TrainingRegimenTagIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TrainingRegimenOut:
+    dynamic, membership = _regimen_dynamic(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can edit task tags",
+        )
+    state = regimen_add_tag(dynamic, payload.tag)
+    db.commit()
+    return regimen_state_out(dynamic=dynamic, membership=membership, user=user, state=state)
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/regimen/suggest-tags", response_model=TrainingRegimenOut)
+def suggest_training_regimen_tags(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TrainingRegimenOut:
+    dynamic, membership = _regimen_dynamic(dynamic_id, user, db)
+    state = regimen_suggest_tags(db, dynamic=dynamic, membership=membership, user=user)
+    db.commit()
+    return regimen_state_out(dynamic=dynamic, membership=membership, user=user, state=state)
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/regimen/continue", response_model=TrainingRegimenOut)
+def continue_training_regimen(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TrainingRegimenOut:
+    dynamic, membership = _regimen_dynamic(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can build a training regimen",
+        )
+    state = advance_to_focus(dynamic)
+    db.commit()
+    return regimen_state_out(dynamic=dynamic, membership=membership, user=user, state=state)
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/regimen/generate", response_model=TrainingRegimenOut)
+def generate_training_regimen(
+    dynamic_id: str,
+    payload: TrainingRegimenGenerateIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TrainingRegimenOut:
+    dynamic, membership = _regimen_dynamic(dynamic_id, user, db)
+    state = regimen_generate_lists(
+        db,
+        dynamic=dynamic,
+        membership=membership,
+        user=user,
+        focus_tags=payload.tags,
+        note=payload.note,
+        more=payload.more,
+    )
+    db.commit()
+    return regimen_state_out(dynamic=dynamic, membership=membership, user=user, state=state)
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/regimen/reply", response_model=TrainingRegimenOut)
+def reply_training_regimen(
+    dynamic_id: str,
+    payload: TrainingRegimenReplyIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TrainingRegimenOut:
+    dynamic, membership = _regimen_dynamic(dynamic_id, user, db)
+    state = regimen_reply(
+        db,
+        dynamic=dynamic,
+        membership=membership,
+        user=user,
+        message=payload.message,
+    )
+    db.commit()
+    return regimen_state_out(dynamic=dynamic, membership=membership, user=user, state=state)
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/regimen/reset", response_model=TrainingRegimenOut)
+def reset_training_regimen(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TrainingRegimenOut:
+    dynamic, membership = _regimen_dynamic(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can build a training regimen",
+        )
+    state = regimen_reset(dynamic)
+    db.commit()
+    return regimen_state_out(dynamic=dynamic, membership=membership, user=user, state=state)
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/regimen/assigned", response_model=TrainingRegimenOut)
+def mark_training_regimen_assigned(
+    dynamic_id: str,
+    payload: TrainingRegimenAssignedIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TrainingRegimenOut:
+    dynamic, membership = _regimen_dynamic(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can build a training regimen",
+        )
+    state = mark_lists_assigned(dynamic, payload.list_ids)
+    db.commit()
+    return regimen_state_out(dynamic=dynamic, membership=membership, user=user, state=state)
+
+
+@router.post("/tasks/{task_list_id}/items/{task_id}/change-request", response_model=TaskListOut)
+def request_task_change(
+    task_list_id: str,
+    task_id: str,
+    payload: TaskChangeRequestIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskListOut:
+    task_list = _task_list_query(db, task_list_id)
+    if task_list is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task list not found")
+    membership = get_membership(task_list.dynamic_id, user, db)
+    if membership.role != PartnerRole.submissive:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the submissive partner can request a task change",
+        )
+    task = _get_task_or_404(task_list, task_id)
+    if task.completed_at:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Task already completed")
+    if payload.kind == "edit" and not (payload.proposed_content or "").strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Proposed text is required")
+    task.change_request_type = payload.kind
+    task.change_request_note = (payload.note or "").strip()
+    task.change_request_proposed_content = (payload.proposed_content or "").strip()
+    task.change_request_at = datetime.utcnow()
+    post_system_event(
+        db,
+        task_list.dynamic_id,
+        membership,
+        f"requested to {payload.kind} task: {task_snippet(task.content)}",
+    )
+    db.commit()
+    task_list = _task_list_query(db, task_list_id)
+    return task_list_out(task_list, membership)
+
+
+@router.post("/tasks/{task_list_id}/items/{task_id}/change-review", response_model=TaskListOut)
+def review_task_change(
+    task_list_id: str,
+    task_id: str,
+    payload: TaskChangeReviewIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskListOut:
+    task_list = _task_list_query(db, task_list_id)
+    if task_list is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task list not found")
+    membership = get_membership(task_list.dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can review change requests",
+        )
+    task = _get_task_or_404(task_list, task_id)
+    kind = (task.change_request_type or "").strip().lower()
+    if kind not in {"edit", "remove"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No pending change request")
+    if payload.approved and kind == "edit":
+        proposed = (task.change_request_proposed_content or "").strip()
+        if proposed:
+            task.content = proposed
+    if payload.approved and kind == "remove":
+        snippet = task_snippet(task.content)
+        db.delete(task)
+        post_system_event(
+            db,
+            task_list.dynamic_id,
+            membership,
+            f"approved remove request: {snippet}",
+        )
+        db.commit()
+        task_list = _task_list_query(db, task_list_id)
+        return task_list_out(task_list, membership)
+    verb = "approved" if payload.approved else "denied"
+    task.change_request_type = ""
+    task.change_request_note = (payload.note or "").strip()
+    task.change_request_proposed_content = ""
+    task.change_request_at = None
+    post_system_event(
+        db,
+        task_list.dynamic_id,
+        membership,
+        f"{verb} task {kind} request: {task_snippet(task.content)}",
+    )
+    db.commit()
+    task_list = _task_list_query(db, task_list_id)
+    return task_list_out(task_list, membership)
+
+
+@router.get("/dynamics/{dynamic_id}/auto-punish", response_model=AutoPunishSettingsOut)
+def get_auto_punish(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AutoPunishSettingsOut:
+    membership = get_membership(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Keyholder only")
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    cfg = parse_auto_punish_rules(getattr(dynamic, "auto_punish_rules", None))
+    missing = apply_due_auto_punish(db, dynamic_id)
+    db.commit()
+    tags = sorted({t for row in missing for t in (row.get("tags") or [])})
+    return AutoPunishSettingsOut(enabled=cfg["enabled"], rules=cfg["rules"], missing_tags=tags)
+
+
+@router.put("/dynamics/{dynamic_id}/auto-punish", response_model=AutoPunishSettingsOut)
+def put_auto_punish(
+    dynamic_id: str,
+    payload: AutoPunishSettingsIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AutoPunishSettingsOut:
+    membership = get_membership(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Keyholder only")
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    dynamic.auto_punish_rules = serialize_auto_punish_rules(
+        {"enabled": payload.enabled, "rules": [r.model_dump() for r in payload.rules]}
+    )
+    db.commit()
+    return get_auto_punish(dynamic_id, user, db)
 
 
 @router.post("/dynamics/{dynamic_id}/tasks/bulk", response_model=list[TaskListOut])

@@ -51,7 +51,19 @@ class MainActivity : BridgeActivity() {
       lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
     }
 
+    val tasks = NotificationChannel(
+      "ubetra_tasks",
+      "Tasks",
+      NotificationManager.IMPORTANCE_HIGH
+    ).apply {
+      description = "Task added, due soon, and reminder alerts"
+      enableVibration(true)
+      setShowBadge(true)
+      setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI, attrs)
+    }
+
     manager.createNotificationChannel(chat)
     manager.createNotificationChannel(calls)
+    manager.createNotificationChannel(tasks)
   }
 }

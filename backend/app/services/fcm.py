@@ -67,7 +67,25 @@ def send_fcm_data_message(
         payload_data.setdefault("title", title)
         payload_data.setdefault("body", body)
         payload_data.setdefault("kind", kind)
-        channel = "ubetra_calls" if kind == "call" else "ubetra_chat"
+        if kind == "call":
+            channel = "ubetra_calls"
+            ttl = "120s"
+            notif_priority = "PRIORITY_MAX"
+        elif kind == "task":
+            channel = "ubetra_tasks"
+            ttl = "86400s"
+            notif_priority = "PRIORITY_HIGH"
+        else:
+            channel = "ubetra_chat"
+            ttl = "86400s"
+            notif_priority = "PRIORITY_HIGH"
+        android_notification = {
+            "channel_id": channel,
+            "notification_priority": notif_priority,
+            "default_vibrate_timings": True,
+            "default_sound": True,
+            "visibility": "PUBLIC",
+        }
         message = {
             "message": {
                 "token": token,
@@ -75,13 +93,8 @@ def send_fcm_data_message(
                 "data": payload_data,
                 "android": {
                     "priority": "HIGH",
-                    "ttl": "86400s",
-                    "notification": {
-                        "channel_id": channel,
-                        "notification_priority": "PRIORITY_MAX" if kind == "call" else "PRIORITY_HIGH",
-                        "default_vibrate_timings": True,
-                        "default_sound": True,
-                    },
+                    "ttl": ttl,
+                    "notification": android_notification,
                 },
             }
         }

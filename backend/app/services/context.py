@@ -214,6 +214,48 @@ def _format_tracking_context(db: Session, dynamic_id: str, memberships: list[Mem
             when = entry.occurred_at.strftime("%Y-%m-%d")
             lines.append(f"  {when}: {name} — {entry.event_type.value}")
 
+    try:
+        from ..models import InstructorSession, KioskVisit
+
+        plays = (
+            db.query(InstructorSession)
+            .filter(InstructorSession.dynamic_id == dynamic_id)
+            .order_by(InstructorSession.started_at.desc())
+            .limit(8)
+            .all()
+        )
+        if plays:
+            membership_map = {m.id: m for m in memberships}
+            lines.append("")
+            lines.append("Recent Instructor sessions (for keyholder / assistant):")
+            for visit in plays:
+                who = membership_map.get(visit.membership_id)
+                name = who.display_name if who else "Partner"
+                mins = max(1, int((visit.duration_sec or 0) / 60)) if visit.ended_at else 0
+                dur = f"{mins} min" if visit.ended_at else "open"
+                label = (visit.title or "Instructor")[:80]
+                lines.append(f"  {name}: {label} ({dur})")
+        visits = (
+            db.query(KioskVisit)
+            .filter(KioskVisit.dynamic_id == dynamic_id)
+            .order_by(KioskVisit.started_at.desc())
+            .limit(8)
+            .all()
+        )
+        if visits:
+            membership_map = {m.id: m for m in memberships}
+            lines.append("")
+            lines.append("Recent in-app wiki visits:")
+            for visit in visits:
+                who = membership_map.get(visit.membership_id)
+                name = who.display_name if who else "Partner"
+                mins = max(1, int((visit.duration_sec or 0) / 60)) if visit.ended_at else 0
+                dur = f"{mins} min" if visit.ended_at else "open"
+                label = (visit.title or visit.url or "page")[:80]
+                lines.append(f"  {name}: {label} ({dur})")
+    except Exception:
+        pass
+
     active_lockups = (
         db.query(ChastityLockup)
         .filter(
@@ -282,6 +324,15 @@ def build_dynamic_context(
     memberships = get_memberships(db, dynamic.id)
     if not memberships:
         return f"Dynamic name: {dynamic.name}"
+
+    if context_flags is None and requesting_membership_id:
+        requester = next((m for m in memberships if m.id == requesting_membership_id), None)
+        if requester and requester.user is not None:
+            from .tasks_service import parse_ai_share_flags
+
+            context_flags = parse_ai_share_flags(getattr(requester.user, "ai_share_flags", None))
+            if not bool(getattr(requester.user, "assistant_include_tracking", True)):
+                context_flags["tracking"] = False
 
     lines = [
         f"Dynamic name: {dynamic.name}",

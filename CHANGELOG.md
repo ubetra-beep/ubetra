@@ -3,6 +3,164 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.07] — 2026-08-17
+
+### Added
+- Playtime **Instructor**: local-files Fap Instructor (HUD controls, task mode, warmup / I'm ready) using redgifs playlists
+- Keyholder-locked Instructor config, assign-as-task, live pause / red light / lock
+- Shared media tree bind-mount (`UBETRA_REDGIFS_HOST`, default `/home/james/vault/redgifs`); each subdirectory is a playlist
+- Instructor: Domme can view the sub's camera split above the media, stream their own camera to the sub, switch cameras, and record sub / domme / both (off by default)
+### Changed
+- Web play / server Chromium is gone. https links open in the phone browser
+- In-app **Wiki** lives under Settings → Help (not Playtime)
+- Docker image no longer ships Playwright, Xvfb, Pulse, or jellyfin-ffmpeg
+- Service worker cache `ubetra-v134`
+- Instructor overlay uses the controlling partner's name; Domme controls sit in a collapsible left sidebar
+- Beat meter keeps a steady scroll speed and changes density with stroke speed
+### Fixed
+- Instructor metronome now unlocks audio on Start so ticks are audible
+- Instructor no longer opens itself when the app launches; it only starts from Playtime (or a task)
+- Sub camera stays off until the Domme turns it on (wakes the sub with a call-priority push; tap opens the Android app)
+- Instructor media stays blank until the sub taps Warm up or I'm ready
+- Domme Exit can end the sub's game or leave them playing; End now actually closes the sub overlay
+- Beat meter stays synced to the metronome, fills the right side at slow speeds, pulses on the hit, and fades on the left
+- Metronome pitch rises with stroke speed
+### Removed
+- Remote browser WebSocket encoder and kiosk streaming
+
+## [1.06] — 2026-08-17
+
+### Added
+- Tasks & acts → **Build training regimen**: a conversational keyholder assistant that reviews existing task tags, offers extra tags, then drafts selectable daily and weekly task lists to assign
+- Training regimen: due-by time of day on each idea (and a group default); assigned recurring tasks are no longer due “now”
+- **Completed on** on the task popup (sub and keyholder), with On time / Now shortcuts so overdue work can still log as finished on time
+- Wiki troubleshooting maps: **Workflows**, **Feature map**, and **AI context** (flowcharts; mermaid in the in-app wiki)
+
+### Changed
+- Tapping the **UBETRA** title reloads the app (clears cached JS/CSS) instead of opening the old dynamic overview menu
+- Training regimen assistant history is collapsed at the bottom as **Assistant history**
+- Tapping a missed task opens the same task popup as a task link, instead of jumping to Request make-up
+- Training regimen: skip the opening tag interview; extra tags live in a Help generate submenu. Recommended tasks start collapsed — check to accept, expand to edit
+- Training regimen groups are titled Daily/Weekly (plus tag), not after a task; existing assigned tasks and current drafts are sent to the assistant so it does not re-suggest them; **Generate more ideas** appends extra tasks
+- Health / Hygiene regimen ideas include physical workouts as well as hygiene
+
+## [1.05] — 2026-08-16
+
+### Fixed
+- Due times and other logged times follow the user’s timezone (stored IANA zone + UTC `Z` on the API), so 7:00 AM local no longer shows as 2:00 PM
+- Subs can complete overdue tasks (logged as late) instead of being locked out
+- Web play: Android black screen when H.264 fails or falls back to JPEG; phone drags now scroll to the bottom of long pages (FapInstructor start button)
+- Ending a video call hangs up both sides (faster poll + connection-loss hangup)
+- In-call text chat works with end-to-end encryption on
+- In-call Web play button; self camera can be dragged; smart censor only blurs what the sub sees
+
+### Added
+- Task create/edit due-by presets (1 hour, 8 hours, 24 hours, 3 days, 1 week, 2 weeks, or pick a time)
+- Keyholder inbox for “task completed late” with punishment task, goals adjustment, or close
+- Push to the sub when a task is added or becomes available, due-soon (configurable lead time), and Remind me in X (repeat until due)
+- Android `ubetra_tasks` notification channel (separate sound from chat/calls)
+- Settings → Playtime: task notifications and smart censor (off / auto / on-device / CUDA preference)
+
+## [1.04] — 2026-08-16
+
+### Fixed
+- Feelings check-ins no longer spam the “While you were away” popup on every return
+
+### Added
+- Settings → Feelings notifications: after-play wheel prompt, return overlay, end-of-day reminder, and soft/hard mode
+
+## [1.03] — 2026-08-15
+
+### Fixed
+- Tasks open into a detail sheet (complete, edit, delete) instead of dumping you in All lists
+- Sub requests show as “Robot_boy requested” (the requester’s name)
+- Task due and completed times use local time, not UTC
+- Future-due tasks appear in Open and can be completed; only past-due tasks stay locked for the sub
+
+### Added
+- Keyholder can edit or delete any task; sub can request an edit or removal
+- Completed tasks keep a local timestamp
+- Settings → Playtime → Auto punish: missed tasks bump a goal by tag, or alert the keyholder if that tag has no rule
+- Task AI assist prompts (sexualize, more fun, more degrading, ritual, specific, softer)
+- Settings → AI: one “what to share with AI” list, plus a non-AI mode (AI controls stay visible but grey)
+- Journal now includes the context library in collapsed sections with counts
+
+## [1.02] — 2026-08-14
+
+### Fixed
+- Android app now declares Camera and Microphone, so the OS can prompt instead of failing silently on photos, clips, and video calls
+- In-app camera and recorder let you pick front / rear (PWA and Android)
+
+### Added
+- Keyholder can force a camera session, choose the sub’s front or rear camera, and control flashlight (with brightness on Android 13+)
+- Settings → This device → Permissions: Allow buttons plus how-tos (notifications, DND, battery, dedicated phone)
+- Android APK `0.86` (install this build for camera prompts and flashlight)
+
+## [1.01] — 2026-08-14
+
+### Changed
+- Kiosk remote desktop is now H.264 (NVIDIA NVENC when the host GPU is available, otherwise fast CPU encode) instead of JPEG screenshots, so phones and PC stay in sync
+- Service worker cache `ubetra-v116`
+
+### Fixed
+- Android kiosk black screen from stale JPEG packet parsing
+- PC kiosk going white / lagging on the old screenshot stream
+
+## [1.00] — 2026-08-14
+
+### Fixed
+- Kiosk stream lag: smaller frames, drop stale JPEGs, stop screenshot fallback from fighting the live picture
+- Audio/video sync: sound is delayed to the picture instead of playing ahead
+
+## [0.99] — 2026-08-14
+
+### Fixed
+- Kiosk sound: Chromium was running in headless-shell (no audio). It now runs a real browser on a virtual display and taps page/Web Audio so games like FapInstructor can play on the phone
+
+## [0.98] — 2026-08-14
+
+### Fixed
+- Kiosk sound (PCM alignment + capture Chromium output so YouTube/other sites can play on the phone)
+- Phone swipe scrolls the page instead of selecting text
+- PC mouse clicks links and buttons
+
+### Added
+- Viewport follows whoever is driving; **My screen** forces a fit; tap/click takes over
+- Keyholder **Block sub** button in the kiosk bar
+
+## [0.97] — 2026-08-14
+
+### Fixed
+- Kiosk page now matches the phone window instead of a 1280×720 desktop box, so taps land on the right controls
+- Server browser presents as the phone’s Chrome (touch, size, timezone) and keeps cookies so captchas are less frequent after the first solve
+
+## [0.96] — 2026-08-14
+
+### Fixed
+- Open in kiosk black screen (PWA and Android): overlay crashed before connecting, so Back/Close did nothing
+- Server browser now sends a screenshot if live frames do not arrive
+
+## [0.95] — 2026-08-14
+
+### Added
+- In-app kiosk uses a server-side Chromium browser streamed to phones (host speakers stay muted)
+
+## [0.94] — 2026-08-14
+
+### Added
+- Video calls, in-app camera capture, and vault video clips
+
+## [0.93] — 2026-08-14
+
+### Added
+- Settings **!** badge when GitHub has a newer `VERSION` than this server, with a link to the repo and changelog
+- Android APK users get a **!** and a one-time download popup when a newer APK is on the server
+- In-app kiosk browser: GitHub wiki (rendered in-app), chat link previews, and a browse log for the keyholder / assistant
+- Playtime **Web play**: add timed web sessions (e.g. FapInstructor) and assign them as tasks
+
+### Changed
+- Service worker cache `ubetra-v108`
+
 ## [0.92] — 2026-08-13
 
 ### Changed

@@ -34,6 +34,7 @@ Switch, create, or view invite context for the selected dynamic.
 - Advanced AI routing per tool (red = needs assignment)  
 - Shared dynamic key vs personal Advanced key  
 - Dom: assistant tone and extra instructions  
+- **What to share with AI** (journals, stories, scenes, agreements, tracking) — full map: [AI context](AI-context)  
 
 ## Chat & privacy
 
@@ -56,6 +57,10 @@ e.g. whether the Sub may delete temporary unlock log entries.
 ## Integrations
 
 Google Tasks UI is currently hidden until ready. Sleep/cycle Health Connect lives in the Android APK. Garmin OAuth appears when Sleep tracking is enabled.
+
+## Help
+
+In-app **Wiki** (markdown bundled with this install). Open Settings → Help → Wiki. External https links leave the app.
 
 ## Backup
 

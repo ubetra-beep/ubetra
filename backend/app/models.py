@@ -171,7 +171,14 @@ class User(Base):
     assistant_tone: Mapped[str] = mapped_column(String(32), default="balanced")
     assistant_extra_instructions: Mapped[str] = mapped_column(Text, default="")
     assistant_include_tracking: Mapped[bool] = mapped_column(Boolean, default=True)
+    # When False, the app runs in non-AI mode (AI controls stay visible but gated).
+    ai_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # JSON: journals, stories, scenes, agreements, tracking
+    ai_share_flags: Mapped[str] = mapped_column(Text, default="")
     push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # IANA zone from the last signed-in device, e.g. America/Los_Angeles
+    timezone: Mapped[str] = mapped_column(String(64), default="")
+    task_due_lead_minutes: Mapped[int] = mapped_column(Integer, default=15)
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     google_refresh_token: Mapped[str] = mapped_column(Text, default="")
     google_tasks_list_id: Mapped[str] = mapped_column(String(128), default="@default")
@@ -277,6 +284,10 @@ class Dynamic(Base):
     chat_expire_hours: Mapped[int] = mapped_column(Integer, default=720)  # 30 days
     chat_system_events: Mapped[bool] = mapped_column(Boolean, default=True)
     chat_push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    task_push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    task_due_lead_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    # off | auto | client | cuda — smart censor on the sub's display only
+    ml_censor_mode: Mapped[str] = mapped_column(String(16), default="off")
     # When True, only the keyholder can clear chat history
     chat_clear_dom_only: Mapped[bool] = mapped_column(Boolean, default=False)
     # When False, only the keyholder can delete temporary unlock log entries
@@ -293,6 +304,10 @@ class Dynamic(Base):
     # soft | hard
     feelings_prompt_mode: Mapped[str] = mapped_column(String(16), default="soft")
     feelings_require_end_of_day: Mapped[bool] = mapped_column(Boolean, default=True)
+    # After orgasm / play / chastity, open the feelings wheel
+    feelings_prompt_after_events: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Include feelings check-ins in the "While you were away" overlay
+    feelings_notify_inbox: Mapped[bool] = mapped_column(Boolean, default=False)
     # JSON: { fields: {...}, metrics: {...} } — couple opt-in tracking detail
     org_tracking_prefs: Mapped[str] = mapped_column(Text, default="")
     # JSON: keyholder unlock / gift goals
@@ -302,6 +317,14 @@ class Dynamic(Base):
     assistant_extra_instructions: Mapped[str] = mapped_column(Text, default="")
     # JSON map of AI tool id → ai_services.id (per-tool provider routing)
     ai_tool_routes: Mapped[str] = mapped_column(Text, default="{}")
+    # JSON: { enabled, rules: [{ tag, goal_id, requirement_type, add }] }
+    auto_punish_rules: Mapped[str] = mapped_column(Text, default="")
+    # JSON: keyholder training-regimen assistant session
+    training_regimen_state: Mapped[str] = mapped_column(Text, default="")
+    # JSON: Instructor game config (duration, packs, playlists, lock)
+    instructor_config: Mapped[str] = mapped_column(Text, default="")
+    # JSON: live overlay flags {paused, red_light, lock_input, force_end}
+    instructor_live: Mapped[str] = mapped_column(Text, default="")
 
     memberships: Mapped[list["Membership"]] = relationship(
         back_populates="dynamic",
@@ -326,6 +349,10 @@ class Dynamic(Base):
     spin_sessions: Mapped[list["SpinGameSession"]] = relationship(back_populates="dynamic")
     feeling_checkins: Mapped[list["FeelingCheckIn"]] = relationship(back_populates="dynamic")
     punishment_reports: Mapped[list["PunishmentReport"]] = relationship(back_populates="dynamic")
+    kiosk_visits: Mapped[list["KioskVisit"]] = relationship(back_populates="dynamic")
+    web_play_apps: Mapped[list["WebPlayApp"]] = relationship(back_populates="dynamic")
+    instructor_sessions: Mapped[list["InstructorSession"]] = relationship(back_populates="dynamic")
+    video_calls: Mapped[list["VideoCall"]] = relationship(back_populates="dynamic")
 
 
 class PunishmentReport(Base):
@@ -531,6 +558,22 @@ class Task(Base):
     makeup_note: Mapped[str] = mapped_column(Text, default="")
     makeup_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     makeup_granted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    web_url: Mapped[str] = mapped_column(String(500), default="")
+    web_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # none | edit | remove
+    change_request_type: Mapped[str] = mapped_column(String(16), default="")
+    change_request_note: Mapped[str] = mapped_column(Text, default="")
+    change_request_proposed_content: Mapped[str] = mapped_column(Text, default="")
+    change_request_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    auto_punish_applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_late: Mapped[bool] = mapped_column(Boolean, default=False)
+    late_ack_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    late_ack_action: Mapped[str] = mapped_column(String(16), default="")
+    remind_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    remind_every_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    due_soon_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    available_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    due_notify_lead_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     task_list: Mapped[TaskList] = relationship(back_populates="tasks")
     assigned_to: Mapped["Membership | None"] = relationship(
@@ -909,6 +952,7 @@ class VaultImage(Base):
     title: Mapped[str] = mapped_column(String(200), default="")
     image_encrypted: Mapped[str] = mapped_column(Text, default="")
     image_blurred: Mapped[bool] = mapped_column(Boolean, default=True)
+    media_kind: Mapped[str] = mapped_column(String(16), default="image")  # image | video
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -1016,3 +1060,92 @@ class AiService(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
+
+
+class KioskVisit(Base):
+    """In-app browser visit — visible to the keyholder and assistant context."""
+
+    __tablename__ = "kiosk_visits"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"), index=True)
+    url: Mapped[str] = mapped_column(String(500), default="")
+    title: Mapped[str] = mapped_column(String(200), default="")
+    source: Mapped[str] = mapped_column(String(32), default="manual")  # wiki|chat|web_play|task|manual
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_sec: Mapped[int] = mapped_column(Integer, default=0)
+
+    dynamic: Mapped[Dynamic] = relationship(back_populates="kiosk_visits")
+
+
+class InstructorSession(Base):
+    """Timed Instructor play session — visible to the keyholder and assistant context."""
+
+    __tablename__ = "instructor_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    source: Mapped[str] = mapped_column(String(32), default="manual")
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_sec: Mapped[int] = mapped_column(Integer, default=0)
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
+
+    dynamic: Mapped[Dynamic] = relationship(back_populates="instructor_sessions")
+
+
+class WebPlayApp(Base):
+    """Legacy keyholder-configured web session (removed from Playtime)."""
+
+    __tablename__ = "web_play_apps"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    created_by_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    title: Mapped[str] = mapped_column(String(120), default="")
+    url: Mapped[str] = mapped_column(String(500), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    duration_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dynamic: Mapped[Dynamic] = relationship(back_populates="web_play_apps")
+
+
+class VideoCall(Base):
+    """1:1 WebRTC call between partners. Signaling is polled over REST."""
+
+    __tablename__ = "video_calls"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    caller_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    callee_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    status: Mapped[str] = mapped_column(String(16), default="ringing")  # ringing|active|ended
+    controls_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ended_by_membership_id: Mapped[str | None] = mapped_column(
+        ForeignKey("memberships.id"), nullable=True
+    )
+
+    dynamic: Mapped[Dynamic] = relationship(back_populates="video_calls")
+    signals: Mapped[list["VideoCallSignal"]] = relationship(back_populates="call")
+
+
+class VideoCallSignal(Base):
+    __tablename__ = "video_call_signals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    call_id: Mapped[str] = mapped_column(ForeignKey("video_calls.id"), index=True)
+    sender_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    kind: Mapped[str] = mapped_column(String(16), default="ice")  # offer|answer|ice|hangup
+    payload: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    call: Mapped[VideoCall] = relationship(back_populates="signals")

@@ -11,8 +11,10 @@ services:
       UBETRA_MFA_REQUIRED: ${UBETRA_MFA_REQUIRED:-false}
       UBETRA_PUBLIC_APP_URL: ${UBETRA_PUBLIC_APP_URL:-http://127.0.0.1:8000}
       UBETRA_DATABASE_URL: sqlite:////app/backend/data/ubetra.db
+      UBETRA_REDGIFS_DIR: /app/backend/data/redgifs
     volumes:
       - ubetra-data:/app/backend/data
+      - ${UBETRA_REDGIFS_HOST:-/home/james/vault/redgifs}:/app/backend/data/redgifs:ro
       - ./mobile/dist:/app/mobile/dist:ro
     ports:
       - "${UBETRA_HOST_PORT:-8000}:8000"

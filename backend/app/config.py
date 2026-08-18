@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # Native Android APK push (FCM HTTP v1). Path to Firebase service-account JSON.
     fcm_service_account_file: str = ""
     fcm_project_id: str = ""
+    # WebRTC. Comma-separated STUN URLs. Optional TURN for cellular / strict NAT.
+    stun_urls: str = "stun:stun.l.google.com:19302"
+    turn_url: str = ""
+    turn_username: str = ""
+    turn_credential: str = ""
+    # Shared Gluetun drop folder (read-only). Host path is bind-mounted in compose.
+    redgifs_dir: str = "/app/backend/data/redgifs"
 
     class Config:
         env_prefix = "UBETRA_"

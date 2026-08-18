@@ -55,6 +55,7 @@ public class MainActivity extends BridgeActivity {
   @Override
   public void onCreate(Bundle savedInstanceState) {
     registerPlugin(UbetraHealthConnectPlugin.class);
+    registerPlugin(UbetraMediaPlugin.class);
     super.onCreate(savedInstanceState);
     createChannels();
     attachDownloadListener();
@@ -132,9 +133,26 @@ public class MainActivity extends BridgeActivity {
 
     manager.createNotificationChannel(chat);
     manager.createNotificationChannel(calls);
+
+    NotificationChannel tasks = new NotificationChannel(
+      "ubetra_tasks",
+      "Tasks",
+      NotificationManager.IMPORTANCE_HIGH
+    );
+    tasks.setDescription("Task added, due soon, and reminder alerts");
+    tasks.enableVibration(true);
+    tasks.setShowBadge(true);
+    tasks.setSound(Settings.System.DEFAULT_NOTIFICATION_URI, attrs);
+    manager.createNotificationChannel(tasks);
   }
 }
 JAVA
+fi
+
+if [[ -n "$JAVA_MAIN" ]]; then
+  JAVA_DIR="$(dirname "$JAVA_MAIN")"
+  cp "$MOBILE/android-templates/UbetraMediaPlugin.java" "$JAVA_DIR/UbetraMediaPlugin.java"
+  echo "==> Installed UbetraMediaPlugin"
 fi
 
 MANIFEST="$MOBILE/android/app/src/main/AndroidManifest.xml"
@@ -147,6 +165,10 @@ if [[ -f "$MANIFEST" ]]; then
     'android.permission.ACCESS_NOTIFICATION_POLICY' \
     'android.permission.REQUEST_INSTALL_PACKAGES' \
     'android.permission.WRITE_EXTERNAL_STORAGE' \
+    'android.permission.CAMERA' \
+    'android.permission.RECORD_AUDIO' \
+    'android.permission.MODIFY_AUDIO_SETTINGS' \
+    'android.permission.FLASHLIGHT' \
     'android.permission.health.READ_SLEEP' \
     'android.permission.health.READ_MENSTRUATION' \
     'android.permission.health.READ_HEALTH_DATA_HISTORY'

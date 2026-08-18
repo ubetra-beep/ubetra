@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import Annotated
 
 import bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -28,18 +28,11 @@ def create_access_token(user_id: str) -> str:
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
 
 
-def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
-    db: Annotated[Session, Depends(get_db)],
-) -> User:
-    if credentials is None:
+def user_from_token(token: str, db: Session) -> User:
+    if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.secret_key,
-            algorithms=[settings.algorithm],
-        )
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
         user_id = payload.get("sub")
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
@@ -47,11 +40,23 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
         ) from exc
-
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
+
+
+def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+) -> User:
+    token = credentials.credentials if credentials is not None else ""
+    if not token:
+        token = (request.query_params.get("token") or "").strip()
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    return user_from_token(token, db)
 
 
 def get_membership(

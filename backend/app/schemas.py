@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, PlainSerializer
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import Field, PlainSerializer, model_serializer
 
 from .models import (
     ActStatus,
@@ -15,7 +16,19 @@ from .models import (
     TaskSource,
     TaskVisibility,
 )
-from .timeutil import utc_iso
+from .timeutil import stamp_datetimes, utc_iso
+
+
+class BaseModel(PydanticBaseModel):
+    """JSON responses always emit naive UTC datetimes with a Z suffix."""
+
+    @model_serializer(mode="wrap")
+    def _stamp_utc(self, handler, info):
+        data = handler(self)
+        if getattr(info, "mode", None) == "json":
+            return stamp_datetimes(data)
+        return data
+
 
 # API timestamps are stored as naive UTC — always emit with Z so browsers
 # treat them as UTC instead of local wall time.
@@ -118,9 +131,20 @@ class UserOut(BaseModel):
     onboarding_completed: bool = False
     mfa_required: bool = False
     biological_sex: str = ""
+    ai_enabled: bool = True
+    timezone: str = ""
+    task_due_lead_minutes: int = 15
 
     class Config:
         from_attributes = True
+
+
+class UserTimezoneUpdate(BaseModel):
+    timezone: str = Field(min_length=1, max_length=64)
+
+
+class UserNotifyPrefsUpdate(BaseModel):
+    task_due_lead_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
 
 
 class UserSexUpdate(BaseModel):
@@ -311,8 +335,11 @@ class TaskCreate(BaseModel):
     # Relative due: amount + unit → due_at if due_at not set
     due_in_amount: int | None = Field(default=None, ge=1, le=10000)
     due_in_unit: Literal["minutes", "hours", "days", "weeks"] | None = None
+    due_notify_lead_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
     assigned_to_membership_id: str | None = None
     is_private: bool = False
+    web_url: str = ""
+    web_minutes: int | None = Field(default=None, ge=1, le=24 * 60)
 
 
 class TaskItemCreate(BaseModel):
@@ -323,10 +350,13 @@ class TaskItemCreate(BaseModel):
     due_at: datetime | None = None
     due_in_amount: int | None = Field(default=None, ge=1, le=10000)
     due_in_unit: Literal["minutes", "hours", "days", "weeks"] | None = None
+    due_notify_lead_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
     assigned_to_membership_id: str | None = None
     is_private: bool = False
     task_list_id: str | None = None
     source: TaskSource = TaskSource.sub
+    web_url: str = ""
+    web_minutes: int | None = Field(default=None, ge=1, le=24 * 60)
 
 
 class TaskListCreate(BaseModel):
@@ -347,6 +377,7 @@ class InboxItemOut(BaseModel):
     occurred_at: datetime | None = None
     path: str = ""
     task_id: str | None = None
+    task_list_id: str | None = None
 
 
 class InboxOut(BaseModel):
@@ -359,17 +390,19 @@ class TaskOut(BaseModel):
     position: int
     content: str
     visibility: TaskVisibility
-    completed_at: datetime | None
+    completed_at: UtcDateTimeOptional = None
     hidden: bool = False
     tags: list[str] = Field(default_factory=list)
     approval_status: TaskApprovalStatus
     source: TaskSource
     recurrence: TaskRecurrence
-    due_at: datetime | None
-    next_due_at: datetime | None
+    due_at: UtcDateTimeOptional = None
+    next_due_at: UtcDateTimeOptional = None
     act_id: str | None = None
     assigned_to_membership_id: str | None = None
     assigned_to_display_name: str | None = None
+    created_by_membership_id: str | None = None
+    created_by_display_name: str | None = None
     is_private: bool = False
     public_code_word: str = ""
     google_task_id: str = ""
@@ -377,11 +410,28 @@ class TaskOut(BaseModel):
     paused: bool = False
     makeup_status: str = "none"
     makeup_note: str = ""
-    makeup_requested_at: datetime | None = None
-    makeup_granted_at: datetime | None = None
+    makeup_requested_at: UtcDateTimeOptional = None
+    makeup_granted_at: UtcDateTimeOptional = None
+    web_url: str = ""
+    web_minutes: int | None = None
+    change_request_type: str = ""
+    change_request_note: str = ""
+    change_request_proposed_content: str = ""
+    change_request_at: UtcDateTimeOptional = None
+    auto_punish_applied_at: UtcDateTimeOptional = None
+    completed_late: bool = False
+    late_ack_at: UtcDateTimeOptional = None
+    late_ack_action: str = ""
+    remind_at: UtcDateTimeOptional = None
+    remind_every_minutes: int | None = None
+    due_notify_lead_minutes: int | None = None
 
     class Config:
         from_attributes = True
+
+
+class TaskCompleteIn(BaseModel):
+    completed_at: datetime | None = None
 
 
 class TaskItemUpdate(BaseModel):
@@ -389,6 +439,130 @@ class TaskItemUpdate(BaseModel):
     tags: list[str] | None = None
     paused: bool | None = None
     recurrence: TaskRecurrence | None = None
+    due_at: datetime | None = None
+    due_in_amount: int | None = Field(default=None, ge=1, le=10000)
+    due_in_unit: Literal["minutes", "hours", "days", "weeks"] | None = None
+    due_notify_lead_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
+
+
+class TaskLateAckIn(BaseModel):
+    action: Literal["punish", "goals", "ack"]
+
+
+class TaskRemindIn(BaseModel):
+    in_amount: int = Field(ge=1, le=10000)
+    in_unit: Literal["minutes", "hours", "days", "weeks"] = "hours"
+    every_amount: int | None = Field(default=None, ge=1, le=10000)
+    every_unit: Literal["minutes", "hours", "days", "weeks"] | None = None
+
+
+class TaskChangeRequestIn(BaseModel):
+    kind: Literal["edit", "remove"]
+    note: str = Field(default="", max_length=2000)
+    proposed_content: str = Field(default="", max_length=4000)
+
+
+class TaskChangeReviewIn(BaseModel):
+    approved: bool
+    note: str = Field(default="", max_length=2000)
+
+
+class TaskAssistIn(BaseModel):
+    prompt_id: str = Field(default="custom", max_length=40)
+    custom_prompt: str = Field(default="", max_length=2000)
+    draft: str = Field(default="", max_length=4000)
+
+
+class TaskAssistOut(BaseModel):
+    text: str
+
+
+class RegimenTagNote(BaseModel):
+    tag: str
+    note: str = ""
+
+
+class RegimenSuggestedTag(BaseModel):
+    tag: str
+    why: str = ""
+
+
+class RegimenTaskIdea(BaseModel):
+    id: str
+    title: str = ""
+    content: str
+    selected: bool = False
+    due_tod: str = ""
+
+
+class RegimenListOut(BaseModel):
+    id: str
+    title: str
+    recurrence: str
+    tag: str
+    tasks: list[RegimenTaskIdea] = Field(default_factory=list)
+    assigned: bool = False
+
+
+class RegimenMessageOut(BaseModel):
+    role: str
+    content: str
+    kind: str = "text"
+
+
+class TrainingRegimenOut(BaseModel):
+    phase: str = ""
+    tags: list[str] = Field(default_factory=list)
+    tag_notes: list[RegimenTagNote] = Field(default_factory=list)
+    suggested_tags: list[RegimenSuggestedTag] = Field(default_factory=list)
+    focus_tags: list[str] = Field(default_factory=list)
+    lists: list[RegimenListOut] = Field(default_factory=list)
+    messages: list[RegimenMessageOut] = Field(default_factory=list)
+    llm_configured: bool = False
+    interview_completed: bool = False
+
+
+class TrainingRegimenReplyIn(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+
+
+class TrainingRegimenTagIn(BaseModel):
+    tag: str = Field(min_length=1, max_length=80)
+
+
+class TrainingRegimenGenerateIn(BaseModel):
+    tags: list[str] = Field(default_factory=list)
+    note: str = Field(default="", max_length=2000)
+    more: bool = False
+
+
+class TrainingRegimenAssignedIn(BaseModel):
+    list_ids: list[str] = Field(default_factory=list)
+
+
+class AutoPunishRuleIn(BaseModel):
+    tag: str = Field(min_length=1, max_length=80)
+    goal_id: str = Field(min_length=1, max_length=64)
+    requirement_type: str = Field(min_length=1, max_length=64)
+    add: float = Field(gt=0, le=10000)
+
+
+class AutoPunishSettingsIn(BaseModel):
+    enabled: bool = False
+    rules: list[AutoPunishRuleIn] = Field(default_factory=list)
+
+
+class AutoPunishRuleOut(BaseModel):
+    tag: str
+    goal_id: str
+    requirement_type: str
+    add: float
+
+
+class AutoPunishSettingsOut(BaseModel):
+    enabled: bool = False
+    rules: list[AutoPunishRuleOut] = Field(default_factory=list)
+    missing_tags: list[str] = Field(default_factory=list)
 
 
 class TaskMakeupRequestIn(BaseModel):
@@ -496,10 +670,21 @@ class DynamicPolicyOut(BaseModel):
     chastity_sub_can_delete_breaks: bool
     feelings_prompt_mode: str
     feelings_require_end_of_day: bool
+    feelings_prompt_after_events: bool = True
+    feelings_notify_inbox: bool = False
     chat_system_events: bool
     chat_retain_history: bool
     enabled_features: list[str]
     locked_setting_keys: list[str]
+    task_push_enabled: bool = True
+    task_due_lead_minutes: int = 15
+    ml_censor_mode: str = "off"
+
+
+class DynamicPolicyUpdate(BaseModel):
+    task_push_enabled: bool | None = None
+    task_due_lead_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
+    ml_censor_mode: str | None = None
 
 
 class PushPublicKeyOut(BaseModel):
@@ -567,6 +752,7 @@ class ChatMessageCreate(BaseModel):
     image_locked: bool = False
     vault_image_encrypted: str = ""
     save_to_vault: bool = True
+    media_kind: str = "image"
     action: str = ""
     payload: dict = Field(default_factory=dict)
 
@@ -1144,7 +1330,7 @@ class JournalEntryOut(BaseModel):
 class JournalAssistRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     draft: str = Field(default="", max_length=50000)
-    context_flags: JournalAssistContextFlags = Field(default_factory=JournalAssistContextFlags)
+    context_flags: JournalAssistContextFlags | None = None
 
 
 class JournalAssistOut(BaseModel):
@@ -1611,18 +1797,30 @@ class AssistantToneOption(BaseModel):
     description: str
 
 
+class AiShareFlags(BaseModel):
+    journals: bool = True
+    stories: bool = True
+    scenes: bool = True
+    agreements: bool = True
+    tracking: bool = True
+
+
 class AssistantSettingsOut(BaseModel):
     tone: str
     extra_instructions: str
     include_tracking: bool
     you_are_dominant: bool = True
     dynamic_id: str | None = None
+    ai_enabled: bool = True
+    share_flags: AiShareFlags = Field(default_factory=AiShareFlags)
 
 
 class AssistantSettingsUpdate(BaseModel):
     tone: str
     extra_instructions: str = ""
     include_tracking: bool = True
+    ai_enabled: bool | None = None
+    share_flags: AiShareFlags | None = None
 
 
 class AccountImportSkipped(BaseModel):
@@ -1700,6 +1898,7 @@ class VaultImageOut(BaseModel):
     title: str
     image_encrypted: str
     image_blurred: bool
+    media_kind: str = "image"
     source_chat_message_id: str | None = None
     uploaded_by_membership_id: str
     is_yours: bool = False
@@ -1714,6 +1913,7 @@ class VaultImageCreate(BaseModel):
     title: str = Field(default="", max_length=200)
     image_encrypted: str = Field(min_length=1)
     image_blurred: bool = True
+    media_kind: str = "image"
     source_chat_message_id: str | None = None
     expire_hours: int | None = Field(default=None, ge=1, le=24 * 30)
 
@@ -1721,6 +1921,288 @@ class VaultImageCreate(BaseModel):
 class VaultImageUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     image_blurred: bool | None = None
+
+
+class KioskVisitCreate(BaseModel):
+    url: str = Field(min_length=1, max_length=500)
+    title: str = Field(default="", max_length=200)
+    source: str = Field(default="manual", max_length=32)
+
+
+class KioskVisitOut(BaseModel):
+    id: str
+    membership_id: str
+    member_name: str = ""
+    url: str
+    title: str
+    source: str
+    started_at: datetime
+    ended_at: datetime | None = None
+    duration_sec: int = 0
+
+    class Config:
+        from_attributes = True
+
+
+class KioskVisitEnd(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    duration_sec: int | None = Field(default=None, ge=0, le=24 * 60 * 60)
+
+
+class WebPlayAppCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    url: str = Field(min_length=1, max_length=500)
+    notes: str = Field(default="", max_length=2000)
+    duration_min: int | None = Field(default=None, ge=1, le=24 * 60)
+
+
+class WebPlayAppUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    url: str | None = Field(default=None, min_length=1, max_length=500)
+    notes: str | None = Field(default=None, max_length=2000)
+    duration_min: int | None = Field(default=None, ge=1, le=24 * 60)
+
+
+class WebPlayAppOut(BaseModel):
+    id: str
+    title: str
+    url: str
+    notes: str = ""
+    duration_min: int | None = None
+    position: int = 0
+
+    class Config:
+        from_attributes = True
+
+
+class VideoCallControls(BaseModel):
+    sensor: bool = False
+    red_light: bool = False
+    mute_audio: bool = False
+    demand_camera: bool = False
+    demand_screen: bool = False
+    kiosk_locked: bool = False
+    hide_chrome: bool = False
+    disable_touch: bool = False
+    kiosk_url: str = ""
+    camera_facing: str = ""
+    torch: bool = False
+    torch_level: float = 0.0
+    instructor_paused: bool = False
+
+
+class VideoCallOut(BaseModel):
+    id: str
+    status: str
+    you_are_caller: bool = False
+    you_are_dominant: bool = False
+    caller_name: str = ""
+    callee_name: str = ""
+    controls: VideoCallControls = Field(default_factory=VideoCallControls)
+    ice_servers: list[dict] = Field(default_factory=list)
+    created_at: datetime
+    answered_at: datetime | None = None
+
+
+class VideoCallCreate(BaseModel):
+    demand_camera: bool = False
+
+
+class VideoCallControlsUpdate(BaseModel):
+    sensor: bool | None = None
+    red_light: bool | None = None
+    mute_audio: bool | None = None
+    demand_camera: bool | None = None
+    demand_screen: bool | None = None
+    kiosk_locked: bool | None = None
+    hide_chrome: bool | None = None
+    disable_touch: bool | None = None
+    kiosk_url: str | None = Field(default=None, max_length=500)
+    camera_facing: str | None = Field(default=None, max_length=120)
+    torch: bool | None = None
+    torch_level: float | None = None
+    instructor_paused: bool | None = None
+
+
+class VideoCallCurrentOut(BaseModel):
+    call: VideoCallOut | None = None
+
+
+class VideoSignalIn(BaseModel):
+    kind: str = Field(min_length=1, max_length=16)
+    payload: dict | list | str | int | float | bool | None = None
+
+
+class VideoSignalOut(BaseModel):
+    id: str
+    kind: str
+    payload: dict | list | str | int | float | bool | None = None
+    created_at: datetime
+
+
+class InstructorConfigOut(BaseModel):
+    locked: bool = False
+    duration_min: int = 5
+    duration_max: int = 15
+    warmup_min: int = 2
+    slide_duration: int = 10
+    action_frequency: int = 30
+    stroke_min: float = 0.25
+    stroke_max: float = 4.0
+    bpm_min: int = 15
+    bpm_max: int = 240
+    orgasm: str = "permit"
+    finale_orgasm: int = 100
+    finale_denied: int = 0
+    finale_ruined: int = 0
+    post_orgasm_torture: bool = False
+    pot_min: int = 10
+    pot_max: int = 90
+    ruins_min: int = 0
+    ruins_max: int = 0
+    edge_cooldown: int = 10
+    ruin_cooldown: int = 20
+    minimum_edges: int = 0
+    edge_frequency: int = 10
+    orgasms_min: int = 1
+    orgasms_max: int = 1
+    grip_adjustments: bool = True
+    initial_grip: int = 3
+    default_style: str = "dominant"
+    media_kinds: list[str] = Field(default_factory=lambda: ["picture", "gif", "video"])
+    tasks: list[str] = Field(default_factory=list)
+    packs: dict[str, bool] = Field(default_factory=dict)
+    playlists: list[str] = Field(default_factory=list)
+    include_chat_vault: bool = False
+
+
+class InstructorConfigUpdate(BaseModel):
+    locked: bool | None = None
+    duration_min: int | None = Field(default=None, ge=1, le=180)
+    duration_max: int | None = Field(default=None, ge=1, le=180)
+    warmup_min: int | None = Field(default=None, ge=0, le=30)
+    slide_duration: int | None = Field(default=None, ge=3, le=120)
+    action_frequency: int | None = Field(default=None, ge=0, le=600)
+    stroke_min: float | None = Field(default=None, ge=0.1, le=8)
+    stroke_max: float | None = Field(default=None, ge=0.1, le=8)
+    bpm_min: int | None = Field(default=None, ge=20, le=240)
+    bpm_max: int | None = Field(default=None, ge=20, le=240)
+    orgasm: str | None = Field(default=None, max_length=16)
+    finale_orgasm: int | None = Field(default=None, ge=0, le=100)
+    finale_denied: int | None = Field(default=None, ge=0, le=100)
+    finale_ruined: int | None = Field(default=None, ge=0, le=100)
+    post_orgasm_torture: bool | None = None
+    pot_min: int | None = Field(default=None, ge=0, le=600)
+    pot_max: int | None = Field(default=None, ge=0, le=600)
+    ruins_min: int | None = Field(default=None, ge=0, le=20)
+    ruins_max: int | None = Field(default=None, ge=0, le=20)
+    edge_cooldown: int | None = Field(default=None, ge=0, le=600)
+    ruin_cooldown: int | None = Field(default=None, ge=0, le=600)
+    minimum_edges: int | None = Field(default=None, ge=0, le=100)
+    edge_frequency: int | None = Field(default=None, ge=0, le=100)
+    orgasms_min: int | None = Field(default=None, ge=0, le=10)
+    orgasms_max: int | None = Field(default=None, ge=0, le=10)
+    grip_adjustments: bool | None = None
+    initial_grip: int | None = Field(default=None, ge=0, le=6)
+    default_style: str | None = Field(default=None, max_length=24)
+    media_kinds: list[str] | None = None
+    tasks: list[str] | None = None
+    packs: dict[str, bool] | None = None
+    playlists: list[str] | None = None
+    include_chat_vault: bool | None = None
+
+
+class InstructorCommandOut(BaseModel):
+    type: str
+    id: str = ""
+    deadline_ms: int = 0
+    issued_ms: int = 0
+
+
+class InstructorCommandEventOut(BaseModel):
+    type: str
+    command_type: str = ""
+    at_ms: int = 0
+    message: str = ""
+
+
+class InstructorLiveOut(BaseModel):
+    paused: bool = False
+    red_light: bool = False
+    lock_input: bool = False
+    force_end: bool = False
+    mute: bool = False
+    session_id: str = ""
+    media_keys: list[str] = Field(default_factory=list)
+    media_index: int = 0
+    media_seq: int = 0
+    media_until: int = 0
+    beat_speed: float = 1.0
+    playing: bool = False
+    sub_ready: bool = False
+    command: InstructorCommandOut | None = None
+    command_event: InstructorCommandEventOut | None = None
+    want_camera: bool = False
+    want_dom_camera: bool = False
+    camera_device_id: str = ""
+    cameras: list[dict] = Field(default_factory=list)
+    recording: str = "off"
+    beat_epoch_ms: int = 0
+
+
+class InstructorLiveUpdate(BaseModel):
+    paused: bool | None = None
+    red_light: bool | None = None
+    lock_input: bool | None = None
+    force_end: bool | None = None
+    mute: bool | None = None
+    beat_speed: float | None = Field(default=None, ge=0.1, le=8)
+    playing: bool | None = None
+    sub_ready: bool | None = None
+    media_index: int | None = Field(default=None, ge=0)
+    media_until: int | None = Field(default=None, ge=0)
+    advance_media: bool | None = None
+    command: InstructorCommandOut | None = None
+    command_ack: bool | None = None
+    command_failed: bool | None = None
+    reason: str | None = Field(default=None, max_length=32)
+    message: str | None = Field(default=None, max_length=240)
+    at_ms: int | None = Field(default=None, ge=0)
+    clear_command_event: bool | None = None
+    want_camera: bool | None = None
+    want_dom_camera: bool | None = None
+    camera_device_id: str | None = Field(default=None, max_length=120)
+    cameras: list[dict] | None = None
+    recording: str | None = Field(default=None, max_length=12)
+    beat_epoch_ms: int | None = Field(default=None, ge=0)
+
+
+class InstructorSessionCreate(BaseModel):
+    title: str = ""
+    source: str = "manual"
+    task_id: str | None = None
+
+
+class InstructorSessionEnd(BaseModel):
+    duration_sec: int | None = Field(default=None, ge=0)
+    title: str | None = Field(default=None, max_length=200)
+
+
+class InstructorSessionOut(BaseModel):
+    id: str
+    membership_id: str
+    member_name: str = ""
+    title: str = ""
+    source: str = "manual"
+    started_at: datetime
+    ended_at: datetime | None = None
+    duration_sec: int = 0
+    task_id: str | None = None
+
+
+class InstructorAssignIn(BaseModel):
+    assigned_to_membership_id: str | None = None
+    duration_min: int | None = Field(default=None, ge=1, le=180)
 
 
 HistoryDashboardOut.model_rebuild()

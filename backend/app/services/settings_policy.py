@@ -20,11 +20,16 @@ DOM_CONTROLLED_SETTING_KEYS = frozenset(
         "features",
         "feelings.prompt_mode",
         "feelings.require_end_of_day",
+        "feelings.prompt_after_events",
+        "feelings.notify_inbox",
         "chat.system_events",
         "chat.retain_history",
         "chat.clear_dom_only",
         "assistant.tone",
         "assistant.extra_instructions",
+        "tasks.push_enabled",
+        "tasks.due_lead_minutes",
+        "video.ml_censor_mode",
     }
 )
 
@@ -34,12 +39,17 @@ def setting_label(key: str) -> str:
         "chastity.sub_can_delete_breaks": "Allow sub to delete temporary unlock logs",
         "features": "Application features",
         "feelings.prompt_mode": "Feelings prompt mode",
-        "feelings.require_end_of_day": "Require end-of-day feelings",
+        "feelings.require_end_of_day": "End-of-day feelings reminder",
+        "feelings.prompt_after_events": "Prompt feelings after play",
+        "feelings.notify_inbox": "Feelings return overlay",
         "chat.system_events": "Post activity logs to chat",
         "chat.retain_history": "Keep chat forever on server (no auto-delete)",
         "chat.clear_dom_only": "Only keyholder can clear chat",
         "assistant.tone": "Assistant domme tone",
         "assistant.extra_instructions": "Assistant domme extra instructions",
+        "tasks.push_enabled": "Task push notifications",
+        "tasks.due_lead_minutes": "Minutes before due to notify",
+        "video.ml_censor_mode": "Smart censor on sub display",
     }
     if key.startswith("features."):
         feature_id = key.split(".", 1)[1]
@@ -121,6 +131,41 @@ def apply_setting(
             else "made end-of-day feelings optional"
         )
 
+    if setting_key == "feelings.prompt_after_events":
+        dynamic.feelings_prompt_after_events = bool(value)
+        return (
+            "turned on feelings prompts after play"
+            if dynamic.feelings_prompt_after_events
+            else "turned off feelings prompts after play"
+        )
+
+    if setting_key == "feelings.notify_inbox":
+        dynamic.feelings_notify_inbox = bool(value)
+        return (
+            "included feelings in the return overlay"
+            if dynamic.feelings_notify_inbox
+            else "stopped feelings return overlay popups"
+        )
+
+    if setting_key == "tasks.push_enabled":
+        dynamic.task_push_enabled = bool(value)
+        return "enabled task push notifications" if value else "disabled task push notifications"
+
+    if setting_key == "tasks.due_lead_minutes":
+        try:
+            minutes = max(0, min(24 * 60, int(value)))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid lead time") from exc
+        dynamic.task_due_lead_minutes = minutes
+        return f"set task due reminders to {minutes} minutes before"
+
+    if setting_key == "video.ml_censor_mode":
+        mode = str(value or "off").strip().lower()
+        if mode not in ("off", "auto", "client", "cuda"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid censor mode")
+        dynamic.ml_censor_mode = mode
+        return f"set smart censor to {mode}"
+
     if setting_key.startswith("features."):
         feature_id = setting_key.split(".", 1)[1]
         if feature_id not in OPTIONAL_FEATURES:
@@ -184,6 +229,10 @@ def policy_snapshot(dynamic: Dynamic) -> dict:
         "feelings_require_end_of_day": bool(
             getattr(dynamic, "feelings_require_end_of_day", True)
         ),
+        "feelings_prompt_after_events": bool(
+            getattr(dynamic, "feelings_prompt_after_events", True)
+        ),
+        "feelings_notify_inbox": bool(getattr(dynamic, "feelings_notify_inbox", False)),
         "chat_system_events": bool(getattr(dynamic, "chat_system_events", True)),
         "chat_retain_history": bool(getattr(dynamic, "chat_retain_history", False)),
         "chat_expire_hours": int(getattr(dynamic, "chat_expire_hours", 720) or 720),
@@ -191,4 +240,7 @@ def policy_snapshot(dynamic: Dynamic) -> dict:
         "assistant_tone": getattr(dynamic, "assistant_tone", None) or "balanced",
         "assistant_extra_instructions": getattr(dynamic, "assistant_extra_instructions", None) or "",
         "enabled_features": sorted(parse_enabled_features(dynamic.enabled_features)),
+        "task_push_enabled": bool(getattr(dynamic, "task_push_enabled", True)),
+        "task_due_lead_minutes": int(getattr(dynamic, "task_due_lead_minutes", None) or 15),
+        "ml_censor_mode": (getattr(dynamic, "ml_censor_mode", None) or "off"),
     }

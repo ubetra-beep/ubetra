@@ -15,6 +15,11 @@ from ..services.chat_events import post_system_event
 router = APIRouter(prefix="/dynamics", tags=["vault"])
 
 
+def _media_kind(raw: str | None) -> str:
+    kind = (raw or "image").strip().lower()
+    return kind if kind in ("image", "video") else "image"
+
+
 def _purge_expired(db: Session, dynamic_id: str) -> None:
     now = datetime.utcnow()
     db.query(VaultImage).filter(
@@ -66,6 +71,7 @@ def _vault_out(image: VaultImage, membership_id: str) -> VaultImageOut:
         title=image.title or "",
         image_encrypted=image.image_encrypted,
         image_blurred=bool(image.image_blurred),
+        media_kind=(getattr(image, "media_kind", None) or "image"),
         source_chat_message_id=image.source_chat_message_id,
         uploaded_by_membership_id=image.uploaded_by_membership_id,
         is_yours=image.uploaded_by_membership_id == membership_id,
@@ -122,6 +128,7 @@ def add_vault_image(
         title=(payload.title or "").strip(),
         image_encrypted=payload.image_encrypted.strip(),
         image_blurred=payload.image_blurred,
+        media_kind=_media_kind(payload.media_kind),
         expires_at=expires_at,
     )
     db.add(image)

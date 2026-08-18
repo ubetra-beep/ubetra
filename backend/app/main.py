@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .catalog import ensure_data_dir, seed_catalog
 from .config import ROOT_DIR, settings
+from .services.app_updates import updates_payload
 from .services.vapid import ensure_vapid_keys
 from .database import Base, SessionLocal, engine
 from .migrate import run_migrations
@@ -26,7 +27,9 @@ from .routers import (
     interests,
     interview,
     journals,
+    kiosk,
     manga,
+    instructor,
     onboarding,
     org_tracking,
     history_dashboard,
@@ -39,6 +42,7 @@ from .routers import (
     cycle,
     tasks,
     vault,
+    video,
 )
 
 HAR_CATALOG = Path(
@@ -83,10 +87,13 @@ app.include_router(google_tasks.router, prefix="/api")
 app.include_router(sleep.router, prefix="/api")
 app.include_router(sleep.callback_router, prefix="/api")
 app.include_router(cycle.router, prefix="/api")
+app.include_router(kiosk.router, prefix="/api")
+app.include_router(instructor.router, prefix="/api")
 app.include_router(manga.router, prefix="/api")
 app.include_router(push.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
+app.include_router(video.router, prefix="/api")
 
 
 @app.on_event("startup")
@@ -104,6 +111,9 @@ def on_startup() -> None:
         db.commit()
     finally:
         db.close()
+    from .services.task_notify import start_task_notify_loop
+
+    start_task_notify_loop()
 
 
 @app.get("/api/health")
@@ -120,6 +130,13 @@ def _published_apk() -> Path | None:
         if path.is_file() and path.stat().st_size > 0:
             return path
     return None
+
+
+@app.get("/api/app/updates")
+def app_updates() -> dict:
+    payload = updates_payload()
+    payload["android"] = android_apk_status()
+    return payload
 
 
 @app.get("/api/app/android")

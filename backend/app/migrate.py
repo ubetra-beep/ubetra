@@ -1229,3 +1229,196 @@ def run_migrations() -> None:
       conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_cycle_logs_subject ON cycle_logs (subject_membership_id)")
       )
+
+    task_cols_web = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(tasks)")).fetchall()
+    }
+    if "web_url" not in task_cols_web:
+      conn.execute(text("ALTER TABLE tasks ADD COLUMN web_url VARCHAR(500) DEFAULT ''"))
+    if "web_minutes" not in task_cols_web:
+      conn.execute(text("ALTER TABLE tasks ADD COLUMN web_minutes INTEGER"))
+
+    tables_kiosk = {
+      row[0]
+      for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    }
+    if "kiosk_visits" not in tables_kiosk:
+      conn.execute(
+        text(
+          "CREATE TABLE kiosk_visits ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "membership_id VARCHAR(36) NOT NULL,"
+          "url VARCHAR(500) DEFAULT '',"
+          "title VARCHAR(200) DEFAULT '',"
+          "source VARCHAR(32) DEFAULT 'manual',"
+          "started_at DATETIME,"
+          "ended_at DATETIME,"
+          "duration_sec INTEGER DEFAULT 0"
+          ")"
+        )
+      )
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_kiosk_visits_dynamic_id ON kiosk_visits (dynamic_id)"))
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_kiosk_visits_membership_id ON kiosk_visits (membership_id)"))
+    if "web_play_apps" not in tables_kiosk:
+      conn.execute(
+        text(
+          "CREATE TABLE web_play_apps ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "created_by_membership_id VARCHAR(36) NOT NULL,"
+          "title VARCHAR(120) DEFAULT '',"
+          "url VARCHAR(500) DEFAULT '',"
+          "notes TEXT DEFAULT '',"
+          "duration_min INTEGER,"
+          "position INTEGER DEFAULT 0,"
+          "created_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_web_play_apps_dynamic_id ON web_play_apps (dynamic_id)"))
+
+    vault_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(vault_images)")).fetchall()
+    }
+    if vault_cols and "media_kind" not in vault_cols:
+      conn.execute(text("ALTER TABLE vault_images ADD COLUMN media_kind VARCHAR(16) DEFAULT 'image'"))
+
+    tables_video = {
+      row[0]
+      for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    }
+    if "video_calls" not in tables_video:
+      conn.execute(
+        text(
+          "CREATE TABLE video_calls ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "caller_membership_id VARCHAR(36) NOT NULL,"
+          "callee_membership_id VARCHAR(36) NOT NULL,"
+          "status VARCHAR(16) DEFAULT 'ringing',"
+          "controls_json TEXT DEFAULT '{}',"
+          "created_at DATETIME,"
+          "answered_at DATETIME,"
+          "ended_at DATETIME,"
+          "ended_by_membership_id VARCHAR(36)"
+          ")"
+        )
+      )
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_video_calls_dynamic_id ON video_calls (dynamic_id)"))
+    if "video_call_signals" not in tables_video:
+      conn.execute(
+        text(
+          "CREATE TABLE video_call_signals ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "call_id VARCHAR(36) NOT NULL,"
+          "sender_membership_id VARCHAR(36) NOT NULL,"
+          "kind VARCHAR(16) DEFAULT 'ice',"
+          "payload TEXT DEFAULT '',"
+          "created_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_video_call_signals_call_id ON video_call_signals (call_id)"))
+
+    user_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()
+    }
+    if "ai_enabled" not in user_cols:
+      conn.execute(text("ALTER TABLE users ADD COLUMN ai_enabled BOOLEAN DEFAULT 1"))
+    if "ai_share_flags" not in user_cols:
+      conn.execute(text("ALTER TABLE users ADD COLUMN ai_share_flags TEXT DEFAULT ''"))
+
+    dynamic_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(dynamics)")).fetchall()
+    }
+    if "auto_punish_rules" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN auto_punish_rules TEXT DEFAULT ''"))
+    if "feelings_prompt_after_events" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN feelings_prompt_after_events BOOLEAN DEFAULT 1"))
+    if "feelings_notify_inbox" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN feelings_notify_inbox BOOLEAN DEFAULT 0"))
+
+    task_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(tasks)")).fetchall()
+    }
+    if task_cols:
+      if "change_request_type" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN change_request_type VARCHAR(16) DEFAULT ''"))
+      if "change_request_note" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN change_request_note TEXT DEFAULT ''"))
+      if "change_request_proposed_content" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN change_request_proposed_content TEXT DEFAULT ''"))
+      if "change_request_at" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN change_request_at DATETIME"))
+      if "auto_punish_applied_at" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN auto_punish_applied_at DATETIME"))
+      if "completed_late" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN completed_late BOOLEAN DEFAULT 0"))
+      if "late_ack_at" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN late_ack_at DATETIME"))
+      if "late_ack_action" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN late_ack_action VARCHAR(16) DEFAULT ''"))
+      if "remind_at" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN remind_at DATETIME"))
+      if "remind_every_minutes" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN remind_every_minutes INTEGER"))
+      if "due_soon_notified_at" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN due_soon_notified_at DATETIME"))
+      if "available_notified_at" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN available_notified_at DATETIME"))
+      if "due_notify_lead_minutes" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN due_notify_lead_minutes INTEGER"))
+
+    user_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()
+    }
+    if "timezone" not in user_cols:
+      conn.execute(text("ALTER TABLE users ADD COLUMN timezone VARCHAR(64) DEFAULT ''"))
+    if "task_due_lead_minutes" not in user_cols:
+      conn.execute(text("ALTER TABLE users ADD COLUMN task_due_lead_minutes INTEGER DEFAULT 15"))
+
+    dynamic_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(dynamics)")).fetchall()
+    }
+    if "task_push_enabled" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN task_push_enabled BOOLEAN DEFAULT 1"))
+    if "task_due_lead_minutes" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN task_due_lead_minutes INTEGER DEFAULT 15"))
+    if "ml_censor_mode" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN ml_censor_mode VARCHAR(16) DEFAULT 'off'"))
+    if "training_regimen_state" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN training_regimen_state TEXT DEFAULT ''"))
+    if "instructor_config" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN instructor_config TEXT DEFAULT ''"))
+    if "instructor_live" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN instructor_live TEXT DEFAULT ''"))
+    tables_instructor = {
+      row[0]
+      for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    }
+    if "instructor_sessions" not in tables_instructor:
+      conn.execute(
+        text(
+          "CREATE TABLE instructor_sessions ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "membership_id VARCHAR(36) NOT NULL,"
+          "title VARCHAR(200) DEFAULT '',"
+          "source VARCHAR(32) DEFAULT 'manual',"
+          "started_at DATETIME,"
+          "ended_at DATETIME,"
+          "duration_sec INTEGER DEFAULT 0,"
+          "task_id VARCHAR(36)"
+          ")"
+        )
+      )
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_instructor_sessions_dynamic_id ON instructor_sessions (dynamic_id)"))
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_instructor_sessions_membership_id ON instructor_sessions (membership_id)"))

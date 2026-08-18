@@ -273,6 +273,93 @@ def notify_playtime_push_async(
         db.close()
 
 
+def notify_call_push(
+    db: Session,
+    *,
+    dynamic_id: str,
+    sender_membership_id: str,
+    title: str,
+    body: str,
+) -> None:
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None or not bool(getattr(dynamic, "chat_push_enabled", True)):
+        return
+    partner_user_ids = {
+        m.user_id
+        for m in db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
+        if m.id != sender_membership_id
+    }
+    if not partner_user_ids:
+        return
+    _notify_users_payload(
+        db,
+        user_ids=partner_user_ids,
+        title=(title or "Incoming video call")[:80],
+        body=(body or "Video call")[:160],
+        url=f"/#/chat/{dynamic_id}",
+        tag=f"ubetra-call-{dynamic_id}",
+        dynamic_id=dynamic_id,
+        kind="call",
+    )
+
+
+def notify_call_push_async(
+    *,
+    dynamic_id: str,
+    sender_membership_id: str,
+    title: str,
+    body: str,
+) -> None:
+    db = SessionLocal()
+    try:
+        notify_call_push(
+            db,
+            dynamic_id=dynamic_id,
+            sender_membership_id=sender_membership_id,
+            title=title,
+            body=body,
+        )
+    finally:
+        db.close()
+
+
+def notify_task_push(
+    db: Session,
+    *,
+    dynamic_id: str,
+    title: str,
+    body: str,
+    url: str,
+    tag: str,
+    user_ids: set[str] | None = None,
+    keyholders_only: bool = False,
+) -> None:
+    """Push for task lifecycle (added, available, due soon, late, remind)."""
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None or not bool(getattr(dynamic, "task_push_enabled", True)):
+        return
+    from ..models import PartnerRole
+
+    if user_ids is None:
+        members = db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
+        if keyholders_only:
+            user_ids = {m.user_id for m in members if m.role == PartnerRole.dominant}
+        else:
+            user_ids = {m.user_id for m in members}
+    if not user_ids:
+        return
+    _notify_users_payload(
+        db,
+        user_ids=user_ids,
+        title=(title or "Task")[:80],
+        body=(body or "")[:160],
+        url=url,
+        tag=tag[:32] if tag else f"ubetra-task-{dynamic_id}",
+        dynamic_id=dynamic_id,
+        kind="task",
+    )
+
+
 def notify_keyholders_push(
     db: Session,
     *,

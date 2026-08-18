@@ -515,6 +515,8 @@ def feelings_status(db: Session, dynamic_id: str, membership: Membership, dynami
     return {
         "prompt_mode": mode if mode in {"soft", "hard"} else "soft",
         "require_end_of_day": require_eod,
+        "prompt_after_events": bool(getattr(dynamic, "feelings_prompt_after_events", True)),
+        "notify_inbox": bool(getattr(dynamic, "feelings_notify_inbox", False)),
         "logged_today": logged_today,
         "needs_end_of_day": require_eod and not logged_today,
         "hard_gate_active": mode == "hard",

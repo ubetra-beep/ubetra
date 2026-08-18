@@ -15,11 +15,14 @@ Screenshots on these pages come from a local **WikiDom** (Dominant) / **WikiSub*
 | [Getting Started](Getting-Started) | Install, first login, PWA |
 | [Onboarding](Onboarding) | Create/join dynamic, AI key, SPTI, kink survey |
 | [Features & Settings](Features-and-Settings) | **Full map of modules, settings, and how to use them** |
+| [Workflows](Workflows) | Flowcharts of how processes run (troubleshooting) |
+| [Feature map](Feature-map) | How features interact; known workflow risks |
+| [AI context](AI-context) | What the assistant can see and how to grant or block it |
 | [Dynamics](Dynamics) | Ground rules, interview, knowledge, gear |
 | [Tracking](Tracking) | History, chastity, orgasm log, feelings, punishment, journal, vault |
 | [Chat](Chat) | Messaging, encryption, push, images, clear chat |
 | [Playtime](Playtime) | Assistant, scene builder, spin game, tasks & acts |
-| [Settings](Settings) | Account, privacy, AI, features, backup |
+| [Settings](Settings) | Account, privacy, AI, features, Help (wiki), backup |
 | [Roles & Permissions](Roles-and-Permissions) | Dom vs Sub, approvals |
 | [Self-Hosting](Self-Hosting) | Docker/native config, HTTPS, env vars |
 
@@ -30,7 +33,7 @@ Screenshots on these pages come from a local **WikiDom** (Dominant) / **WikiSub*
 1. You create an **account** (email + username + password).
 2. You create or join a **dynamic** (shared space for one Dom/Sub partnership).
 3. Bottom nav switches between **Tracking**, **Playtime**, and **Chat**. Setup items (ground rules, interviews, knowledge, gear) live inside Tracking → **Setup / Dynamic**.
-4. **Settings** is global; many couple preferences live on the selected dynamic.
+4. **Settings** is global; many couple preferences live on the selected dynamic. In-app **Wiki** is under Settings → Help.
 5. Some settings are **Dom-controlled** — a Sub submits a change request instead of applying it directly.
 
 ![Sign in](images/00-login.png)
@@ -43,7 +46,7 @@ Screenshots on these pages come from a local **WikiDom** (Dominant) / **WikiSub*
 |------|-------------|
 | See what’s due / locked / logged | [Tracking](Tracking) hub |
 | Talk, share photos, see activity logs | [Chat](Chat) |
-| Assign tasks, spin games, AI scenes | [Playtime](Playtime) |
+| Assign tasks, Instructor, spin games, AI scenes | [Playtime](Playtime) |
 | Teach the AI about you | Interview + Core knowledge ([Dynamics](Dynamics)) |
 | Turn modules on/off | Settings → Features or hub ☰ **Application features** |
 | Privacy, encryption, who can clear chat | Settings → Privacy ([Features & Settings](Features-and-Settings)) |
@@ -52,4 +55,4 @@ Screenshots on these pages come from a local **WikiDom** (Dominant) / **WikiSub*
 
 ## Version
 
-Docs match app **v0.92**. See the [CHANGELOG](https://github.com/ubetra-beep/ubetra/blob/main/CHANGELOG.md).
+Docs match app **v0.93**. See the [CHANGELOG](https://github.com/ubetra-beep/ubetra/blob/main/CHANGELOG.md).

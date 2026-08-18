@@ -4,6 +4,9 @@
 **[Getting Started](Getting-Started)**  
 **[Onboarding](Onboarding)**  
 **[Features & Settings](Features-and-Settings)**  
+**[Workflows](Workflows)**  
+**[Feature map](Feature-map)**  
+**[AI context](AI-context)**  
 **[Dynamics](Dynamics)**  
 **[Tracking](Tracking)**  
 **[Chat](Chat)**  

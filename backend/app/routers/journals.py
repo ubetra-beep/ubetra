@@ -197,7 +197,7 @@ def assist_journal(
         db,
         dynamic,
         requesting_membership_id=membership.id,
-        include_tracking=bool(payload.context_flags and payload.context_flags.tracking),
+        include_tracking=bool(user.assistant_include_tracking),
         context_flags=payload.context_flags,
     )
     text = generate_text(

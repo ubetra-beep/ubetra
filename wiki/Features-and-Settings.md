@@ -13,7 +13,7 @@ This page is the map of **what UBETRA can do** and **where you configure it**. S
 | Hub | Purpose | Typical use |
 |-----|---------|-------------|
 | **Tracking** | Day-to-day logs and status | History, chastity, orgasm/play log, feelings, sleep, cycle, punishment, journal, vault; Setup / Dynamic at the bottom |
-| **Playtime** | Games, AI scenes, tasks | Scene builder, spin the wheel, tasks & acts, monthly manga (opt-in) |
+| **Playtime** | Games, AI scenes, tasks | Scene builder, spin the wheel, Instructor, tasks & acts, monthly manga (opt-in) |
 | **Chat** | Conversation + activity feed | Messages, photos, system logs (lockups, tracking, settings approvals) |
 
 Each hub’s **☰** opens **Application features** for that area (same toggles as Settings → Features).
@@ -83,6 +83,9 @@ Same as Application features above — hide modules you do not use.
 ### Chastity policy
 e.g. whether the Sub may delete temporary unlock log entries.
 
+### Help
+**Wiki** lives here — in-app markdown for this install. Open Settings → Help → Wiki.
+
 ### Backup
 Export / import JSON. Treat exports as **secret**.
 
@@ -105,4 +108,4 @@ When a Sub changes a Dom-controlled setting, Chat shows a **settings request** f
 5. Chat privacy (encryption / logs / clear policy) and push on each phone.
 6. Add an AI connection if you want Playtime / journal assist.
 
-See also [Roles & Permissions](Roles-and-Permissions) and [Self-Hosting](Self-Hosting).
+See also [Roles & Permissions](Roles-and-Permissions), [Workflows](Workflows), [Feature map](Feature-map), [AI context](AI-context), and [Self-Hosting](Self-Hosting).

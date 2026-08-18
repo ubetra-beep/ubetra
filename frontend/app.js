@@ -211,6 +211,14 @@ const PLAYTIME_FACETS = [
     alsoEnabledBy: ["acts"],
   },
   {
+    id: "instructor",
+    icon: "▶",
+    title: "Instructor",
+    subtitle: "Stroke-to-the-beat using your redgifs playlists",
+    route: "instructor",
+    core: true,
+  },
+  {
     id: "manga_comics",
     icon: "📚",
     title: "Monthly manga",
@@ -232,6 +240,7 @@ function allFacetItems() {
 
 const viewEl = document.getElementById("view");
 const settingsBtn = document.getElementById("settings-btn");
+const updateBadgeBtn = document.getElementById("update-badge-btn");
 const installPwaBtn = document.getElementById("install-pwa-btn");
 const bottomNavEl = document.getElementById("bottom-nav");
 const topBarEl = document.getElementById("top-bar");
@@ -260,6 +269,8 @@ function updateInstallPwaButton() {
 }
 
 function doLogout() {
+  stopVideoCallWatcher();
+  leaveVideoCall({ remote: true }).catch(() => {});
   setToken(null);
   state.user = null;
   state.dynamics = [];
@@ -269,13 +280,16 @@ function doLogout() {
 
 function setAuthVisible(visible) {
   settingsBtn.classList.toggle("hidden", !visible);
+  if (updateBadgeBtn && !visible) updateBadgeBtn.classList.add("hidden");
   if (topBarEl) topBarEl.classList.toggle("hidden", !visible);
   document.body.classList.toggle("auth-screen", !visible);
   updateInstallPwaButton();
   if (visible && appBrandEl) {
     appBrandEl.textContent = "UBETRA";
     appBrandEl.classList.add("brand-link");
-    appBrandEl.setAttribute("role", "link");
+    appBrandEl.setAttribute("role", "button");
+    appBrandEl.setAttribute("aria-label", "Reload app");
+    appBrandEl.title = "Reload app";
     appBrandEl.tabIndex = 0;
     document.title = "UBETRA";
   } else if (!visible) {
@@ -283,16 +297,34 @@ function setAuthVisible(visible) {
     if (appBrandEl) {
       appBrandEl.classList.remove("brand-link");
       appBrandEl.removeAttribute("role");
+      appBrandEl.removeAttribute("aria-label");
+      appBrandEl.removeAttribute("title");
+      appBrandEl.removeAttribute("aria-busy");
       appBrandEl.tabIndex = -1;
     }
   }
 }
 
-function goHomeFromBrand() {
+function reloadAppFromBrand() {
   if (!state.token) return;
-  const id = getActiveDynamicId();
-  if (id) navigate(`/dynamic/${id}`);
-  else navigate("/home");
+  if (appBrandEl) appBrandEl.setAttribute("aria-busy", "true");
+  const finish = () => {
+    location.reload();
+  };
+  const tasks = [];
+  if (window.caches && typeof caches.keys === "function") {
+    tasks.push(
+      caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).catch(() => {})
+    );
+  }
+  if ("serviceWorker" in navigator) {
+    tasks.push(
+      navigator.serviceWorker.getRegistrations()
+        .then((regs) => Promise.all(regs.map((r) => r.update().catch(() => {}))))
+        .catch(() => {})
+    );
+  }
+  Promise.all(tasks).then(finish, finish);
 }
 
 function formatGoalCountdown(iso) {
@@ -386,6 +418,7 @@ function setToken(token) {
 let mfaSession = { token: null, emailHint: null };
 
 function navigateAfterAuth() {
+  syncUserTimezone().catch(() => {});
   // Soft sex prompt later — don't hard-land on Settings after login.
   if (!state.user?.onboarding_completed) {
     navigate("/onboarding");
@@ -400,6 +433,7 @@ function navigateAfterAuth() {
     navigate("/home");
   }
   maybeShowPunishmentReminders();
+  refreshAppUpdates().catch(() => {});
 }
 
 const LAST_ROUTE_KEY = "ubetra_last_route";
@@ -485,13 +519,13 @@ async function api(path, options = {}) {
   return data;
 }
 
-function navigate(path) {
+function navigate(path, { skipInbox = false } = {}) {
   rememberRoute(path);
   if (location.hash !== `#${path}`) location.hash = path;
   else renderRoute();
   updateBottomNav();
   const parts = String(path || "").split("?")[0].split("/").filter(Boolean);
-  if (parts[0] === "dynamic" && parts[1]) {
+  if (!skipInbox && parts[0] === "dynamic" && parts[1]) {
     maybeShowInbox(parts[1]);
   }
 }
@@ -500,15 +534,15 @@ const inboxCheckedDynamics = new Set();
 
 async function maybeShowInbox(dynamicId) {
   if (!state.token || !dynamicId) return;
+  if (document.getElementById("inbox-overlay")) return;
+  const { parts } = parseRoute();
+  if (parts[2] === "feelings") return;
+  if (inboxCheckedDynamics.has(dynamicId)) return;
+  inboxCheckedDynamics.add(dynamicId);
   try {
     const data = await api(`/dynamics/${dynamicId}/inbox`);
     const items = data?.items || [];
-    if (!items.length) {
-      inboxCheckedDynamics.add(dynamicId);
-      return;
-    }
-    if (inboxCheckedDynamics.has(dynamicId)) return;
-    inboxCheckedDynamics.add(dynamicId);
+    if (!items.length) return;
     showInboxOverlay(dynamicId, items);
   } catch {
     /* ignore */
@@ -566,6 +600,47 @@ function showInboxOverlay(dynamicId, items) {
         minute: "2-digit",
       })
       : "";
+    if (item.kind === "task_completed_late" && item.task_id && item.task_list_id) {
+      const ackLate = async (action, path) => {
+        try {
+          await api(`/tasks/${item.task_list_id}/items/${item.task_id}/late-ack`, {
+            method: "POST",
+            body: JSON.stringify({ action }),
+          });
+        } catch (err) {
+          error.textContent = err.message || "Could not update.";
+          error.classList.remove("hidden");
+          return;
+        }
+        row.remove();
+        if (!log.querySelector(".inbox-log-item")) overlay.remove();
+        if (path) navigate(path);
+      };
+      const row = el("div", { className: `inbox-log-item ${item.kind}` }, [
+        el("div", { className: "inbox-log-title" }, item.title || "Task completed late"),
+        item.body ? el("div", { className: "inbox-log-body" }, item.body) : null,
+        when ? el("div", { className: "inbox-log-when" }, when) : null,
+        el("div", { className: "row wrap" }, [
+          el("button", {
+            type: "button",
+            className: "primary-btn",
+            onClick: () => ackLate("punish", `/dynamic/${dynamicId}/tasks?tab=lists&punish=1`),
+          }, "Punishment task"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => ackLate("goals", `/dynamic/${dynamicId}/tasks?tab=goals`),
+          }, "Goals adjustment"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => ackLate("ack"),
+          }, "Close notification"),
+        ]),
+      ]);
+      log.appendChild(row);
+      return;
+    }
     const row = el("button", {
       type: "button",
       className: `inbox-log-item ${item.kind || ""}`,
@@ -759,6 +834,56 @@ function showPunishmentRemindOverlay(items) {
   document.body.appendChild(overlay);
 }
 
+function buildDueByControls({ dueValue = "" } = {}) {
+  const preset = el("select");
+  [
+    ["", "No due date"],
+    ["1h", "In 1 hour"],
+    ["8h", "In 8 hours"],
+    ["24h", "In 24 hours"],
+    ["3d", "In 3 days"],
+    ["1w", "In 1 week"],
+    ["2w", "In 2 weeks"],
+    ["custom", "Pick date & time…"],
+  ].forEach(([value, label]) => {
+    preset.appendChild(el("option", { value }, label));
+  });
+  const dueAt = el("input", { type: "datetime-local" });
+  if (dueValue) {
+    dueAt.value = toLocalDatetimeValue(dueValue);
+    preset.value = "custom";
+  } else {
+    dueAt.classList.add("hidden");
+  }
+  preset.addEventListener("change", () => {
+    const custom = preset.value === "custom";
+    dueAt.classList.toggle("hidden", !custom);
+    if (!custom) dueAt.value = "";
+  });
+  return {
+    node: el("div", { className: "stack" }, [
+      el("label", { className: "stack" }, ["Due by", preset]),
+      dueAt,
+    ]),
+    applyTo(row) {
+      const map = {
+        "1h": { due_in_amount: 1, due_in_unit: "hours" },
+        "8h": { due_in_amount: 8, due_in_unit: "hours" },
+        "24h": { due_in_amount: 24, due_in_unit: "hours" },
+        "3d": { due_in_amount: 3, due_in_unit: "days" },
+        "1w": { due_in_amount: 1, due_in_unit: "weeks" },
+        "2w": { due_in_amount: 2, due_in_unit: "weeks" },
+      };
+      if (preset.value === "custom" && dueAt.value) {
+        row.due_at = datetimeLocalToIso(dueAt.value);
+        return;
+      }
+      const rel = map[preset.value];
+      if (rel) Object.assign(row, rel);
+    },
+  };
+}
+
 function buildDueInControls() {
   const amount = el("input", {
     type: "number",
@@ -806,7 +931,6 @@ function buildAssigneeSelect(partners, { includeDefault = true } = {}) {
 function canCompleteTask(task, you) {
   if (!you || task.completed_at || task.hidden || task.approval_status !== "approved") return false;
   if (task.paused) return false;
-  if (taskNeedsMakeup(task) && you.role !== "dominant") return false;
   if (you.role === "dominant") return true;
   if (task.assigned_to_membership_id) return task.assigned_to_membership_id === you.id;
   if (task.is_private) return true;
@@ -817,11 +941,15 @@ function taskEffectiveDue(task) {
   return task.next_due_at || task.due_at || null;
 }
 
+function taskDueDate(task) {
+  const due = taskEffectiveDue(task);
+  return due ? (parseServerDate(due) || new Date(due)) : null;
+}
+
 function taskNeedsMakeup(task) {
   if (task.completed_at || task.paused || task.approval_status !== "approved") return false;
-  const due = taskEffectiveDue(task);
-  if (!due) return false;
-  if (new Date(due).getTime() > Date.now()) return false;
+  const d = taskDueDate(task);
+  if (!d || d.getTime() > Date.now()) return false;
   return (task.makeup_status || "none") !== "granted";
 }
 
@@ -831,7 +959,7 @@ function startOfLocalDay(d = new Date()) {
 
 function isDueTodayOrPast(dueIso) {
   if (!dueIso) return false;
-  const due = new Date(dueIso);
+  const due = parseServerDate(dueIso) || new Date(dueIso);
   const tomorrow = startOfLocalDay();
   tomorrow.setDate(tomorrow.getDate() + 1);
   return due.getTime() < tomorrow.getTime();
@@ -843,11 +971,24 @@ function isDueInFutureBeyondToday(dueIso) {
 }
 
 const DEFAULT_TASK_CATEGORY_TAGS = ["Domestic", "Health / Hygiene", "Sensual", "Sexual"];
+const TASK_TAG_LABELS = {
+  domestic: "Domestic",
+  "health / hygiene": "Health / Hygiene",
+  sensual: "Sensual",
+  sexual: "Sexual",
+  punishment: "Punishment",
+};
+
+function formatTaskTag(tag) {
+  const key = String(tag || "").trim().toLowerCase();
+  if (TASK_TAG_LABELS[key]) return TASK_TAG_LABELS[key];
+  return String(tag || "").replace(/\b([a-z])/g, (_, c) => c.toUpperCase());
+}
 
 function formatTaskDue(task) {
   const due = taskEffectiveDue(task);
   if (!due) return "";
-  const d = new Date(due);
+  const d = parseServerDate(due) || new Date(due);
   const now = Date.now();
   const ms = d.getTime() - now;
   const abs = Math.abs(ms);
@@ -861,8 +1002,159 @@ function formatTaskDue(task) {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: displayTimeZone(),
   });
   return ms < 0 ? `Overdue by ${relative} (${when})` : `Due in ${relative} (${when})`;
+}
+
+function isAiEnabled() {
+  return state.user?.ai_enabled !== false;
+}
+
+function applyAiMode() {
+  document.documentElement.dataset.ai = isAiEnabled() ? "on" : "off";
+}
+
+function openAiOffSheet(label = "This feature uses AI.") {
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const card = el("div", { className: "card stack modal-card" }, [
+    el("h3", {}, "AI is turned off"),
+    el("p", {}, label),
+    el("p", { className: "muted" }, "Turn on AI features in Settings when you want assist, scene ideas, or generated text. Everything else still works."),
+    el("div", { className: "row wrap" }, [
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => backdrop.remove(),
+      }, "Close"),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => {
+          backdrop.remove();
+          navigate("/settings?focus=ai");
+        },
+      }, "Open AI settings"),
+    ]),
+  ]);
+  backdrop.appendChild(card);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+}
+
+document.addEventListener("click", (ev) => {
+  if (isAiEnabled()) return;
+  const btn = ev.target.closest?.(".ai-only");
+  if (!btn) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  openAiOffSheet(btn.dataset.aiLabel || "This feature needs AI.");
+}, true);
+
+function taskListLabel(list, task) {
+  if (task?.source === "sub" || list?.title === "Sub requests") {
+    const name = task?.created_by_display_name || "Sub";
+    return `${name} requested`;
+  }
+  return list?.title || "Task";
+}
+
+function taskIsPastDue(task) {
+  if (task?.completed_at) return false;
+  const d = taskDueDate(task);
+  return !!(d && d.getTime() < Date.now());
+}
+
+function canSubOpenTask(task, you) {
+  if (!you || you.role !== "submissive") return true;
+  if (task.completed_at) return true;
+  if (task.approval_status === "pending") return true;
+  return true;
+}
+
+const TASK_AI_PROMPTS = [
+  { id: "sexualize", label: "Sexualize this" },
+  { id: "fun", label: "Make this more fun" },
+  { id: "degrade", label: "Make this more degrading" },
+  { id: "protocol", label: "Add ritual / protocol" },
+  { id: "specific", label: "Make this more specific" },
+  { id: "softer", label: "Soften the tone" },
+];
+
+function buildTaskAssistRow(textarea, { dynamicId, listId = "", taskId = "" } = {}) {
+  const status = el("p", { className: "muted" });
+  const custom = el("input", { placeholder: "Or type your own rewrite prompt…" });
+  const row = el("div", { className: "row wrap" });
+  async function run(promptId, customPrompt = "") {
+    if (!isAiEnabled()) {
+      openAiOffSheet("Task assist rewrites the wording with your shared AI context.");
+      return;
+    }
+    try {
+      const path = listId && taskId
+        ? `/tasks/${listId}/items/${taskId}/assist`
+        : `/dynamics/${dynamicId}/tasks/assist`;
+      const out = await api(path, {
+        method: "POST",
+        body: JSON.stringify({
+          prompt_id: promptId,
+          custom_prompt: customPrompt,
+          draft: textarea.value,
+        }),
+      });
+      if (out.text) textarea.value = out.text;
+      status.textContent = "Assist filled the draft — edit before saving.";
+    } catch (ex) {
+      status.textContent = ex.message;
+    }
+  }
+  TASK_AI_PROMPTS.forEach((p) => {
+    row.appendChild(el("button", {
+      type: "button",
+      className: "ghost-btn ai-only",
+      "data-ai-label": p.label,
+      onClick: () => run(p.id),
+    }, p.label));
+  });
+  row.appendChild(el("button", {
+    type: "button",
+    className: "ghost-btn ai-only",
+    "data-ai-label": "Custom task rewrite",
+    onClick: () => run("custom", custom.value.trim()),
+  }, "Custom"));
+  return el("div", { className: "stack" }, [
+    el("p", { className: "muted" }, [el("span", { className: "ai-mark" }, "✦"), " AI assist"]),
+    row,
+    custom,
+    status,
+  ]);
+}
+
+function formatCompletedAt(task) {
+  if (!task?.completed_at) return "";
+  return `Completed ${formatLocalDateTime(task.completed_at, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
+}
+
+function openTaskModal({ title, bodyNodes, actions }) {
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const card = el("div", { className: "card stack modal-card" }, [
+    el("h3", {}, title),
+    ...bodyNodes.filter(Boolean),
+    actions ? el("div", { className: "row wrap" }, actions) : null,
+  ]);
+  backdrop.appendChild(card);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+  return { backdrop, card };
 }
 
 function parseRoute() {
@@ -1613,10 +1905,33 @@ function parseServerDate(value) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function displayTimeZone() {
+  return state.user?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+}
+
 function formatLocalDateTime(value, options) {
   const d = parseServerDate(value);
   if (!d) return "—";
-  return options ? d.toLocaleString(undefined, options) : d.toLocaleString();
+  const tz = displayTimeZone();
+  const opts = options ? { ...options } : {};
+  if (tz) opts.timeZone = tz;
+  return options ? d.toLocaleString(undefined, opts) : d.toLocaleString(undefined, tz ? { timeZone: tz } : undefined);
+}
+
+async function syncUserTimezone() {
+  if (!state.token) return;
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!tz) return;
+  if (state.user?.timezone === tz) return;
+  try {
+    state.user = await api("/auth/timezone", {
+      method: "PUT",
+      body: JSON.stringify({ timezone: tz }),
+    });
+  } catch {
+    /* keep local display even if the server rejects an unknown zone */
+    if (state.user) state.user.timezone = tz;
+  }
 }
 
 function toLocalDatetimeValue(date = new Date()) {
@@ -1625,6 +1940,33 @@ function toLocalDatetimeValue(date = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");
   // datetime-local needs the user's wall-clock time (local timezone)
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function parseTimeOfDay(value) {
+  const m = String(value || "").trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h > 23 || min > 59) return null;
+  return { h, min };
+}
+
+function formatTimeOfDay(value) {
+  const t = parseTimeOfDay(value);
+  if (!t) return "";
+  const d = new Date();
+  d.setHours(t.h, t.min, 0, 0);
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function dueIsoFromTimeOfDay(value, fallback = "20:00") {
+  const t = parseTimeOfDay(value) || parseTimeOfDay(fallback);
+  if (!t) return null;
+  const d = new Date();
+  d.setSeconds(0, 0);
+  d.setHours(t.h, t.min, 0, 0);
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+  return d.toISOString();
 }
 
 function datetimeLocalToIso(value) {
@@ -1653,14 +1995,23 @@ function feelingsAtJustAfter(isoOrDate) {
   return d.toISOString();
 }
 
-function navigateToFeelingsAfterEvent(dynamicId, { at, from, orgEntryId, chastityLockupId, context } = {}) {
+async function navigateToFeelingsAfterEvent(dynamicId, { at, from, orgEntryId, chastityLockupId, context } = {}) {
+  try {
+    const st = await api(`/dynamics/${dynamicId}/feelings/status`);
+    if (st?.prompt_after_events === false) {
+      showToast("Saved. Feelings prompts after play are off in Settings.");
+      return;
+    }
+  } catch {
+    /* still prompt */
+  }
   const params = new URLSearchParams();
   params.set("at", feelingsAtJustAfter(at || new Date().toISOString()));
   if (from) params.set("from", from);
   if (orgEntryId) params.set("org_entry_id", orgEntryId);
   if (chastityLockupId) params.set("chastity_lockup_id", chastityLockupId);
   if (context) params.set("context", context);
-  navigate(`/dynamic/${dynamicId}/feelings?${params.toString()}`);
+  navigate(`/dynamic/${dynamicId}/feelings?${params.toString()}`, { skipInbox: true });
 }
 
 function shiftLocalDatetime(minutesAgo) {
@@ -2757,8 +3108,842 @@ function appendAndroidAppCard(stack, androidApp) {
   }
 }
 
+function permHowTo(items) {
+  return el("details", { className: "perm-howto" }, [
+    el("summary", {}, "How to grant this"),
+    el("ol", { className: "perm-howto-list" }, items.map((text) => el("li", {}, text))),
+  ]);
+}
+
+function buildDevicePermissionsCard() {
+  const native = isNativeApp();
+  const status = el("p", { className: "muted" }, "Checking this device…");
+  const rows = el("div", { className: "stack perm-list" });
+  const card = el("div", { className: "card stack", id: "device-permissions-card" }, [
+    el("h2", {}, "Permissions"),
+    el(
+      "p",
+      { className: "muted" },
+      native
+        ? "Grant these on the Android app so photos, video, calls, and keyholder camera control can work even when the screen is locked."
+        : "The browser PWA can use camera and mic after you Allow the prompt. For reliable calls and flashlight dim, install the Android app."
+    ),
+    status,
+    rows,
+  ]);
+
+  function row({ title, state, onAllow, onOpen, howTo }) {
+    return el("div", { className: "perm-row" }, [
+      el("div", { className: "row wrap perm-row-head" }, [
+        el("strong", {}, title),
+        el("span", { className: `perm-state perm-${String(state || "prompt").toLowerCase()}` }, permLabel(state)),
+      ]),
+      el("div", { className: "row wrap" }, [
+        onAllow ? el("button", { type: "button", className: "primary-btn", onClick: onAllow }, "Allow") : null,
+        onOpen ? el("button", { type: "button", className: "ghost-btn", onClick: onOpen }, "Open Android settings") : null,
+      ]),
+      howTo ? permHowTo(howTo) : null,
+    ]);
+  }
+
+  async function refresh() {
+    const plugin = nativePlugin("UbetraMedia");
+    let info = { camera: "prompt", microphone: "prompt", notifications: "prompt", dnd: "prompt" };
+    if (plugin?.checkPermissions) {
+      try {
+        info = { ...info, ...(await plugin.checkPermissions()) };
+      } catch {
+        /* ignore */
+      }
+    } else if (typeof Notification !== "undefined") {
+      info.notifications = Notification.permission === "granted"
+        ? "granted"
+        : Notification.permission === "denied"
+          ? "denied"
+          : "prompt";
+    }
+    const openApp = plugin?.openAppSettings ? () => plugin.openAppSettings() : null;
+    const openNotes = plugin?.openNotificationSettings ? () => plugin.openNotificationSettings() : openApp;
+    const openDnd = plugin?.openDndSettings ? () => plugin.openDndSettings() : openApp;
+    const openBattery = plugin?.openBatterySettings ? () => plugin.openBatterySettings() : openApp;
+    rows.replaceChildren(
+      row({
+        title: "Camera",
+        state: info.camera,
+        onAllow: async () => {
+          try {
+            await ensureNativeMediaPermissions({ video: true, audio: false });
+            const stream = await requestUserMedia({ video: true, audio: false });
+            stream.getTracks().forEach((t) => t.stop());
+            showToast("Camera allowed");
+          } catch (err) {
+            showToast(err.message || "Camera was blocked");
+          }
+          refresh();
+        },
+        onOpen: openApp,
+        howTo: native
+          ? [
+            "Tap Allow above. If nothing appears: Android Settings → Apps → UBETRA → Permissions → Camera → Allow.",
+            "If it still fails, tap Open Android settings and enable Camera there, then return here.",
+          ]
+          : [
+            "Tap Allow and choose Allow this time / While using the app.",
+            "If the prompt never appears: Chrome ⋮ → Settings → Site settings → Camera → this site → Allow.",
+            "Install the Android app from this Settings page for a proper permission dialog and flashlight control.",
+          ],
+      }),
+      row({
+        title: "Microphone",
+        state: info.microphone,
+        onAllow: async () => {
+          try {
+            await ensureNativeMediaPermissions({ video: false, audio: true });
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            stream.getTracks().forEach((t) => t.stop());
+            showToast("Microphone allowed");
+          } catch (err) {
+            showToast(err.message || "Microphone was blocked");
+          }
+          refresh();
+        },
+        onOpen: openApp,
+        howTo: native
+          ? ["Android Settings → Apps → UBETRA → Permissions → Microphone → Allow."]
+          : ["Chrome ⋮ → Settings → Site settings → Microphone → this site → Allow."],
+      }),
+      row({
+        title: "Notifications / incoming calls",
+        state: info.notifications,
+        onAllow: async () => {
+          try {
+            if (typeof Notification !== "undefined" && Notification.requestPermission) {
+              await Notification.requestPermission();
+            }
+            if (nativePlugin("PushNotifications")?.requestPermissions) {
+              await nativePlugin("PushNotifications").requestPermissions();
+            }
+            showToast("Notification permission updated");
+          } catch (err) {
+            showToast(err.message || "Notifications were blocked");
+          }
+          refresh();
+        },
+        onOpen: openNotes,
+        howTo: native
+          ? [
+            "Android Settings → Apps → UBETRA → Notifications → Allow.",
+            "Also allow the Calls channel so a keyholder ring can play a sound.",
+          ]
+          : [
+            "Install as a PWA (Chrome ⋮ → Install app), then Allow notifications when asked.",
+            "Android Settings → Apps → Chrome → Notifications → Allowed.",
+          ],
+      }),
+      row({
+        title: "Do Not Disturb (calls still ring)",
+        state: info.dnd,
+        onOpen: openDnd,
+        howTo: [
+          "Only the Android app can bypass Do Not Disturb. Install it from this Settings page if you are on the PWA.",
+          "Android Settings → Apps → Special app access → Do Not Disturb access → UBETRA → Allow.",
+          "Then a keyholder video call can ring even when the phone is silenced.",
+        ],
+      }),
+      row({
+        title: "Battery unrestricted",
+        state: "prompt",
+        onOpen: openBattery,
+        howTo: [
+          "Android Settings → Apps → UBETRA → Battery → Unrestricted (or Don’t optimize).",
+          "Samsung / Xiaomi: also add UBETRA to Never sleeping apps / Autostart.",
+          "This keeps incoming calls and camera-on requests alive in the background.",
+        ],
+      }),
+      row({
+        title: "Phone admin / dedicated sub phone (optional extra)",
+        state: "prompt",
+        howTo: [
+          "UBETRA is not a Device Owner / MDM admin app. You do not need Device admin for camera control.",
+          "For a dedicated sub phone: install the Android APK (not only the PWA), grant Camera + Microphone + Notifications, set Battery to Unrestricted, and allow Do Not Disturb access.",
+          "If you later use Android’s dedicated-device / work-profile tools, pin UBETRA as the home app on that phone. That is an Android-system step, not something this app can flip on by itself.",
+        ],
+      })
+    );
+    status.textContent = native
+      ? "This is the Android app. Use Allow on each row. If Android never asks, open the system settings link."
+      : "This is the browser PWA. Allow works for camera/mic in Chrome; flashlight dim and DND bypass need the Android app.";
+  }
+
+  refresh();
+  return card;
+}
+
 function isAndroidBrowser() {
   return /Android/i.test(navigator.userAgent || "");
+}
+
+const APK_UPDATE_SEEN_PREFIX = "ubetra_apk_update_seen_";
+let appUpdateState = { github: null, android: null, apkNewer: false };
+
+function apkUpdateSeenKey(code) {
+  return APK_UPDATE_SEEN_PREFIX + String(code || 0);
+}
+
+function hideUpdatePopover() {
+  document.querySelectorAll(".update-popover-backdrop").forEach((n) => n.remove());
+}
+
+function showUpdatePopover() {
+  hideUpdatePopover();
+  const github = appUpdateState.github;
+  const android = appUpdateState.android;
+  const kids = [el("h3", {}, "Updates")];
+  if (github?.github_newer) {
+    kids.push(
+      el("p", {}, `GitHub has ${github.github_version || "a newer version"} (this server is ${github.local_version || "unknown"}).`),
+      el("a", {
+        className: "primary-btn",
+        href: github.github_url || "https://github.com/ubetra-beep/ubetra",
+        target: "_blank",
+        rel: "noopener noreferrer",
+      }, "Open GitHub repo"),
+      el("a", {
+        className: "ghost-btn",
+        href: github.changelog_url || "https://github.com/ubetra-beep/ubetra/blob/main/CHANGELOG.md",
+        target: "_blank",
+        rel: "noopener noreferrer",
+      }, "Changelog")
+    );
+  }
+  if (appUpdateState.apkNewer && android?.available) {
+    kids.push(
+      el("p", {}, `A newer Android APK (${android.version || android.version_code}) is on this server.`),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: async () => {
+          hideUpdatePopover();
+          await openAndroidApkDownload(android.url || "/apk/ubetra.apk");
+        },
+      }, "Download APK")
+    );
+  }
+  kids.push(el("button", {
+    type: "button",
+    className: "ghost-btn",
+    onClick: () => hideUpdatePopover(),
+  }, "Close"));
+  const backdrop = el("div", { className: "modal-backdrop update-popover-backdrop" }, [
+    el("div", { className: "card stack modal-card update-popover" }, kids),
+  ]);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) hideUpdatePopover();
+  });
+  document.body.appendChild(backdrop);
+}
+
+function showApkUpdatePopup(android) {
+  const code = Number(android?.version_code || 0);
+  if (!code) return;
+  try {
+    if (localStorage.getItem(apkUpdateSeenKey(code))) return;
+  } catch {
+    /* ignore */
+  }
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const card = el("div", { className: "card stack modal-card" }, [
+    el("h3", {}, "Android app update"),
+    el("p", {}, `Version ${android.version || code} is ready on the server. Download, close UBETRA fully, then install.`),
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: async () => {
+        try {
+          localStorage.setItem(apkUpdateSeenKey(code), "1");
+        } catch {
+          /* ignore */
+        }
+        backdrop.remove();
+        await openAndroidApkDownload(android.url || "/apk/ubetra.apk");
+      },
+    }, "Download update"),
+    el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        try {
+          localStorage.setItem(apkUpdateSeenKey(code), "1");
+        } catch {
+          /* ignore */
+        }
+        backdrop.remove();
+      },
+    }, "Later"),
+  ]);
+  backdrop.appendChild(card);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) {
+      try {
+        localStorage.setItem(apkUpdateSeenKey(code), "1");
+      } catch {
+        /* ignore */
+      }
+      backdrop.remove();
+    }
+  });
+  document.body.appendChild(backdrop);
+}
+
+async function refreshAppUpdates() {
+  if (!state.token) {
+    if (updateBadgeBtn) updateBadgeBtn.classList.add("hidden");
+    return;
+  }
+  let info = null;
+  try {
+    info = await api("/app/updates");
+  } catch {
+    return;
+  }
+  appUpdateState.github = info;
+  appUpdateState.android = info.android || null;
+  let apkNewer = false;
+  if (isNativeApp() && info.android?.available) {
+    const installed = await getInstalledApkInfo();
+    const serverCode = Number(info.android.version_code || 0);
+    const localCode = Number(installed?.build || 0);
+    apkNewer = !!(serverCode && localCode && serverCode > localCode);
+    if (apkNewer) showApkUpdatePopup(info.android);
+  }
+  appUpdateState.apkNewer = apkNewer;
+  const show = !!(info.github_newer || apkNewer);
+  if (updateBadgeBtn) {
+    updateBadgeBtn.classList.toggle("hidden", !show);
+    updateBadgeBtn.title = info.github_newer && apkNewer
+      ? "App and APK updates available"
+      : info.github_newer
+        ? "Newer version on GitHub"
+        : "Android APK update available";
+  }
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function wikiHref(href) {
+  const raw = String(href || "").trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("images/")) return "/api/app/wiki/" + raw;
+  if (raw.startsWith("#")) return raw;
+  const slug = raw.replace(/\.md$/i, "").replace(/^\.\//, "");
+  if (/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(slug)) return "#wiki:" + slug;
+  return raw;
+}
+
+function renderWikiMarkdown(md) {
+  const lines = String(md || "").replace(/\r\n/g, "\n").split("\n");
+  const html = [];
+  let inList = false;
+  let inOl = false;
+  let inTable = false;
+  let fence = null;
+  function closeList() {
+    if (inList) {
+      html.push("</ul>");
+      inList = false;
+    }
+  }
+  function closeOl() {
+    if (inOl) {
+      html.push("</ol>");
+      inOl = false;
+    }
+  }
+  function closeLists() {
+    closeList();
+    closeOl();
+  }
+  function closeTable() {
+    if (inTable) {
+      html.push("</table>");
+      inTable = false;
+    }
+  }
+  function flushFence() {
+    if (!fence) return;
+    const lang = String(fence.lang || "").trim().toLowerCase();
+    const body = fence.rows.join("\n");
+    if (lang === "mermaid") {
+      html.push(`<pre class="mermaid">${escapeHtml(body)}</pre>`);
+    } else {
+      html.push(`<pre class="wiki-code"><code>${escapeHtml(body)}</code></pre>`);
+    }
+    fence = null;
+  }
+  function inlineFmt(text) {
+    let out = escapeHtml(text);
+    out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, href) => {
+      const src = wikiHref(href);
+      return `<img alt="${escapeHtml(alt)}" src="${src.startsWith("#") ? href : src}">`;
+    });
+    out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+      const dest = wikiHref(href);
+      return `<a href="${dest}">${label}</a>`;
+    });
+    out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+    return out;
+  }
+  lines.forEach((line) => {
+    if (fence) {
+      if (/^```/.test(line)) flushFence();
+      else fence.rows.push(line);
+      return;
+    }
+    if (line.startsWith("```")) {
+      closeLists();
+      closeTable();
+      fence = { lang: line.slice(3).trim(), rows: [] };
+      return;
+    }
+    if (line.startsWith("|") && line.includes("|", 1)) {
+      closeLists();
+      const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+      if (cells.every((c) => /^:?-+:?$/.test(c))) return;
+      if (!inTable) {
+        html.push("<table>");
+        inTable = true;
+        html.push("<tr>" + cells.map((c) => `<th>${inlineFmt(c)}</th>`).join("") + "</tr>");
+      } else {
+        html.push("<tr>" + cells.map((c) => `<td>${inlineFmt(c)}</td>`).join("") + "</tr>");
+      }
+      return;
+    }
+    closeTable();
+    if (/^---+$/.test(line.trim())) {
+      closeLists();
+      html.push("<hr>");
+      return;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.*)$/);
+    if (heading) {
+      closeLists();
+      const n = heading[1].length;
+      html.push(`<h${n}>${inlineFmt(heading[2])}</h${n}>`);
+      return;
+    }
+    if (/^[-*]\s+/.test(line)) {
+      closeOl();
+      if (!inList) {
+        html.push("<ul>");
+        inList = true;
+      }
+      html.push(`<li>${inlineFmt(line.replace(/^[-*]\s+/, ""))}</li>`);
+      return;
+    }
+    const ordered = line.match(/^\d+\.\s+(.*)$/);
+    if (ordered) {
+      closeList();
+      if (!inOl) {
+        html.push("<ol>");
+        inOl = true;
+      }
+      html.push(`<li>${inlineFmt(ordered[1])}</li>`);
+      return;
+    }
+    closeLists();
+    if (!line.trim()) {
+      html.push("");
+      return;
+    }
+    if (line.startsWith("> ")) {
+      html.push(`<blockquote>${inlineFmt(line.slice(2))}</blockquote>`);
+      return;
+    }
+    html.push(`<p>${inlineFmt(line)}</p>`);
+  });
+  flushFence();
+  closeLists();
+  closeTable();
+  return html.join("\n");
+}
+
+async function ensureMermaid() {
+  if (window.mermaid) return window.mermaid;
+  await new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js";
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return window.mermaid;
+}
+
+async function hydrateWikiDiagrams(root) {
+  const nodes = [...(root?.querySelectorAll("pre.mermaid") || [])];
+  if (!nodes.length) return;
+  try {
+    const mermaid = await ensureMermaid();
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      securityLevel: "strict",
+      flowchart: { htmlLabels: false, curve: "basis" },
+    });
+    await mermaid.run({ nodes });
+  } catch {
+    nodes.forEach((node) => node.classList.add("mermaid-fallback"));
+  }
+}
+
+let kioskCtl = null;
+
+function closeKiosk({ force = false } = {}) {
+  if (!kioskCtl) return;
+  if (kioskCtl.remoteLocked && !force) return;
+  const ctl = kioskCtl;
+  kioskCtl = null;
+  if (ctl.tick) clearInterval(ctl.tick);
+  ctl.displayCensor?.stop?.();
+  closeRemoteBrowser(ctl);
+  const elapsed = Math.max(0, Math.round((Date.now() - ctl.started) / 1000));
+  if (ctl.dynamicId && ctl.visitId) {
+    api(`/dynamics/${ctl.dynamicId}/kiosk/visits/${ctl.visitId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title: ctl.title || "", duration_sec: elapsed }),
+    }).catch(() => {});
+  }
+  ctl.root.remove();
+}
+
+function kioskSend(msg) {
+  if (kioskCtl?.ws && kioskCtl.ws.readyState === WebSocket.OPEN) {
+    kioskCtl.ws.send(JSON.stringify(msg));
+  }
+}
+
+function closeRemoteBrowser(ctl) {
+  if (!ctl) return;
+  try { ctl._ro?.disconnect(); } catch { /* ignore */ }
+  ctl._ro = null;
+  try { ctl.ws?.close(); } catch { /* ignore */ }
+  ctl.ws = null;
+  try { ctl.audioCtx?.close(); } catch { /* ignore */ }
+  ctl.audioCtx = null;
+  try {
+    ctl.body?.querySelectorAll("video").forEach((node) => {
+      node.pause();
+      if (node.src) URL.revokeObjectURL(node.src);
+      node.removeAttribute("src");
+      node.load();
+    });
+  } catch { /* ignore */ }
+}
+
+function kioskViewSize(box) {
+  const r = box?.getBoundingClientRect?.() || { width: 0, height: 0 };
+  const vv = window.visualViewport;
+  const w = Math.round(r.width) || Math.round(vv?.width || window.innerWidth) || 390;
+  const h = Math.round(r.height) || Math.round(vv?.height || window.innerHeight) || 780;
+  return {
+    w: Math.max(280, w),
+    h: Math.max(320, h),
+    dpr: 1,
+  };
+}
+
+function kioskYouAreDominant(dynamicId) {
+  const dyn = (state.currentDynamic?.id === dynamicId ? state.currentDynamic : null)
+    || (state.dynamics || []).find((d) => d.id === dynamicId)
+    || state.currentDynamic;
+  return dyn?.partners?.find((p) => p.is_you)?.role === "dominant";
+}
+
+function kioskPreferredPointer() {
+  if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) return "touch";
+  if ("ontouchstart" in window && navigator.maxTouchPoints > 0) return "touch";
+  return "mouse";
+}
+
+function setKioskRemoteLock({ locked = false, hideChrome = false, disableTouch = false } = {}) {
+  if (!kioskCtl) return;
+  const hide = !!hideChrome || !!locked;
+  const block = !!disableTouch || !!locked;
+  kioskCtl.remoteLocked = !!locked;
+  kioskCtl.locked = !!locked;
+  kioskCtl.hideChrome = hide;
+  kioskCtl.disableTouch = block;
+  kioskCtl.root.classList.toggle("kiosk-taken", hide);
+  const chrome = kioskCtl.root.querySelector(".kiosk-chrome");
+  if (chrome) chrome.classList.toggle("hidden", hide);
+  if (kioskCtl.body) kioskCtl.body.style.pointerEvents = block ? "none" : "";
+  kioskSend({ type: "controls", locked, hide_chrome: hide, disable_touch: block });
+}
+
+function setKioskRedLight(on) {
+  if (!kioskCtl) return;
+  let cover = kioskCtl.root.querySelector(".kiosk-red-cover");
+  if (on) {
+    if (!cover) {
+      cover = el("div", { className: "kiosk-red-cover" }, "RED LIGHT");
+      kioskCtl.root.appendChild(cover);
+    }
+    kioskCtl.audioMuted = true;
+  } else {
+    cover?.remove();
+    kioskCtl.audioMuted = false;
+  }
+  kioskSend({ type: "controls", red_light: !!on });
+}
+
+function connectRemoteBrowser(ctl, url) {
+  closeRemoteBrowser(ctl);
+  const href = String(url || "").trim();
+  if (/^https?:\/\//i.test(href)) {
+    window.open(href, "_blank", "noopener,noreferrer");
+    showToast("Opened in your phone browser.");
+  }
+}
+
+async function openKiosk(opts = {}) {
+  const dynamicId = opts.dynamicId || getActiveDynamicId();
+  let url = String(opts.url || "").trim();
+  const source = opts.source || "manual";
+  let title = opts.title || "";
+  const minutes = Number(opts.minutes || 0) || null;
+  const startLocked = !!opts.locked;
+  const startHideChrome = !!opts.hideChrome || startLocked;
+  const startDisableTouch = !!opts.disableTouch || startLocked;
+  if (!url) return;
+  if (url.startsWith("www.")) url = "https://" + url;
+  if (!url.startsWith("wiki:") && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(url) && url.includes(".")) {
+    url = "https://" + url;
+  }
+  if (/^https?:\/\//i.test(url)) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  closeKiosk({ force: true });
+
+  const backBtn = el("button", { type: "button", className: "ghost-btn" }, "Back");
+  const closeBtn = el("button", { type: "button", className: "ghost-btn" }, "Close");
+  const titleEl = el("div", { className: "kiosk-title" }, title || url);
+  const timerEl = el("span", { className: "kiosk-timer hidden" });
+  const addr = el("input", {
+    type: "url",
+    value: url.startsWith("wiki:") ? "" : url,
+    placeholder: "https://…",
+  });
+  const goBtn = el("button", { type: "button", className: "ghost-btn" }, "Go");
+  const typeBox = el("input", { type: "text", className: "kiosk-type", placeholder: "Type into page…" });
+  const fitBtn = el("button", { type: "button", className: "ghost-btn" }, "My screen");
+  if (url.startsWith("wiki:")) {
+    addr.classList.add("hidden");
+    goBtn.classList.add("hidden");
+    typeBox.classList.add("hidden");
+    fitBtn.classList.add("hidden");
+  }
+  const blockBtn = el("button", { type: "button", className: "ghost-btn hidden" }, "Block sub");
+  const body = el("div", { className: "kiosk-body" });
+  const chrome = el("div", { className: "kiosk-chrome" }, [
+    backBtn, closeBtn, titleEl, timerEl, addr, goBtn, typeBox, fitBtn, blockBtn,
+  ]);
+  const root = el("div", { className: "kiosk-overlay", role: "dialog", "aria-label": "In-app browser" }, [
+    chrome,
+    body,
+  ]);
+  document.body.appendChild(root);
+
+  const ctl = {
+    root,
+    body,
+    titleEl,
+    addr,
+    dynamicId,
+    visitId: null,
+    title,
+    url,
+    started: Date.now(),
+    tick: null,
+    history: [],
+    locked: startLocked,
+    youAreDominant: kioskYouAreDominant(dynamicId),
+    blockBtn,
+  };
+  kioskCtl = ctl;
+  if (ctl.youAreDominant) blockBtn.classList.remove("hidden");
+  fitBtn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    const next = kioskViewSize(ctl.body);
+    kioskSend({
+      type: "viewport",
+      w: next.w,
+      h: next.h,
+      dpr: next.dpr,
+      pointer: kioskPreferredPointer(),
+    });
+    kioskSend({ type: "drive" });
+  });
+  blockBtn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    if (!ctl.youAreDominant) return;
+    const next = !ctl.blockSub;
+    ctl.blockSub = next;
+    blockBtn.textContent = next ? "Sub blocked" : "Block sub";
+    blockBtn.classList.toggle("active", next);
+    kioskSend({ type: "controls", disable_touch: next });
+  });
+  closeBtn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    closeKiosk({ force: true });
+  });
+  backBtn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (ctl.ws && ctl.ws.readyState === WebSocket.OPEN && !String(ctl.url || "").startsWith("wiki:")) {
+      kioskSend({ type: "back" });
+      return;
+    }
+    if (ctl.history.length > 1) {
+      ctl.history.pop();
+      const prev = ctl.history[ctl.history.length - 1];
+      loadKioskTarget(ctl, prev, { skipPush: true });
+    } else {
+      closeKiosk({ force: true });
+    }
+  });
+  setKioskRemoteLock({
+    locked: startLocked,
+    hideChrome: startHideChrome,
+    disableTouch: startDisableTouch,
+  });
+  goBtn.addEventListener("click", () => {
+    const next = addr.value.trim();
+    if (next) loadKioskTarget(ctl, { url: next, title: "", source: "manual" });
+  });
+  addr.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      goBtn.click();
+    }
+  });
+  typeBox.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      const text = typeBox.value;
+      if (text) kioskSend({ type: "type", text });
+      kioskSend({ type: "key", key: "Enter" });
+      typeBox.value = "";
+    }
+  });
+
+  if (minutes && minutes > 0) {
+    timerEl.classList.remove("hidden");
+    const ends = Date.now() + minutes * 60 * 1000;
+    const tick = () => {
+      const left = ends - Date.now();
+      if (left <= 0) {
+        timerEl.textContent = "Time";
+        return;
+      }
+      const m = Math.floor(left / 60000);
+      const s = Math.floor((left % 60000) / 1000);
+      timerEl.textContent = `${m}:${String(s).padStart(2, "0")}`;
+    };
+    tick();
+    ctl.tick = setInterval(tick, 1000);
+  }
+
+  if (dynamicId) {
+    try {
+      const visit = await api(`/dynamics/${dynamicId}/kiosk/visits`, {
+        method: "POST",
+        body: JSON.stringify({ url, title: title || url, source }),
+      });
+      if (kioskCtl === ctl) ctl.visitId = visit.id;
+    } catch {
+      /* still open the page */
+    }
+  }
+  try {
+    await loadKioskTarget(ctl, { url, title, source });
+  } catch (err) {
+    ctl.body.replaceChildren(el("p", { className: "error" }, String(err?.message || err || "Could not open page")));
+  }
+}
+
+async function loadKioskTarget(ctl, target, { skipPush = false } = {}) {
+  let url = String(target.url || "").trim();
+  if (!url) return;
+  if (url.startsWith("www.")) url = "https://" + url;
+  if (!url.startsWith("wiki:") && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(url) && url.includes(".")) {
+    url = "https://" + url;
+  }
+  ctl.url = url;
+  if (!skipPush) ctl.history.push({ url, title: target.title || "", source: target.source || "manual" });
+  ctl.titleEl.textContent = target.title || url;
+  ctl.addr.value = url.startsWith("wiki:") ? "" : url;
+
+  const isWiki = url.startsWith("wiki:") || (/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(url) && !url.includes("://"));
+  if (isWiki) {
+    closeRemoteBrowser(ctl);
+    ctl.body.replaceChildren();
+    const slug = url.startsWith("wiki:") ? url.slice(5) || "Home" : url;
+    ctl.addr.value = "";
+    const wiki = el("div", { className: "kiosk-wiki" }, el("p", { className: "muted" }, "Loading wiki…"));
+    ctl.body.appendChild(wiki);
+    try {
+      const page = await api(`/app/wiki/pages/${encodeURIComponent(slug)}`);
+      ctl.title = page.title || slug;
+      ctl.titleEl.textContent = ctl.title;
+      wiki.innerHTML = renderWikiMarkdown(page.markdown || "");
+      await hydrateWikiDiagrams(wiki);
+      wiki.querySelectorAll("a").forEach((a) => {
+        a.addEventListener("click", (ev) => {
+          const href = a.getAttribute("href") || "";
+          if (href.startsWith("#wiki:")) {
+            ev.preventDefault();
+            loadKioskTarget(ctl, { url: "wiki:" + href.slice(6), title: a.textContent, source: "wiki" });
+          } else if (href.startsWith("http")) {
+            ev.preventDefault();
+            window.open(href, "_blank", "noopener,noreferrer");
+          }
+        });
+      });
+    } catch (err) {
+      wiki.replaceChildren(el("p", { className: "error" }, err.message || "Could not load wiki."));
+    }
+    return;
+  }
+
+  if (/^https?:\/\//i.test(url) || url.startsWith("instructor:")) {
+    if (url.startsWith("instructor:")) {
+      window.UbetraInstructor?.openSession(ctl.dynamicId, { source: target.source || "kiosk" });
+    } else {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+    return;
+  }
+  ctl.body.replaceChildren(el("p", { className: "muted" }, "Only wiki pages open in-app."));
+}
+
+function openWikiKiosk(slug) {
+  const id = getActiveDynamicId();
+  openKiosk({
+    dynamicId: id,
+    url: "wiki:" + (slug || "Home"),
+    title: "Wiki",
+    source: "wiki",
+  });
 }
 
 /** Step-by-step Chrome / Edge Android settings so banners arrive while the PWA is closed. */
@@ -2834,6 +4019,7 @@ async function subscribeNativePush() {
     method: "PUT",
     body: JSON.stringify({ push_enabled: true }),
   });
+  wireNativePushCallWake();
   return token;
 }
 
@@ -2842,6 +4028,35 @@ async function unsubscribeNativePush() {
   // Best-effort: remove all native tokens for this user from server; plugin has no deleteToken on all platforms.
   await api("/push/native", { method: "DELETE" }).catch(() => {});
   return status;
+}
+
+let nativePushWakeWired = false;
+function wireNativePushCallWake() {
+  if (nativePushWakeWired) return;
+  const Push = nativePlugin("PushNotifications");
+  const App = nativePlugin("App");
+  if (Push?.addListener) {
+    nativePushWakeWired = true;
+    const wakeFromPush = (data) => {
+      const kind = String(data?.kind || "");
+      if (kind === "call") pollIncomingVideoCall().catch(() => {});
+    };
+    Push.addListener("pushNotificationReceived", (ev) => {
+      wakeFromPush(ev?.notification?.data || ev?.data || {});
+    });
+    Push.addListener("pushNotificationActionPerformed", (ev) => {
+      const data = ev?.notification?.data || {};
+      wakeFromPush(data);
+      let path = String(data.url || "");
+      if (!path) return;
+      if (path.startsWith("/#")) path = path.slice(2);
+      else if (path.startsWith("#")) path = path.slice(1);
+      navigate(path.startsWith("/") ? path : `/${path}`);
+    });
+  }
+  App?.addListener?.("appStateChange", (ev) => {
+    if (ev?.isActive && state.token) pollIncomingVideoCall().catch(() => {});
+  });
 }
 
 function formatRole(role) {
@@ -2900,7 +4115,7 @@ function updateBottomNav() {
     "history", "vault", "journal", "ground-rules", "interview", "survey",
     "knowledge", "context", "gear", "features", "overlap",
   ]);
-  const playtimeRoutes = new Set(["assistant", "tasks", "acts", "manga"]);
+  const playtimeRoutes = new Set(["assistant", "tasks", "acts", "manga", "instructor"]);
   const activeTab =
     parts[0] === "chat" ? "chat"
     : parts[0] === "dynamic" && playtimeRoutes.has(parts[2]) ? "workshop"
@@ -3148,6 +4363,13 @@ async function bootstrap() {
     return;
   }
   settingsBtn.addEventListener("click", () => navigate("/settings"));
+  if (updateBadgeBtn) {
+    updateBadgeBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      showUpdatePopover();
+    });
+  }
   if (installPwaBtn) {
     window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault();
@@ -3186,11 +4408,11 @@ async function bootstrap() {
     updateInstallPwaButton();
   }
   if (appBrandEl) {
-    appBrandEl.addEventListener("click", () => goHomeFromBrand());
+    appBrandEl.addEventListener("click", () => reloadAppFromBrand());
     appBrandEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        goHomeFromBrand();
+        reloadAppFromBrand();
       }
     });
   }
@@ -3226,9 +4448,13 @@ async function bootstrap() {
             detail: {
               dynamicId: event.data.dynamicId,
               url: event.data.url,
+              kind: event.data.kind,
             },
           })
         );
+        if (event.data.kind === "call") {
+          pollIncomingVideoCall().catch(() => {});
+        }
       }
     });
     // Re-sync FCM subscription when returning to the PWA (Android often rotates endpoints).
@@ -3256,8 +4482,13 @@ async function bootstrap() {
   if (state.token) {
     try {
       state.user = await api("/auth/me");
+      applyAiMode();
+      syncUserTimezone().catch(() => {});
       state.dynamics = await api("/dynamics");
       navigateAfterAuth();
+      refreshAppUpdates().catch(() => {});
+      startVideoCallWatcher();
+      wireNativePushCallWake();
       return;
     } catch {
       setToken(null);
@@ -3889,6 +5120,7 @@ function renderOnboarding() {
             try {
               await api("/onboarding/complete", { method: "POST" });
               state.user = await api("/auth/me");
+              syncUserTimezone().catch(() => {});
               navigate(`/dynamic/${status.dynamic_id}`);
             } catch (err) {
               error.textContent = err.message;
@@ -4805,6 +6037,16 @@ function unlockedDurationMs(ev) {
   return end - start;
 }
 
+function isSleepUnlockEvent(ev) {
+  if (!ev || ev.kind !== "temp_unlock") return false;
+  const bits = [...(ev.tags || []), ev.title || ""].map((t) => String(t).toLowerCase());
+  return bits.some((t) => t === "sleep" || t.includes("sleep"));
+}
+
+function isTermSplittingUnlock(ev) {
+  return unlockedDurationMs(ev) > CHASTITY_TERM_UNLOCK_SPLIT_MS && !isSleepUnlockEvent(ev);
+}
+
 function chastityEndTitle(lockup) {
   const kind = lockup?.ended_kind || "";
   if (kind === "released_orgasm" || kind === "released_timer") return "Released!";
@@ -4964,8 +6206,8 @@ function buildChastityTerms(lockups, opts = {}) {
 
     // New term for events after a long temp unlock ends
     if (resumeAfter != null && evAt >= resumeAfter) {
-      const isLongUnlockRow =
-        ev.kind === "temp_unlock" && unlockedDurationMs(ev) > CHASTITY_TERM_UNLOCK_SPLIT_MS;
+        const isLongUnlockRow =
+        ev.kind === "temp_unlock" && isTermSplittingUnlock(ev);
       if (!isLongUnlockRow) {
         flush();
         current.push({
@@ -4988,7 +6230,7 @@ function buildChastityTerms(lockups, opts = {}) {
 
     current.push(ev);
 
-    if (ev.kind === "temp_unlock" && unlockedDurationMs(ev) > CHASTITY_TERM_UNLOCK_SPLIT_MS) {
+    if (ev.kind === "temp_unlock" && isTermSplittingUnlock(ev)) {
       const end = new Date(ev.endValue || ev.endAt).getTime();
       if (Number.isFinite(end)) resumeAfter = end;
     }
@@ -5011,7 +6253,7 @@ function chastityTermLabelFromEvents(events, { isNewest = false } = {}) {
     endAt = releaseEv.at;
   } else if (
     last.kind === "temp_unlock" &&
-    unlockedDurationMs(last) > CHASTITY_TERM_UNLOCK_SPLIT_MS
+    isTermSplittingUnlock(last)
   ) {
     // Term closed when the long unlock began
     endPart = formatPeriodMd(last.at);
@@ -5370,7 +6612,7 @@ function renderChastityTimeline(lockups, partnerName, opts = {}) {
       el("h2", {}, partnerName + " timeline"),
       toggle,
     ]),
-    el("p", { className: "muted" }, "A new expandable term starts after Released! or after more than 18 hours unlocked. Short unlocks stay in the same term."),
+    el("p", { className: "muted" }, "A new expandable term starts after Released! or after more than 18 hours unlocked. Sleep pauses stay in the same term."),
     editHost,
     body,
   ]);
@@ -5640,7 +6882,7 @@ function appendCreateTaskForm(stack, {
     || dynamic.partners?.find((p) => !p.is_you)?.id
     || "";
   if (defaultAssignee) assignee.value = defaultAssignee;
-  const dueAt = el("input", { type: "datetime-local" });
+  const dueBy = buildDueByControls();
   const tagPresets = [...(presets || DEFAULT_TASK_CATEGORY_TAGS)];
   const punishSelected = (preselectedTags || []).some((t) => String(t).toLowerCase() === "punishment");
   if (punishSelected && !tagPresets.some((t) => String(t).toLowerCase() === "punishment")) {
@@ -5657,10 +6899,11 @@ function appendCreateTaskForm(stack, {
     tasksBox,
     el("label", { className: "stack" }, ["Recurrence", recurrence]),
     el("label", { className: "stack" }, ["Assign to", assignee]),
-    el("label", { className: "stack" }, ["Due by (optional)", dueAt]),
+    dueBy.node,
     el("p", { className: "muted" }, "Category tags (pick at least one)"),
     categoryPicker.row,
     categoryPicker.custom,
+    buildTaskAssistRow(tasksBox, { dynamicId }),
   ];
   if (confession?.id) {
     cardKids.push(el("button", {
@@ -5701,6 +6944,8 @@ function appendCreateTaskForm(stack, {
         }
       },
     }, "Ask assistant for punishment task ideas"));
+    cardKids[cardKids.length - 1].classList.add("ai-only");
+    cardKids[cardKids.length - 1].dataset.aiLabel = "Suggests punishment tasks with AI.";
     cardKids.push(ideasHost);
   }
   cardKids.push(error);
@@ -5736,7 +6981,7 @@ function appendCreateTaskForm(stack, {
             recurrence: recurrence.value,
             tags,
           };
-          if (dueAt.value) row.due_at = new Date(dueAt.value).toISOString();
+          dueBy.applyTo(row);
           return row;
         }),
       };
@@ -5757,7 +7002,6 @@ function appendCreateTaskForm(stack, {
         }
         title.value = "";
         tasksBox.value = "";
-        dueAt.value = "";
         showToast("Task list created.");
         renderTasks(dynamicId);
       } catch (err) {
@@ -5797,6 +7041,15 @@ function renderTasksActsSwitcher(dynamicId, active) {
         onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=goals`),
       },
       "Goals"
+    ),
+    el(
+      "button",
+      {
+        type: "button",
+        className: active === "regimen" ? "primary-btn" : "ghost-btn",
+        onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=regimen`),
+      },
+      "Build training regimen"
     ),
   ]);
 }
@@ -5842,6 +7095,17 @@ function renderTaskGoals(dynamicId) {
       } else if (!goalsData) {
         stack.appendChild(el("p", { className: "muted" }, "Turn on Chastity in Features to use goals, or try again in a moment."));
       } else {
+        if (query.get("focus") === "autopunish") {
+          stack.appendChild(el("div", { className: "card stack" }, [
+            el("h2", {}, "Auto punish"),
+            el("p", { className: "muted" }, "A missed task used a tag that has no auto-punish rule. Set the goal increase in Settings → Playtime, then come back here to edit the goal sections."),
+            el("button", {
+              className: "primary-btn",
+              type: "button",
+              onClick: () => navigate(`/settings?dynamic=${encodeURIComponent(dynamicId)}&focus=playtime`),
+            }, "Open auto punish settings"),
+          ]));
+        }
         stack.appendChild(renderChastityGoalsCard(dynamicId, goalsData, {
           partners: dynamic.partners || [],
           onSaved: () => {
@@ -6360,6 +7624,10 @@ function renderTasks(dynamicId) {
     renderTaskGoals(dynamicId);
     return;
   }
+  if (query.get("tab") === "regimen") {
+    renderTrainingRegimen(dynamicId);
+    return;
+  }
   const punishId = query.get("punish") || "";
   viewEl.replaceChildren(el("p", { className: "muted" }, "Loading tasks..."));
   Promise.all([
@@ -6390,7 +7658,7 @@ function renderTasks(dynamicId) {
         dynamicId,
         dynamic,
         presets: taskCategoryPresets,
-        preselectedTags: confession ? ["Punishment"] : [],
+        preselectedTags: (confession || query.get("punish") === "1") ? ["Punishment"] : [],
         confession,
       });
 
@@ -6399,11 +7667,16 @@ function renderTasks(dynamicId) {
       const pending = [];
       const open = [];
       const paused = [];
+      const completed = [];
+      const changeRequests = [];
       const selected = new Set();
 
       (state.taskLists || []).forEach((list) => {
         (list.tasks || []).forEach((task) => {
           const row = { list, task };
+          if (task.change_request_type === "edit" || task.change_request_type === "remove") {
+            changeRequests.push(row);
+          }
           if (task.approval_status === "pending") {
             pending.push(row);
             return;
@@ -6412,10 +7685,13 @@ function renderTasks(dynamicId) {
             paused.push(row);
             return;
           }
-          if (task.completed_at) return;
-          const due = taskEffectiveDue(task);
-          if (due && new Date(due).getTime() < now) missed.push(row);
-          else if (!due || isDueTodayOrPast(due)) open.push(row);
+          if (task.completed_at) {
+            completed.push(row);
+            return;
+          }
+          const due = taskDueDate(task);
+          if (due && due.getTime() < now) missed.push(row);
+          else open.push(row);
         });
       });
 
@@ -6461,6 +7737,41 @@ function renderTasks(dynamicId) {
         return { backdrop, err };
       }
 
+      function openRemindSheet(list, task) {
+        const amount = el("input", { type: "number", min: "1", step: "1", value: "1" });
+        const unit = el("select");
+        [["minutes", "Minutes"], ["hours", "Hours"], ["days", "Days"]].forEach(([v, l]) => {
+          unit.appendChild(el("option", { value: v }, l));
+        });
+        unit.value = "hours";
+        const repeat = el("input", { type: "checkbox" });
+        openSheet({
+          title: "Remind me",
+          bodyNodes: [
+            el("p", {}, task.content),
+            el("div", { className: "row wrap" }, [
+              el("label", {}, ["In", amount]),
+              el("label", {}, ["Unit", unit]),
+            ]),
+            el("label", { className: "checkbox-label" }, [repeat, " Repeat until due"]),
+          ],
+          primaryLabel: "Set reminder",
+          onPrimary: async () => {
+            const n = Math.max(1, Number(amount.value) || 1);
+            await api(`/tasks/${list.id}/items/${task.id}/remind`, {
+              method: "POST",
+              body: JSON.stringify({
+                in_amount: n,
+                in_unit: unit.value,
+                every_amount: repeat.checked ? n : null,
+                every_unit: repeat.checked ? unit.value : null,
+              }),
+            });
+            showToast("Reminder set.");
+          },
+        });
+      }
+
       function openMakeupRequestSheet(list, task) {
         const note = el("textarea", {
           rows: "3",
@@ -6502,6 +7813,8 @@ function renderTasks(dynamicId) {
             }
           },
         }, "Ask assistant for note");
+        assistBtn.classList.add("ai-only");
+        assistBtn.dataset.aiLabel = "Drafts a make-up note with AI.";
         const backdrop = el("div", { className: "modal-backdrop" });
         const err = el("p", { className: "error hidden" });
         async function review(approved) {
@@ -6541,10 +7854,13 @@ function renderTasks(dynamicId) {
         const tagPicker = buildTagPicker(taskCategoryPresets, task.tags || []);
         const pausedBox = el("input", { type: "checkbox" });
         pausedBox.checked = !!task.paused;
+        const dueBy = buildDueByControls({ dueValue: taskEffectiveDue(task) });
         openSheet({
           title: "Edit task",
           bodyNodes: [
             el("label", { className: "stack" }, ["Content", content]),
+            buildTaskAssistRow(content, { dynamicId, listId: list.id, taskId: task.id }),
+            dueBy.node,
             el("p", { className: "muted" }, "Category tags"),
             tagPicker.row,
             tagPicker.custom,
@@ -6554,16 +7870,258 @@ function renderTasks(dynamicId) {
           onPrimary: async () => {
             const tags = tagPicker.getTags();
             if (!tags.length) throw new Error("Pick at least one category tag.");
+            const body = {
+              content: content.value.trim(),
+              tags,
+              paused: pausedBox.checked,
+            };
+            dueBy.applyTo(body);
             await api(`/tasks/${list.id}/items/${task.id}`, {
               method: "PATCH",
-              body: JSON.stringify({
-                content: content.value.trim(),
-                tags,
-                paused: pausedBox.checked,
-              }),
+              body: JSON.stringify(body),
             });
             renderTasks(dynamicId);
           },
+        });
+      }
+
+      function openChangeRequestSheet(list, task, kind) {
+        const note = el("textarea", { rows: "3", placeholder: kind === "remove" ? "Why should this be removed?" : "What should change?" });
+        const proposed = el("textarea", { rows: "3" });
+        proposed.value = task.content || "";
+        openSheet({
+          title: kind === "remove" ? "Request removal" : "Request an edit",
+          bodyNodes: [
+            el("p", {}, task.content),
+            kind === "edit" ? el("label", { className: "stack" }, ["Proposed text", proposed]) : null,
+            el("label", { className: "stack" }, ["Note for your keyholder", note]),
+          ].filter(Boolean),
+          primaryLabel: "Send request",
+          onPrimary: async () => {
+            await api(`/tasks/${list.id}/items/${task.id}/change-request`, {
+              method: "POST",
+              body: JSON.stringify({
+                kind,
+                note: note.value.trim(),
+                proposed_content: kind === "edit" ? proposed.value.trim() : "",
+              }),
+            });
+            showToast(kind === "remove" ? "Removal requested." : "Edit requested.");
+            renderTasks(dynamicId);
+          },
+        });
+      }
+
+      function defaultCompletedOnValue(task) {
+        const due = taskDueDate(task);
+        if (due && due.getTime() < Date.now()) return toLocalDatetimeValue(due);
+        return toLocalDatetimeValue();
+      }
+
+      function buildCompletedOnPicker(task) {
+        const past = taskIsPastDue(task);
+        const selector = buildTimeSelector({
+          label: "Completed on",
+          defaultValue: defaultCompletedOnValue(task),
+        });
+        const row = selector.wrap.querySelector(".time-shortcuts");
+        const due = taskDueDate(task);
+        if (past && row && due) {
+          row.insertBefore(el("button", {
+            type: "button",
+            className: "ghost-btn time-shortcut-btn",
+            onClick: (e) => {
+              e.preventDefault();
+              selector.input.value = toLocalDatetimeValue(due);
+            },
+          }, "On time"), row.firstChild);
+        }
+        const hint = el("p", { className: "muted" }, past
+          ? "If you finished this on time but hadn’t checked it off, tap On time (the due time) or pick when you actually finished."
+          : "When was this finished?");
+        return { selector, hint };
+      }
+
+      async function submitTaskComplete(list, task, iso) {
+        if (!iso) throw new Error("Pick a completed-on time.");
+        const chosen = parseServerDate(iso);
+        if (chosen && chosen.getTime() > Date.now() + 2 * 60 * 1000) {
+          throw new Error("Completed on cannot be in the future.");
+        }
+        await api(`/tasks/${list.id}/items/${task.id}/complete`, {
+          method: "PATCH",
+          body: JSON.stringify({ completed_at: iso }),
+        });
+        renderTasks(dynamicId);
+      }
+
+      function openCompleteTaskSheet(list, task) {
+        document.querySelector(".modal-backdrop")?.remove();
+        const picker = buildCompletedOnPicker(task);
+        openSheet({
+          title: "Completed on",
+          bodyNodes: [
+            el("p", {}, task.content),
+            picker.selector.wrap,
+            picker.hint,
+          ],
+          primaryLabel: "Mark complete",
+          onPrimary: () => submitTaskComplete(list, task, picker.selector.getIso()),
+        });
+      }
+
+      async function deleteTask(list, task) {
+        if (!confirm("Delete this task?")) return;
+        await api(`/tasks/${list.id}/items/${task.id}`, { method: "DELETE" });
+        showToast("Task deleted.");
+        renderTasks(dynamicId);
+      }
+
+      function openTaskDetail(list, task) {
+        if (!canSubOpenTask(task, you)) {
+          showToast("This task is past due. Request make-up from Missed / Overdue.");
+          return;
+        }
+        const actions = [];
+        actions.push(el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => document.querySelector(".modal-backdrop")?.remove(),
+        }, "Close"));
+        const canMarkComplete = !task.completed_at && (canCompleteTask(task, you) || (isDom && taskIsPastDue(task)));
+        const picker = canMarkComplete ? buildCompletedOnPicker(task) : null;
+        const completeErr = el("p", { className: "error hidden" });
+        async function markCompleteFromModal() {
+          if (!picker) return;
+          completeErr.classList.add("hidden");
+          try {
+            await submitTaskComplete(list, task, picker.selector.getIso());
+            document.querySelector(".modal-backdrop")?.remove();
+          } catch (ex) {
+            completeErr.textContent = ex.message;
+            completeErr.classList.remove("hidden");
+          }
+        }
+        if (canMarkComplete) {
+          actions.push(el("button", {
+            type: "button",
+            className: "primary-btn",
+            onClick: markCompleteFromModal,
+          }, "Mark complete"));
+        }
+        if (task.completed_at) {
+          /* view only */
+        } else if (isDom) {
+          actions.push(el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              document.querySelector(".modal-backdrop")?.remove();
+              openEditTaskSheet(list, task);
+            },
+          }, "Edit"));
+          actions.push(el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: async () => {
+              try {
+                await deleteTask(list, task);
+                document.querySelector(".modal-backdrop")?.remove();
+              } catch (ex) {
+                showError(ex.message);
+              }
+            },
+          }, "Delete"));
+          if (task.change_request_type === "edit" || task.change_request_type === "remove") {
+            actions.push(el("button", {
+              type: "button",
+              className: "primary-btn",
+              onClick: async () => {
+                try {
+                  await api(`/tasks/${list.id}/items/${task.id}/change-review`, {
+                    method: "POST",
+                    body: JSON.stringify({ approved: true }),
+                  });
+                  document.querySelector(".modal-backdrop")?.remove();
+                  renderTasks(dynamicId);
+                } catch (ex) {
+                  showError(ex.message);
+                }
+              },
+            }, task.change_request_type === "remove" ? "Approve remove" : "Approve edit"));
+            actions.push(el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: async () => {
+                try {
+                  await api(`/tasks/${list.id}/items/${task.id}/change-review`, {
+                    method: "POST",
+                    body: JSON.stringify({ approved: false }),
+                  });
+                  document.querySelector(".modal-backdrop")?.remove();
+                  renderTasks(dynamicId);
+                } catch (ex) {
+                  showError(ex.message);
+                }
+              },
+            }, "Deny request"));
+          }
+        }
+        if (!task.completed_at && canCompleteTask(task, you)) {
+          actions.push(el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              document.querySelector(".modal-backdrop")?.remove();
+              openRemindSheet(list, task);
+            },
+          }, "Remind me…"));
+        }
+        if (!isDom && !task.completed_at && canSubOpenTask(task, you)) {
+          actions.push(el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              document.querySelector(".modal-backdrop")?.remove();
+              openChangeRequestSheet(list, task, "edit");
+            },
+          }, "Request edit"));
+          actions.push(el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              document.querySelector(".modal-backdrop")?.remove();
+              openChangeRequestSheet(list, task, "remove");
+            },
+          }, "Request remove"));
+        }
+        const bits = [
+          taskListLabel(list, task),
+          formatTaskDue(task),
+          formatCompletedAt(task),
+          task.assigned_to_display_name ? `for ${task.assigned_to_display_name}` : "",
+          task.recurrence && task.recurrence !== "none" ? task.recurrence : "",
+          task.paused ? "paused" : "",
+        ].filter(Boolean);
+        openTaskModal({
+          title: task.completed_at ? "Completed task" : "Task",
+          bodyNodes: [
+            el("p", {}, task.content),
+            el("p", { className: "muted" }, bits.join(" · ")),
+            task.tags?.length
+              ? el("div", { className: "tag-filter-row" }, task.tags.map((t) => el("span", { className: "tag-chip active" }, t)))
+              : null,
+            task.change_request_type
+              ? el("p", { className: "muted" }, `Pending ${task.change_request_type} request${task.change_request_note ? `: ${task.change_request_note}` : ""}`)
+              : null,
+            task.change_request_proposed_content
+              ? el("p", {}, `Proposed: ${task.change_request_proposed_content}`)
+              : null,
+            picker ? picker.selector.wrap : null,
+            picker ? picker.hint : null,
+            picker ? completeErr : null,
+          ],
+          actions,
         });
       }
 
@@ -6578,7 +8136,8 @@ function renderTasks(dynamicId) {
           ]),
         ]);
         if (!rows.length) {
-          section.appendChild(el("p", { className: "muted" }, mode === "missed" ? "No overdue tasks." : "No open tasks."));
+          const empty = mode === "missed" ? "No overdue tasks." : mode === "done" ? "No completed tasks yet." : "No open tasks.";
+          section.appendChild(el("p", { className: "muted" }, empty));
           return section;
         }
         rows.forEach(({ list, task }) => {
@@ -6588,9 +8147,11 @@ function renderTasks(dynamicId) {
           if (task.makeup_status && task.makeup_status !== "none") meta.push(`make-up: ${task.makeup_status}`);
           const dueLabel = formatTaskDue(task);
           if (dueLabel) meta.push(dueLabel);
+          if (task.completed_at) meta.push(formatCompletedAt(task));
           if (task.assigned_to_display_name) meta.push(`for ${task.assigned_to_display_name}`);
+          const canOpen = canSubOpenTask(task, you);
           const row = el("div", {
-            className: `task-item${(mode === "open" && canCompleteTask(task, you)) || mode === "missed" ? " task-actionable" : ""}`,
+            className: `task-item${canOpen || mode === "missed" ? " task-actionable" : ""}${task.completed_at ? " done" : ""}`,
           }, [
             isDom && task.recurrence && task.recurrence !== "none"
               ? el("label", { className: "checkbox-label" }, [
@@ -6607,7 +8168,7 @@ function renderTasks(dynamicId) {
               ])
               : null,
             el("p", {}, task.content),
-            meta.length ? el("p", { className: "muted" }, `${list.title} · ${meta.join(" · ")}`) : el("p", { className: "muted" }, list.title),
+            meta.length ? el("p", { className: "muted" }, `${taskListLabel(list, task)} · ${meta.join(" · ")}`) : el("p", { className: "muted" }, taskListLabel(list, task)),
           ]);
           if (task.tags?.length) {
             const tags = el("div", { className: "tag-filter-row" });
@@ -6615,18 +8176,35 @@ function renderTasks(dynamicId) {
             row.appendChild(tags);
           }
           const actions = el("div", { className: "row" });
+          if (task.web_url && !task.hidden) {
+            const instructorTask = String(task.web_url).startsWith("instructor:");
+            actions.appendChild(el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: (ev) => {
+                ev.stopPropagation();
+                if (instructorTask) {
+                  window.UbetraInstructor?.openSession(dynamicId, {
+                    minutes: task.web_minutes,
+                    source: "task",
+                    taskId: task.id,
+                  });
+                  return;
+                }
+                const href = String(task.web_url || "").trim();
+                if (/^https?:\/\//i.test(href)) window.open(href, "_blank", "noopener,noreferrer");
+              },
+            }, instructorTask
+              ? (task.web_minutes ? `Start Instructor (${task.web_minutes} min)` : "Start Instructor")
+              : (task.web_minutes ? `Open link (${task.web_minutes} min)` : "Open link")));
+          }
           if (mode === "open" && canCompleteTask(task, you)) {
             actions.appendChild(el("button", {
               className: "primary-btn",
               type: "button",
-              onClick: async (ev) => {
+              onClick: (ev) => {
                 ev.stopPropagation();
-                try {
-                  await api(`/tasks/${list.id}/items/${task.id}/complete`, { method: "PATCH" });
-                  renderTasks(dynamicId);
-                } catch (ex) {
-                  showError(ex.message);
-                }
+                openCompleteTaskSheet(list, task);
               },
             }, "Mark complete"));
           }
@@ -6639,19 +8217,22 @@ function renderTasks(dynamicId) {
                 actions.appendChild(el("button", {
                   className: "primary-btn",
                   type: "button",
-                  onClick: async (ev) => {
+                  onClick: (ev) => {
                     ev.stopPropagation();
-                    try {
-                      await api(`/tasks/${list.id}/items/${task.id}/complete`, { method: "PATCH" });
-                      renderTasks(dynamicId);
-                    } catch (ex) {
-                      showError(ex.message);
-                    }
+                    openCompleteTaskSheet(list, task);
                   },
                 }, "Complete make-up"));
               } else if (task.makeup_status !== "granted") {
                 actions.appendChild(el("button", {
                   className: "primary-btn",
+                  type: "button",
+                  onClick: (ev) => {
+                    ev.stopPropagation();
+                    openCompleteTaskSheet(list, task);
+                  },
+                }, "Mark complete (late)"));
+                actions.appendChild(el("button", {
+                  className: "ghost-btn",
                   type: "button",
                   onClick: (ev) => {
                     ev.stopPropagation();
@@ -6672,20 +8253,9 @@ function renderTasks(dynamicId) {
               actions.appendChild(el("button", {
                 className: "primary-btn",
                 type: "button",
-                onClick: async (ev) => {
+                onClick: (ev) => {
                   ev.stopPropagation();
-                  try {
-                    if (taskNeedsMakeup(task)) {
-                      await api(`/tasks/${list.id}/items/${task.id}/makeup-review`, {
-                        method: "POST",
-                        body: JSON.stringify({ approved: true, note: "" }),
-                      });
-                    }
-                    await api(`/tasks/${list.id}/items/${task.id}/complete`, { method: "PATCH" });
-                    renderTasks(dynamicId);
-                  } catch (ex) {
-                    showError(ex.message);
-                  }
+                  openCompleteTaskSheet(list, task);
                 },
               }, "Mark complete"));
             }
@@ -6699,6 +8269,18 @@ function renderTasks(dynamicId) {
                 openEditTaskSheet(list, task);
               },
             }, "Edit"));
+            actions.appendChild(el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: async (ev) => {
+                ev.stopPropagation();
+                try {
+                  await deleteTask(list, task);
+                } catch (ex) {
+                  showError(ex.message);
+                }
+              },
+            }, "Delete"));
             if (task.recurrence && task.recurrence !== "none") {
               actions.appendChild(el("button", {
                 className: "ghost-btn",
@@ -6718,10 +8300,18 @@ function renderTasks(dynamicId) {
               }, task.paused ? "Unpause" : "Pause"));
             }
           }
-          if (actions.childNodes.length) row.appendChild(actions);
-          if (mode === "missed" && you?.role === "submissive" && task.makeup_status !== "pending" && task.makeup_status !== "granted") {
-            row.addEventListener("click", () => openMakeupRequestSheet(list, task));
+          if (!isDom && !task.completed_at && canOpen) {
+            actions.appendChild(el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: (ev) => {
+                ev.stopPropagation();
+                openChangeRequestSheet(list, task, "edit");
+              },
+            }, "Request edit"));
           }
+          if (actions.childNodes.length) row.appendChild(actions);
+          row.addEventListener("click", () => openTaskDetail(list, task));
           section.appendChild(row);
         });
         return section;
@@ -6739,14 +8329,35 @@ function renderTasks(dynamicId) {
         missed,
         { openByDefault: missed.length > 0, mode: "missed" }
       ));
+      stack.appendChild(paintTimelineSection(
+        "Completed",
+        String(completed.length),
+        completed.slice(0, 40),
+        { openByDefault: false, mode: "done" }
+      ));
+
+      if (changeRequests.length && isDom) {
+        const card = el("div", { className: "card stack" }, [el("h2", {}, `Change requests · ${changeRequests.length}`)]);
+        changeRequests.forEach(({ list, task }) => {
+          const row = el("div", { className: "task-item task-actionable" }, [
+            el("p", {}, task.content),
+            el("p", { className: "muted" }, `${taskListLabel(list, task)} · wants to ${task.change_request_type}`),
+            task.change_request_note ? el("p", { className: "muted" }, task.change_request_note) : null,
+          ]);
+          row.addEventListener("click", () => openTaskDetail(list, task));
+          card.appendChild(row);
+        });
+        stack.appendChild(card);
+      }
 
       if (pending.length) {
         const card = el("div", { className: "card stack" }, [el("h2", {}, `Pending approval · ${pending.length}`)]);
         pending.forEach(({ list, task }) => {
-          const row = el("div", { className: "task-item" }, [
+          const row = el("div", { className: "task-item task-actionable" }, [
             el("p", {}, task.content),
-            el("p", { className: "muted" }, list.title),
+            el("p", { className: "muted" }, taskListLabel(list, task)),
           ]);
+          row.addEventListener("click", () => openTaskDetail(list, task));
           if (isDom) {
             row.appendChild(el("div", { className: "row" }, [
               el("button", {
@@ -6862,14 +8473,19 @@ function renderTasks(dynamicId) {
         state.taskLists.forEach((list) => {
           listsCard.appendChild(el("div", { className: "stack" }, [
             el("h3", {}, `${list.title} · ${list.status}`),
-            ...(list.tasks || []).slice(0, 20).map((task) => {
+            ...(list.tasks || []).slice(0, 40).map((task) => {
               const bits = [];
-              if (task.completed_at) bits.push("done");
+              if (task.completed_at) bits.push(formatCompletedAt(task) || "done");
               if (task.paused) bits.push("paused");
               if (task.recurrence && task.recurrence !== "none") bits.push(task.recurrence);
               const dueLabel = formatTaskDue(task);
               if (dueLabel) bits.push(dueLabel);
-              return el("p", { className: "muted" }, `${task.content}${bits.length ? ` · ${bits.join(" · ")}` : ""}`);
+              const row = el("div", { className: "task-item task-actionable" }, [
+                el("p", {}, task.content),
+                el("p", { className: "muted" }, `${taskListLabel(list, task)}${bits.length ? ` · ${bits.join(" · ")}` : ""}`),
+              ]);
+              row.addEventListener("click", () => openTaskDetail(list, task));
+              return row;
             }),
           ]));
         });
@@ -6884,8 +8500,540 @@ function renderTasks(dynamicId) {
       );
       viewEl.replaceChildren(stack);
       updateBottomNav();
+      const focusTaskId = query.get("task");
+      if (focusTaskId) {
+        let found = null;
+        (state.taskLists || []).some((list) => {
+          const task = (list.tasks || []).find((t) => t.id === focusTaskId);
+          if (task) {
+            found = { list, task };
+            return true;
+          }
+          return false;
+        });
+        if (found) openTaskDetail(found.list, found.task);
+      }
     })
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
+}
+
+function renderTrainingRegimen(dynamicId) {
+  setViewContent(el("p", { className: "muted" }, "Loading training assistant…"));
+  Promise.all([
+    loadDynamic(dynamicId),
+    api(`/dynamics/${dynamicId}/tasks/regimen`),
+  ])
+    .then(([, session]) => {
+      const dynamic = state.currentDynamic;
+      const you = dynamic?.partners?.find((p) => p.is_you);
+      const isDom = you?.role === "dominant";
+      const sub = (dynamic?.partners || []).find((p) => p.role === "submissive");
+      const error = el("div", { className: "error hidden" });
+      const stack = el("div", { className: "stack" }, [
+        el("h1", {}, "Tasks & acts"),
+        renderTasksActsSwitcher(dynamicId, "regimen"),
+        el("p", { className: "muted" }, "Draft daily and weekly training tasks, then check and edit the ones you want."),
+        el("div", { className: "row wrap" }, [
+          aiConfigBadge("tasks", { dynamicId }),
+        ]),
+        error,
+      ]);
+
+      if (!isDom) {
+        stack.appendChild(el("p", { className: "muted" }, "Only the keyholder can build a training regimen."));
+        stack.appendChild(el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: () => navigate(`/dynamic/${dynamicId}/tasks`),
+        }, "Back to task lists"));
+        setViewContent(stack);
+        return;
+      }
+
+      if (!session.interview_completed) {
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("p", {}, "Complete your dynamic interview first so the regimen matches this couple."),
+          el("button", {
+            className: "primary-btn",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${dynamicId}/interview`),
+          }, "Start interview"),
+        ]));
+        setViewContent(stack);
+        return;
+      }
+
+      if (!session.llm_configured) {
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("p", {}, "Add an API key in Settings before using the training assistant."),
+          el("button", {
+            className: "primary-btn",
+            type: "button",
+            onClick: () => navigate("/settings?focus=ai"),
+          }, "Open AI settings"),
+        ]));
+        setViewContent(stack);
+        return;
+      }
+
+      const chatLog = el("div", { className: "chat-log regimen-log" });
+      const workspace = el("div", { className: "stack regimen-workspace" });
+      let busy = false;
+      let tagsMenuOpen = false;
+
+      function previewTaskText(content) {
+        const t = String(content || "").replace(/\s+/g, " ").trim();
+        if (!t) return "Untitled task";
+        return t.length > 72 ? `${t.slice(0, 69)}…` : t;
+      }
+
+      function regimenGroupTitle(list) {
+        const recLabel = list?.recurrence === "weekly" ? "Weekly" : "Daily";
+        const tag = formatTaskTag(list?.tag || "");
+        return tag ? `${recLabel} · ${tag}` : recLabel;
+      }
+
+      function showError(msg) {
+        error.textContent = msg || "";
+        error.classList.toggle("hidden", !msg);
+      }
+
+      function paintMessages(messages) {
+        chatLog.replaceChildren(
+          ...(messages || []).map((msg) =>
+            el("div", { className: `chat-bubble ${msg.role === "user" ? "user" : "assistant"}` }, msg.content)
+          )
+        );
+        chatLog.scrollTop = chatLog.scrollHeight;
+      }
+
+      function setBusy(on) {
+        busy = !!on;
+        stack.querySelectorAll("button, textarea, input").forEach((node) => {
+          if (node.getAttribute("data-regimen-nav") === "1") return;
+          node.disabled = busy;
+        });
+        if (busy) {
+          chatLog.appendChild(el("div", {
+            className: "chat-bubble assistant chat-typing-bubble",
+          }, [
+            el("span", { className: "muted" }, "Working with the assistant…"),
+            el("span", { className: "chat-typing-dots", "aria-hidden": "true" }, [
+              el("span", { className: "chat-typing-dot" }),
+              el("span", { className: "chat-typing-dot" }),
+              el("span", { className: "chat-typing-dot" }),
+            ]),
+          ]));
+          chatLog.scrollTop = chatLog.scrollHeight;
+        }
+      }
+
+      async function run(path, body, query = "") {
+        if (!isAiEnabled() && path !== "reset" && path !== "tags" && path !== "assigned") {
+          openAiOffSheet("The training regimen assistant uses your shared AI context.");
+          return null;
+        }
+        showError("");
+        setBusy(true);
+        try {
+          const qs = query ? `?${query}` : "";
+          return await api(`/dynamics/${dynamicId}/tasks/regimen/${path}${qs}`, {
+            method: "POST",
+            body: body ? JSON.stringify(body) : "{}",
+          });
+        } catch (ex) {
+          showError(ex.message);
+          paintMessages(session.messages || []);
+          return null;
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      function applySession(next) {
+        if (!next) return;
+        session = next;
+        paintMessages(session.messages || []);
+        paintWorkspace();
+      }
+
+      function paintWorkspace() {
+        const kids = [];
+        const tags = session.tags || [];
+        const phase = session.phase || "";
+
+        if (phase === "pick_focus" || phase === "lists" || phase === "tags_review") {
+          const selected = new Set(
+            (session.focus_tags || []).map((t) => String(t).toLowerCase())
+          );
+          if (!selected.size) {
+            tags.forEach((t) => selected.add(String(t).toLowerCase()));
+          }
+          const note = el("textarea", {
+            rows: "2",
+            placeholder: "Optional: intensity, time budget, what to emphasize…",
+          });
+          const chipRow = el("div", { className: "tag-filter-row" });
+          tags.forEach((tag) => {
+            const key = String(tag).toLowerCase();
+            const btn = el("button", {
+              type: "button",
+              className: `tag-chip ${selected.has(key) ? "active" : ""}`,
+              onClick: (e) => {
+                e.preventDefault();
+                if (selected.has(key)) selected.delete(key);
+                else selected.add(key);
+                btn.classList.toggle("active", selected.has(key));
+                session.focus_tags = tags.filter((t) => selected.has(String(t).toLowerCase()));
+              },
+            }, formatTaskTag(tag));
+            chipRow.appendChild(btn);
+          });
+
+          const custom = el("input", { placeholder: "e.g. Protocol, Fitness…" });
+          const tagMenuKids = [
+            el("p", { className: "muted" }, "Only if you need another type. New tags also show up on normal task create."),
+          ];
+          (session.suggested_tags || []).forEach((row) => {
+            tagMenuKids.push(el("div", { className: "row wrap regimen-suggest-row" }, [
+              el("div", { className: "stack" }, [
+                el("strong", {}, formatTaskTag(row.tag)),
+                row.why ? el("p", { className: "muted" }, row.why) : null,
+              ]),
+              el("button", {
+                type: "button",
+                className: "ghost-btn",
+                onClick: async () => {
+                  tagsMenuOpen = true;
+                  applySession(await run("tags", { tag: row.tag }));
+                },
+              }, "Add"),
+            ]));
+          });
+          tagMenuKids.push(el("div", { className: "row wrap" }, [
+            custom,
+            el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: async () => {
+                const tag = custom.value.trim();
+                if (!tag) return;
+                tagsMenuOpen = true;
+                const next = await run("tags", { tag });
+                if (next) custom.value = "";
+                applySession(next);
+              },
+            }, "Add tag"),
+          ]));
+          tagMenuKids.push(el("button", {
+            type: "button",
+            className: "ghost-btn ai-only",
+            "data-ai-label": "Suggest extra task tags with AI.",
+            onClick: async () => {
+              tagsMenuOpen = true;
+              applySession(await run("suggest-tags"));
+            },
+          }, (session.suggested_tags || []).length ? "Refresh suggestions" : "Suggest tags"));
+          const tagsMenu = el("details", { className: "hub-setup-details regimen-tags-menu" }, [
+            el("summary", {}, "Do you need any more tags or suggestions for tags?"),
+            ...tagMenuKids,
+          ]);
+          tagsMenu.open = tagsMenuOpen;
+          tagsMenu.addEventListener("toggle", () => { tagsMenuOpen = tagsMenu.open; });
+
+          kids.push(el("div", { className: "card stack" }, [
+            el("h2", {}, "Help generate…"),
+            el("p", { className: "muted" }, "Choose types, then generate daily and weekly ideas. Health / Hygiene includes workouts as well as hygiene."),
+            chipRow,
+            tagsMenu,
+            el("label", { className: "stack" }, ["Direction (optional)", note]),
+            el("button", {
+              type: "button",
+              className: "primary-btn ai-only",
+              "data-ai-label": "Drafts daily and weekly training lists with AI.",
+              onClick: async () => {
+                const chosen = tags.filter((t) => selected.has(String(t).toLowerCase()));
+                if (!chosen.length) {
+                  showError("Pick at least one type.");
+                  return;
+                }
+                const next = await run("generate", { tags: chosen, note: note.value.trim() });
+                if (next) renderTrainingRegimen(dynamicId);
+              },
+            }, phase === "lists" ? "Regenerate lists" : "Generate lists"),
+          ]));
+        }
+
+        if (phase === "lists" && (session.lists || []).length) {
+          const host = el("div", { className: "stack" }, [
+            el("h2", {}, "Recommended tasks"),
+            el("p", { className: "muted" }, "Check the ones you agree with. Expand a row to set the due-by time and edit the wording, then assign."),
+          ]);
+          const allBoxes = [];
+          session.lists.forEach((list) => {
+            const recLabel = list.recurrence === "weekly" ? "Weekly" : "Daily";
+            const boxes = [];
+            const dueInputs = [];
+            const groupDue = el("input", { type: "time" });
+            groupDue.value = list.default_due_tod || "";
+            groupDue.disabled = !!list.assigned;
+            groupDue.addEventListener("change", () => {
+              list.default_due_tod = groupDue.value || "";
+              if (!groupDue.value) return;
+              dueInputs.forEach((row) => {
+                row.dueTime.value = groupDue.value;
+                row.task.due_tod = groupDue.value;
+                row.syncLabel();
+              });
+            });
+            const cardKids = [
+              el("div", { className: "row wrap" }, [
+                el("strong", {}, regimenGroupTitle(list)),
+                el("span", { className: "pill" }, list.assigned ? "Assigned" : recLabel),
+              ]),
+            ];
+            if (!list.assigned) {
+              cardKids.push(el("label", { className: "stack" }, [
+                "Due by (time of day)",
+                groupDue,
+              ]));
+              cardKids.push(el("p", { className: "muted" }, "Sets this group. Expand a task to override. First due is today at that time, or tomorrow if it has already passed."));
+            }
+            (list.tasks || []).forEach((task) => {
+              const box = el("input", { type: "checkbox" });
+              box.checked = !list.assigned && !!task.selected;
+              box.disabled = !!list.assigned;
+              const titleInput = el("input", { placeholder: "Short title" });
+              titleInput.value = task.title || previewTaskText(task.content);
+              titleInput.disabled = !!list.assigned;
+              const editor = el("textarea", { rows: "3" });
+              editor.value = task.content || "";
+              editor.disabled = !!list.assigned;
+              const titleLabel = el("span", { className: "regimen-idea-title" }, titleInput.value || "Task");
+              const chevron = el("span", { className: "regimen-idea-chevron", "aria-hidden": "true" }, "▸");
+              const dueTime = el("input", { type: "time" });
+              if (!task.due_tod) task.due_tod = list.default_due_tod || "";
+              dueTime.value = task.due_tod || "";
+              dueTime.disabled = !!list.assigned;
+              function ideaLabel() {
+                const name = (titleInput.value || previewTaskText(editor.value) || "Task").trim();
+                const tod = formatTimeOfDay(dueTime.value || task.due_tod);
+                return tod ? `${name} · ${tod}` : name;
+              }
+              box.addEventListener("click", (ev) => ev.stopPropagation());
+              box.addEventListener("change", () => { task.selected = box.checked; });
+              function syncTitle() {
+                const next = (titleInput.value || previewTaskText(editor.value) || "Task").trim();
+                task.title = next;
+                titleLabel.textContent = ideaLabel();
+              }
+              titleInput.addEventListener("input", syncTitle);
+              dueTime.addEventListener("input", () => {
+                task.due_tod = dueTime.value || "";
+                titleLabel.textContent = ideaLabel();
+              });
+              editor.addEventListener("input", () => {
+                task.content = editor.value;
+                if (!titleInput.value.trim()) titleLabel.textContent = ideaLabel();
+              });
+              titleLabel.textContent = ideaLabel();
+              let idea;
+              const toggle = el("button", {
+                type: "button",
+                className: "regimen-idea-toggle",
+                onClick: (ev) => {
+                  ev.preventDefault();
+                  idea.classList.toggle("open");
+                  chevron.textContent = idea.classList.contains("open") ? "▾" : "▸";
+                },
+              }, [titleLabel, chevron]);
+              idea = el("div", { className: "regimen-idea" }, [
+                el("div", { className: "regimen-idea-row" }, [box, toggle]),
+                el("div", { className: "regimen-idea-body" }, [
+                  el("label", { className: "stack" }, ["Title", titleInput]),
+                  el("label", { className: "stack" }, ["Task", editor]),
+                  el("label", { className: "stack" }, ["Due by (time of day)", dueTime]),
+                ]),
+              ]);
+              boxes.push({ task, box, list, editor, titleInput, dueTime });
+              allBoxes.push({ task, box, list, editor, titleInput, dueTime });
+              dueInputs.push({ task, dueTime, syncLabel: syncTitle });
+              cardKids.push(idea);
+            });
+            if (!list.assigned) {
+              cardKids.push(el("button", {
+                type: "button",
+                className: "ghost-btn",
+                onClick: () => {
+                  const allOn = boxes.every((row) => row.box.checked);
+                  boxes.forEach((row) => {
+                    row.box.checked = !allOn;
+                    row.task.selected = !allOn;
+                  });
+                },
+              }, "Toggle all"));
+            }
+            host.appendChild(el("div", { className: `card stack${list.assigned ? " regimen-assigned" : ""}` }, cardKids));
+          });
+          host.appendChild(el("button", {
+            type: "button",
+            className: "ghost-btn ai-only",
+            "data-ai-label": "Adds extra daily and weekly ideas without replacing the current drafts.",
+            onClick: async () => {
+              const chosen = (session.focus_tags || []).length
+                ? session.focus_tags
+                : (session.tags || []);
+              if (!chosen.length) {
+                showError("Pick at least one type first.");
+                return;
+              }
+              const next = await run("generate", { tags: chosen, more: true });
+              if (next) renderTrainingRegimen(dynamicId);
+            },
+          }, "Generate more ideas"));
+          host.appendChild(el("button", {
+            type: "button",
+            className: "primary-btn",
+            onClick: async () => {
+              if (!sub?.id) {
+                showError("Need a submissive partner in this dynamic to assign tasks.");
+                return;
+              }
+              const byList = new Map();
+              allBoxes.forEach((row) => {
+                if (!row.box.checked || row.list.assigned) return;
+                const content = (row.editor?.value || row.task.content || "").trim();
+                const title = (row.titleInput?.value || row.task.title || "").trim();
+                if (!content && !title) return;
+                const key = row.list.id;
+                if (!byList.has(key)) byList.set(key, { list: row.list, tasks: [] });
+                const text = !title || (content && content.toLowerCase().startsWith(title.toLowerCase()))
+                  ? (content || title)
+                  : (content ? `${title}\n${content}` : title);
+                byList.get(key).tasks.push({
+                  content: text,
+                  due_tod: row.dueTime?.value || row.task.due_tod || row.list.default_due_tod || "",
+                });
+              });
+              if (!byList.size) {
+                showError("Select at least one task.");
+                return;
+              }
+              showError("");
+              setBusy(true);
+              const assignedIds = [];
+              try {
+                for (const { list, tasks } of byList.values()) {
+                  await api(`/dynamics/${dynamicId}/tasks`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      title: regimenGroupTitle(list),
+                      assigned_to_membership_id: sub.id,
+                      tasks: tasks.map((item) => {
+                        const row = {
+                          content: item.content || item,
+                          visibility: "visible",
+                          recurrence: list.recurrence === "weekly" ? "weekly" : "daily",
+                          tags: list.tag ? [list.tag] : [],
+                        };
+                        const due = dueIsoFromTimeOfDay(item.due_tod);
+                        if (due) row.due_at = due;
+                        return row;
+                      }),
+                    }),
+                  });
+                  assignedIds.push(list.id);
+                }
+                await api(`/dynamics/${dynamicId}/tasks/regimen/assigned`, {
+                  method: "POST",
+                  body: JSON.stringify({ list_ids: assignedIds }),
+                });
+                showToast(assignedIds.length === 1 ? "Task list created." : `${assignedIds.length} task lists created.`);
+                renderTrainingRegimen(dynamicId);
+              } catch (ex) {
+                showError(ex.message);
+              } finally {
+                setBusy(false);
+              }
+            },
+          }, "Assign selected"));
+          kids.push(host);
+        }
+
+        workspace.replaceChildren(...kids);
+      }
+
+      stack.appendChild(workspace);
+
+      if (session.phase) {
+        const input = el("textarea", {
+          rows: "2",
+          placeholder: "Reply to the assistant…",
+          className: "chat-input",
+        });
+        const sendBtn = el("button", {
+          className: "primary-btn ai-only",
+          type: "button",
+          "data-ai-label": "Continues the training conversation with AI.",
+        }, "Send");
+        sendBtn.addEventListener("click", async () => {
+          const text = input.value.trim();
+          if (!text) return;
+          input.value = "";
+          const next = await run("reply", { message: text });
+          if (next) renderTrainingRegimen(dynamicId);
+        });
+        stack.appendChild(el("div", { className: "stack" }, [
+          input,
+          sendBtn,
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: async () => {
+              const reset = await run("reset");
+              if (!reset) return;
+              const next = await run("start", null, "force=true");
+              if (next) renderTrainingRegimen(dynamicId);
+            },
+          }, "Start over"),
+        ]));
+        paintMessages(session.messages || []);
+        paintWorkspace();
+      } else {
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("p", {}, "Pick types, generate daily and weekly ideas, then check and edit the ones you want to assign."),
+          el("button", {
+            type: "button",
+            className: "primary-btn ai-only",
+            "data-ai-label": "Starts the training regimen assistant.",
+            onClick: async () => {
+              const next = await run("start");
+              if (next) renderTrainingRegimen(dynamicId);
+            },
+          }, "Start assistant"),
+        ]));
+      }
+
+      stack.appendChild(el("details", { className: "hub-setup-details regimen-history" }, [
+        el("summary", {}, "Assistant history"),
+        chatLog,
+      ]));
+
+      stack.appendChild(el("button", {
+        className: "ghost-btn",
+        type: "button",
+        "data-regimen-nav": "1",
+        onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+      }, "Back to Playtime"));
+      setViewContent(stack);
+
+      if (!session.phase && isAiEnabled()) {
+        run("start").then((next) => {
+          if (next) renderTrainingRegimen(dynamicId);
+        });
+      }
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
 function knowledgeFields() {
@@ -6954,12 +9102,12 @@ function renderKnowledgeHub(dynamicId) {
           el("button", {
             className: "facet-row",
             type: "button",
-            onClick: () => navigate(`/dynamic/${dynamicId}/context`),
+            onClick: () => navigate(`/dynamic/${dynamicId}/journal`),
           }, [
             el("span", { className: "facet-icon" }, "📎"),
             el("span", { className: "facet-copy" }, [
-              el("span", { className: "facet-title" }, "Context library"),
-              el("span", { className: "facet-subtitle" }, "Stories, scenes, and files for AI"),
+              el("span", { className: "facet-title" }, "Journal & library"),
+              el("span", { className: "facet-subtitle" }, "Entries, stories, scenes, and files"),
             ]),
             el("span", { className: "facet-chevron" }, "›"),
           ])
@@ -7195,6 +9343,14 @@ function renderCoreKnowledge(dynamicId) {
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
 }
 
+function renderInstructor(dynamicId) {
+  if (!window.UbetraInstructor?.renderHub) {
+    viewEl.replaceChildren(el("p", { className: "error" }, "Instructor failed to load. Reload the app."));
+    return;
+  }
+  window.UbetraInstructor.renderHub(dynamicId, viewEl);
+}
+
 function renderAssistant(dynamicId) {
   viewEl.replaceChildren(el("p", { className: "muted" }, "Loading Playtime..."));
   Promise.all([
@@ -7290,7 +9446,8 @@ function renderAssistant(dynamicId) {
       } else {
         stack.appendChild(
           el("button", {
-            className: "choice-btn playtime-option",
+            className: "choice-btn playtime-option ai-only",
+            "data-ai-label": "Scene builder writes a full scene from your shared AI context.",
             type: "button",
             onClick: () => navigate(`/dynamic/${dynamicId}/assistant/scene`),
           }, [
@@ -9051,9 +11208,7 @@ function renderPlaytimeScene(dynamicId) {
         subject: null,
         scene: null,
         busy: false,
-        contextFlags: { journals: true, stories: true, scenes: true, agreements: true, tracking: true },
       };
-      const { toggleBtn: contextToggleBtn, menu: contextMenu } = buildContextFlagsMenu(flow.contextFlags);
 
       const EFFORT_OPTIONS = [
         { id: "low", title: "Low", subtitle: "Under 5 minutes" },
@@ -9114,7 +11269,6 @@ function renderPlaytimeScene(dynamicId) {
               subject: flow.subject,
               note,
               avoid_summary: avoidSummary,
-              context_flags: flow.contextFlags,
             }),
           });
           flow.scene = result;
@@ -9199,10 +11353,8 @@ function renderPlaytimeScene(dynamicId) {
         body.replaceChildren();
         body.appendChild(el("h1", {}, "Scene builder"));
         body.appendChild(
-          el("p", { className: "muted" }, "Quick scene builder for the domme / keyholder.")
+          el("p", { className: "muted" }, "Quick scene builder for the domme / keyholder. AI context comes from Settings → What to share with AI.")
         );
-        body.appendChild(el("div", { className: "row wrap" }, [contextToggleBtn]));
-        body.appendChild(contextMenu);
 
         if (!status.your_interview_completed) {
           body.appendChild(
@@ -9575,6 +11727,10 @@ function renderInterview(dynamicId) {
 }
 
 function renderContext(dynamicId) {
+  navigate(`/dynamic/${dynamicId}/journal`);
+}
+
+function renderContextLegacy(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading context library..."));
   Promise.all([
     api(`/dynamics/${dynamicId}/context`),
@@ -9810,9 +11966,11 @@ function renderJournal(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading journal..."));
   Promise.all([
     api(`/dynamics/${dynamicId}/journal`).catch(() => []),
+    api(`/dynamics/${dynamicId}/context`).catch(() => []),
+    api(`/dynamics/${dynamicId}/context/categories`).catch(() => []),
     loadDynamic(dynamicId),
   ])
-    .then(([journals]) => {
+    .then(([journals, contextLinks, categories]) => {
       const dynamic = state.currentDynamic;
       const you = dynamic?.partners?.find((p) => p.is_you);
       const isDom = you?.role === "dominant";
@@ -9825,14 +11983,25 @@ function renderJournal(dynamicId) {
       const jVisible = el("input", { type: "checkbox", checked: true });
       const assistPrompt = el("input", { placeholder: "e.g. Expand this into a reflective entry" });
 
-      const contextFlags = { journals: true, stories: false, scenes: false, agreements: false, tracking: false };
-      const { toggleBtn: contextToggleBtn, menu: contextMenu } = buildContextFlagsMenu(contextFlags);
-
       const list = el("div", { className: "stack" });
+      function collapsible(title, count, children, { open = false } = {}) {
+        const section = el("details", { className: "task-timeline-section stack", open }, [
+          el("summary", {}, [
+            el("span", {}, title),
+            el("span", { className: "task-timeline-count" }, String(count)),
+          ]),
+        ]);
+        (children || []).forEach((child) => section.appendChild(child));
+        if (!children?.length) {
+          section.appendChild(el("p", { className: "muted" }, "Nothing here yet."));
+        }
+        return section;
+      }
+
       function paintJournals(items) {
-        list.replaceChildren();
+        const cards = [];
         if (!items.length) {
-          list.appendChild(el("p", { className: "muted" }, "No journal entries yet."));
+          list.appendChild(collapsible("Journal entries", 0, []));
           return;
         }
         items.forEach((entry) => {
@@ -9845,7 +12014,7 @@ function renderJournal(dynamicId) {
           ]);
           if (entry.is_private_to_others) {
             card.appendChild(el("p", { className: "muted" }, "This entry is private to its author."));
-            list.appendChild(card);
+            cards.push(card);
             return;
           }
 
@@ -9924,17 +12093,174 @@ function renderJournal(dynamicId) {
                 }
               },
             }, "Domme review"));
+            rowBtns.lastChild.classList.add("ai-only");
+            rowBtns.lastChild.dataset.aiLabel = "Summarizes this journal entry with AI.";
           }
           card.appendChild(rowBtns);
           card.appendChild(reviewOut);
-          list.appendChild(card);
+          cards.push(card);
         });
+        list.appendChild(collapsible("Journal entries", items.length, cards));
       }
       paintJournals(journals || []);
 
+      function paintContextCard(link) {
+        const subLabel =
+          categories.find((c) => c.id === (link.subject || link.category))?.label
+          || link.subject
+          || link.category;
+        if (link.is_private_to_others) {
+          return el("div", { className: "card stack" }, [
+            el("div", { className: "row wrap" }, [
+              el("strong", {}, link.title || "Private file"),
+              el("span", { className: "pill" }, "🔒 Private"),
+            ]),
+            el("p", { className: "muted" }, "This file is private to its author."),
+          ]);
+        }
+        const aiToggle = el("input", { type: "checkbox" });
+        aiToggle.checked = link.use_for_ai !== false;
+        aiToggle.addEventListener("change", async () => {
+          try {
+            await api(`/dynamics/${dynamicId}/context/${link.id}`, {
+              method: "PATCH",
+              body: JSON.stringify({ use_for_ai: aiToggle.checked }),
+            });
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+            aiToggle.checked = !aiToggle.checked;
+          }
+        });
+        const visibleToggle = el("input", { type: "checkbox" });
+        visibleToggle.checked = link.partner_visible !== false;
+        visibleToggle.addEventListener("change", async () => {
+          try {
+            await api(`/dynamics/${dynamicId}/context/${link.id}`, {
+              method: "PATCH",
+              body: JSON.stringify({ partner_visible: visibleToggle.checked }),
+            });
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+            visibleToggle.checked = !visibleToggle.checked;
+          }
+        });
+        return el("div", { className: "card stack" }, [
+          el("div", { className: "row wrap" }, [
+            el("strong", {}, link.title),
+            el("span", { className: "pill" }, subLabel),
+          ]),
+          link.filename ? el("p", { className: "muted" }, link.filename) : null,
+          link.text_preview ? el("p", { className: "muted" }, link.text_preview) : null,
+          link.notes ? el("p", { className: "muted" }, link.notes) : null,
+          el("label", { className: "checkbox-label" }, [aiToggle, " Use for AI"]),
+          el("label", { className: "checkbox-label" }, [visibleToggle, " Visible to partner"]),
+          el("button", {
+            className: "ghost-btn",
+            onClick: async () => {
+              await api(`/dynamics/${dynamicId}/context/${link.id}`, { method: "DELETE" });
+              renderJournal(dynamicId);
+            },
+          }, "Remove"),
+        ]);
+      }
+
+      const subjectOrder = [
+        ["stories", "Stories"],
+        ["scenes", "Scenes"],
+        ["journals", "Library notes"],
+        ["other", "Other"],
+      ];
+      subjectOrder.forEach(([id, label]) => {
+        const items = (contextLinks || []).filter((link) => (link.subject || link.category) === id);
+        list.appendChild(collapsible(label, items.length, items.map(paintContextCard)));
+      });
+
+      const libTitle = el("input", { placeholder: "Title" });
+      const libBody = el("textarea", { placeholder: "Paste text, or upload a file", rows: "4" });
+      const libSubject = el("select");
+      (categories || []).forEach((cat) => {
+        libSubject.appendChild(el("option", { value: cat.id }, cat.label));
+      });
+      const libAi = el("input", { type: "checkbox", checked: true });
+      const libVisible = el("input", { type: "checkbox", checked: true });
+      const libFile = el("input", { type: "file", className: "hidden" });
+      list.appendChild(collapsible("Add to library", "+", [
+        el("div", { className: "card stack" }, [
+          el("label", {}, ["Subject", libSubject]),
+          el("label", {}, ["Title", libTitle]),
+          el("label", {}, ["Paste text", libBody]),
+          el("label", { className: "checkbox-label" }, [libAi, " Use for AI"]),
+          el("label", { className: "checkbox-label" }, [libVisible, " Visible to partner"]),
+          el("div", { className: "row wrap" }, [
+            el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: () => libFile.click(),
+            }, "Upload file"),
+            el("button", {
+              className: "primary-btn",
+              type: "button",
+              onClick: async () => {
+                error.classList.add("hidden");
+                try {
+                  if (!libTitle.value.trim() && !libBody.value.trim()) {
+                    throw new Error("Add a title and paste text, or upload a file.");
+                  }
+                  await api(`/dynamics/${dynamicId}/context`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      subject: libSubject.value,
+                      title: libTitle.value.trim() || "Pasted note",
+                      text_content: libBody.value,
+                      notes: "",
+                      use_for_ai: libAi.checked,
+                      partner_visible: libVisible.checked,
+                    }),
+                  });
+                  renderJournal(dynamicId);
+                } catch (err) {
+                  error.textContent = err.message;
+                  error.classList.remove("hidden");
+                }
+              },
+            }, "Save pasted text"),
+          ]),
+          libFile,
+        ]),
+      ]));
+      libFile.addEventListener("change", async () => {
+        const file = libFile.files?.[0];
+        if (!file) return;
+        const body = new FormData();
+        body.append("file", file);
+        body.append("subject", libSubject.value);
+        body.append("title", libTitle.value || file.name || "Upload");
+        body.append("notes", "");
+        body.append("use_for_ai", libAi.checked ? "true" : "false");
+        body.append("partner_visible", libVisible.checked ? "true" : "false");
+        try {
+          const token = state.token;
+          const res = await fetch(`${API}/dynamics/${dynamicId}/context/upload`, {
+            method: "POST",
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            body,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || data.message || "Upload failed");
+          renderJournal(dynamicId);
+        } catch (err) {
+          error.textContent = err.message;
+          error.classList.remove("hidden");
+        } finally {
+          libFile.value = "";
+        }
+      });
+
       const stack = el("div", { className: "stack" }, [
         buildHubHeader(dynamicId, "Journal", {
-          subtitle: "Private writing with optional AI assist.",
+          subtitle: "Entries, stories, scenes, and files — collapsed by subject.",
           sectionFilter: "tracking",
         }),
         status,
@@ -9944,23 +12270,21 @@ function renderJournal(dynamicId) {
           el("label", {}, ["Entry", jBody]),
           el("label", { className: "checkbox-label" }, [jAi, " Use for AI"]),
           el("label", { className: "checkbox-label" }, [jVisible, " Visible to partner"]),
-          el("div", { className: "row wrap" }, [contextToggleBtn]),
-          contextMenu,
           el("label", {}, ["Assist prompt (optional)", assistPrompt]),
           el("div", { className: "row wrap" }, [
             el("button", {
-              className: "ghost-btn",
+              className: "ghost-btn ai-only",
+              "data-ai-label": "Journal assist writes or expands an entry using your shared AI context.",
               type: "button",
               onClick: async () => {
                 error.classList.add("hidden");
                 try {
                   if (!assistPrompt.value.trim()) throw new Error("Enter an assist prompt first.");
-                  const res = await api(`/dynamics/${dynamicId}/journal/assist`, {
+                      const res = await api(`/dynamics/${dynamicId}/journal/assist`, {
                     method: "POST",
                     body: JSON.stringify({
                       prompt: assistPrompt.value.trim(),
                       draft: jBody.value,
-                      context_flags: contextFlags,
                     }),
                   });
                   if (res.text) jBody.value = res.text;
@@ -10767,47 +13091,16 @@ function renderFeelings(dynamicId) {
       }
 
       const settingsCard = el("div", { className: "card stack" });
-      if (you?.role === "dominant") {
-        const mode = el("select");
-        [
-          ["soft", "Soft reminders"],
-          ["hard", "Hard gates where it makes sense"],
-        ].forEach(([v, l]) => {
-          const o = el("option", { value: v }, l);
-          if (v === (statusInfo.prompt_mode || "soft")) o.selected = true;
-          mode.appendChild(o);
-        });
-        const eod = el("input", { type: "checkbox" });
-        eod.checked = !!statusInfo.require_end_of_day;
-        settingsCard.append(
-          el("h2", {}, "Feelings prompts"),
-          el("label", {}, ["Mode", mode]),
-          el("label", { className: "checkbox-label" }, [eod, " Nudge for end-of-day check-in"]),
-          el(
-            "button",
-            {
-              className: "ghost-btn",
-              type: "button",
-              onClick: async () => {
-                try {
-                  await api(`/dynamics/${dynamicId}/feelings/settings`, {
-                    method: "PUT",
-                    body: JSON.stringify({
-                      prompt_mode: mode.value,
-                      require_end_of_day: eod.checked,
-                    }),
-                  });
-                  renderFeelings(dynamicId);
-                } catch (err) {
-                  error.textContent = err.message;
-                  error.classList.remove("hidden");
-                }
-              },
-            },
-            "Save prompt settings"
-          )
-        );
-      } else if (statusInfo.needs_end_of_day) {
+      settingsCard.append(
+        el("h2", {}, "Feelings notifications"),
+        el("p", { className: "muted" }, "After-play prompts, return overlay, and end-of-day reminders live in Settings."),
+        el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: () => navigate(`/settings?dynamic=${encodeURIComponent(dynamicId)}&focus=feelings`),
+        }, "Open Feelings notifications")
+      );
+      if (you?.role !== "dominant" && statusInfo.needs_end_of_day) {
         settingsCard.appendChild(
           el("p", { className: "muted" }, "Reminder: log end-of-day feelings when you can.")
         );
@@ -10922,7 +13215,7 @@ function renderFeelings(dynamicId) {
                       chastity_lockup_id: chastityLockupId,
                     }),
                   });
-                  renderFeelings(dynamicId);
+                  navigate(`/dynamic/${dynamicId}/feelings`, { skipInbox: true });
                 } catch (err) {
                   error.textContent = err.message;
                   error.classList.remove("hidden");
@@ -11505,10 +13798,10 @@ function renderOrgasmPriorHistory(dynamicId) {
             const payload = {
               for_membership_id: partnerSelect.value,
               event_type: eventType.value,
-              occurred_at: new Date(occurred.value).toISOString(),
+              occurred_at: datetimeLocalToIso(occurred.value),
               notes: notes.value,
             };
-            if (ended.value) payload.ended_at = new Date(ended.value).toISOString();
+            if (ended.value) payload.ended_at = datetimeLocalToIso(ended.value);
             if (eventType.value === "orgasm") {
               const tags = orgasmTags.getTags();
               if (!tags.length) throw new Error("Add at least one orgasm tag.");
@@ -12529,8 +14822,8 @@ function renderChastityPriorHistory(dynamicId) {
                 method: "POST",
                 body: JSON.stringify({
                   for_membership_id: histSub.value,
-                  started_at: new Date(startInput.value).toISOString(),
-                  ended_at: new Date(endInput.value).toISOString(),
+                  started_at: datetimeLocalToIso(startInput.value),
+                  ended_at: datetimeLocalToIso(endInput.value),
                   note: noteInput.value,
                   tags: histTags.getTags(),
                 }),
@@ -13019,7 +15312,8 @@ function renderActs(dynamicId) {
         stack.appendChild(el("div", { className: "card" }, [
           el("p", {}, "Both interviews are done. Generate act types from what you shared."),
           el("button", {
-            className: "primary-btn",
+            className: "primary-btn ai-only",
+            "data-ai-label": "Generates act types from your interviews.",
             type: "button",
             onClick: async () => {
               error.classList.add("hidden");
@@ -13554,8 +15848,8 @@ function renderSleep(dynamicId) {
               await api(`/dynamics/${dynamicId}/sleep`, {
                 method: "POST",
                 body: JSON.stringify({
-                  start_at: new Date(startInput.value).toISOString(),
-                  end_at: new Date(endInput.value).toISOString(),
+                  start_at: datetimeLocalToIso(startInput.value),
+                  end_at: datetimeLocalToIso(endInput.value),
                   sleep_score: scoreInput.value ? Number(scoreInput.value) : null,
                   notes: notesInput.value,
                 }),
@@ -13925,7 +16219,8 @@ function renderManga(dynamicId) {
         warn,
         error,
         el("button", {
-          className: "primary-btn",
+          className: "primary-btn ai-only",
+          "data-ai-label": "Monthly manga needs AI for script and images.",
           type: "button",
           onClick: async () => {
             error.classList.add("hidden");
@@ -14327,17 +16622,22 @@ function renderVault(dynamicId) {
   async function paint(images) {
     const error = el("div", { className: "error hidden" });
     const grid = el("div", { className: "vault-grid" });
-    const fileInput = el("input", { type: "file", accept: "image/*", className: "hidden" });
+    const fileInput = el("input", { type: "file", accept: "image/*,video/*", className: "hidden" });
     const cameraInput = el("input", {
       type: "file",
       accept: "image/*",
       capture: "environment",
       className: "hidden",
     });
+    const videoInput = el("input", {
+      type: "file",
+      accept: "video/*",
+      className: "hidden",
+    });
     let highlightCard = null;
 
     if (!images.length) {
-      grid.appendChild(el("p", { className: "muted" }, "No images yet. Chat photos are saved here encrypted, or upload below."));
+      grid.appendChild(el("p", { className: "muted" }, "No photos or clips yet. Chat media is saved here encrypted, or upload below."));
     }
 
     for (const image of images) {
@@ -14351,6 +16651,18 @@ function renderVault(dynamicId) {
       if (isHighlight) highlightCard = card;
       if (!decrypted) {
         card.appendChild(el("p", { className: "muted" }, "Encrypted — set up the chat E2E key in Settings to view."));
+      } else if (isVideoSrc(decrypted, image.media_kind)) {
+        const vid = el("video", {
+          className: `vault-image ${image.image_blurred && !revealed.has(image.id) ? "blurred" : ""}`,
+          src: decrypted,
+          controls: "true",
+          playsinline: "true",
+          preload: "metadata",
+        });
+        if (image.image_blurred) {
+          attachBlurReveal(vid, { id: image.id, revealedSet: revealed });
+        }
+        card.appendChild(vid);
       } else {
         const img = el("img", {
           className: `vault-image ${image.image_blurred && !revealed.has(image.id) ? "blurred" : ""}`,
@@ -14397,6 +16709,11 @@ function renderVault(dynamicId) {
 
     async function uploadVaultFile(file) {
       if (!file) return;
+      if (file.size > 12 * 1024 * 1024) {
+        error.textContent = "Clip is too large (max 12 MB). Try a shorter recording.";
+        error.classList.remove("hidden");
+        return;
+      }
       error.classList.add("hidden");
       try {
         await ensureChatCryptoKey(dynamicId, { createIfMissing: false });
@@ -14405,9 +16722,10 @@ function renderVault(dynamicId) {
         await api(`/dynamics/${dynamicId}/vault`, {
           method: "POST",
           body: JSON.stringify({
-            title: file.name || "Upload",
+            title: file.name || (isVideoFile(file) ? "Video" : "Upload"),
             image_encrypted: encrypted,
             image_blurred: localStorage.getItem(chatBlurStorage()) !== "false",
+            media_kind: mediaKindFromFile(file),
           }),
         });
         load();
@@ -14427,27 +16745,39 @@ function renderVault(dynamicId) {
       cameraInput.value = "";
       await uploadVaultFile(file);
     });
+    videoInput.addEventListener("change", async () => {
+      const file = videoInput.files?.[0];
+      videoInput.value = "";
+      await uploadVaultFile(file);
+    });
 
     setViewContent(el("div", { className: "stack" }, [
       el("h1", {}, "Image vault"),
-      el("p", { className: "muted" }, "Private images from chat. Any partner can delete an image; deletions are logged in chat. Blur reveal follows Chat settings (hold / 5s / session). When Encrypted chat is on, images use the shared chat key."),
+      el("p", { className: "muted" }, "Private photos and clips from chat. Any partner can delete an item; deletions are logged in chat. Blur reveal follows Chat settings (hold / 5s / session). When Encrypted chat is on, media uses the shared chat key."),
       el("div", { className: "row wrap" }, [
         el("button", {
           className: "primary-btn",
           type: "button",
           onClick: () => openInAppCamera({
             onCapture: (file) => uploadVaultFile(file),
-            onFallback: () => cameraInput.click(),
           }),
         }, "Take photo"),
         el("button", {
           className: "ghost-btn",
           type: "button",
+          onClick: () => openInAppRecorder({
+            onCapture: (file) => uploadVaultFile(file),
+          }),
+        }, "Record video"),
+        el("button", {
+          className: "ghost-btn",
+          type: "button",
           onClick: () => fileInput.click(),
-        }, "Upload image"),
+        }, "Upload"),
       ]),
       fileInput,
       cameraInput,
+      videoInput,
       grid,
       error,
       el("button", {
@@ -14472,51 +16802,278 @@ function renderVault(dynamicId) {
   load();
 }
 
-/**
- * In-app photo capture using getUserMedia — avoids handing off to the OS camera app.
- * Falls back to onFallback() (typically a native file input with capture=environment)
- * when getUserMedia is unavailable, denied, or errors out.
- */
-async function openInAppCamera({ onCapture, onFallback } = {}) {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    if (onFallback) onFallback();
-    return;
-  }
-  let stream;
+async function nativeMediaPlugin() {
+  return nativePlugin("UbetraMedia");
+}
+
+function permLabel(state) {
+  const s = String(state || "").toLowerCase();
+  if (s === "granted") return "Allowed";
+  if (s === "denied") return "Blocked";
+  return "Not asked yet";
+}
+
+async function ensureNativeMediaPermissions({ video = true, audio = false } = {}) {
+  const plugin = await nativeMediaPlugin();
+  if (!plugin?.requestPermissions) return { camera: "prompt", microphone: "prompt" };
+  let status = {};
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
-      audio: false,
-    });
+    status = await plugin.checkPermissions();
   } catch {
-    if (onFallback) onFallback();
-    return;
+    status = {};
+  }
+  const camOk = !video || String(status.camera || "").toLowerCase() === "granted";
+  const micOk = !audio || String(status.microphone || "").toLowerCase() === "granted";
+  if (camOk && micOk) return status;
+  try {
+    status = await plugin.requestPermissions();
+  } catch (err) {
+    throw new Error(err?.message || "Allow Camera and Microphone for UBETRA in Android settings.");
+  }
+  if (video && String(status.camera || "").toLowerCase() === "denied") {
+    throw new Error("Camera is blocked. Open Settings → Permissions and allow Camera, then try again.");
+  }
+  if (audio && String(status.microphone || "").toLowerCase() === "denied") {
+    throw new Error("Microphone is blocked. Open Settings → Permissions and allow Microphone, then try again.");
+  }
+  return status;
+}
+
+async function listVideoInputs() {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return devices.filter((d) => d.kind === "videoinput");
+}
+
+function cameraChoiceFromDevice(device, index) {
+  const label = String(device.label || "").toLowerCase();
+  if (label.includes("back") || label.includes("rear") || label.includes("environment")) return "environment";
+  if (label.includes("front") || label.includes("user") || label.includes("face")) return "user";
+  return index === 0 ? "user" : "environment";
+}
+
+async function applyTorch(track, on, level = 1) {
+  const want = !!on && Number(level) > 0;
+  const strength = Math.max(0, Math.min(1, Number(level) || (want ? 1 : 0)));
+  if (track?.applyConstraints) {
+    try {
+      const caps = track.getCapabilities?.() || {};
+      if (caps.torch) {
+        await track.applyConstraints({ advanced: [{ torch: want }] });
+        return { ok: true, dimSupported: false };
+      }
+    } catch {
+      /* fall through to native */
+    }
+  }
+  const plugin = await nativeMediaPlugin();
+  if (plugin?.setTorch) {
+    try {
+      return await plugin.setTorch({ on: want, level: strength });
+    } catch (err) {
+      if (want) showToast(err?.message || "Flashlight is not available on this camera.");
+      return { ok: false };
+    }
+  }
+  if (want) showToast("Flashlight needs the Android app, or a rear camera that supports torch.");
+  return { ok: false };
+}
+
+async function requestUserMedia({ video = true, audio = false, preferFacing = "user", deviceId = "" } = {}) {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("This browser cannot open the camera in-app. Use HTTPS (or the installed app) and allow camera access.");
+  }
+  await ensureNativeMediaPermissions({ video: !!video, audio: !!audio });
+  const videoTries = [];
+  if (deviceId) videoTries.push({ deviceId: { exact: deviceId } });
+  if (preferFacing) videoTries.push({ facingMode: { exact: preferFacing } });
+  if (preferFacing) videoTries.push({ facingMode: { ideal: preferFacing } });
+  videoTries.push({ facingMode: "user" }, { facingMode: "environment" }, true);
+  let lastErr = null;
+  for (const videoConstraint of videoTries) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        video: video ? videoConstraint : false,
+        audio,
+      });
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (audio) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: !!video, audio: false });
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  const name = lastErr?.name || "";
+  if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+    throw new Error("Camera permission was blocked. Allow camera (and mic for video) in Settings → Permissions, then try again.");
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    throw new Error("No camera was found on this device.");
+  }
+  throw new Error(lastErr?.message || "Could not open the camera.");
+}
+
+function bindVideoEl(video, stream) {
+  video.setAttribute("playsinline", "");
+  video.setAttribute("webkit-playsinline", "");
+  video.playsInline = true;
+  video.muted = true;
+  video.autoplay = true;
+  video.srcObject = stream;
+  video.play?.().catch(() => {});
+}
+
+function attachCameraSwitcher({ getStream, setStream, audio = false, host, includeTorch = true }) {
+  const flipBtn = el("button", { type: "button", className: "ghost-btn" }, "Flip camera");
+  const camSelect = el("select", { className: "camera-select" });
+  const torchBtn = el("button", { type: "button", className: "ghost-btn" }, "Flash");
+  const torchSlider = el("input", {
+    type: "range",
+    min: "0",
+    max: "100",
+    value: "0",
+    className: "torch-slider",
+    title: "Flash brightness",
+  });
+  const row = el("div", { className: "row wrap camera-toolbar" }, [flipBtn, camSelect, torchBtn, torchSlider]);
+  host.appendChild(row);
+  let facing = "environment";
+  let torchOn = false;
+
+  async function refreshList() {
+    const devices = await listVideoInputs().catch(() => []);
+    const currentId = getStream()?.getVideoTracks()?.[0]?.getSettings?.()?.deviceId || "";
+    camSelect.replaceChildren();
+    if (!devices.length) {
+      camSelect.append(el("option", { value: "user" }, "Front camera"), el("option", { value: "environment" }, "Rear camera"));
+      camSelect.value = facing;
+      return;
+    }
+    devices.forEach((device, index) => {
+      const kind = cameraChoiceFromDevice(device, index);
+      const opt = el(
+        "option",
+        { value: device.deviceId },
+        device.label || (kind === "environment" ? `Rear camera ${index + 1}` : `Front camera ${index + 1}`)
+      );
+      if (device.deviceId === currentId) opt.selected = true;
+      camSelect.appendChild(opt);
+    });
   }
 
-  const video = el("video", { autoplay: true, playsinline: true, muted: true, className: "in-app-camera-video" });
-  video.srcObject = stream;
-  const captureBtn = el("button", { type: "button", className: "primary-btn" }, "📷 Capture");
+  async function switchTo({ deviceId = "", nextFacing = "" } = {}) {
+    const stream = getStream();
+    const wantAudio = !!(audio || stream?.getAudioTracks()?.length);
+    const fresh = await requestUserMedia({
+      video: true,
+      audio: wantAudio,
+      preferFacing: nextFacing || facing,
+      deviceId,
+    });
+    stream?.getTracks().forEach((track) => track.stop());
+    setStream(fresh);
+    if (nextFacing) facing = nextFacing;
+    await refreshList();
+    if (torchOn) await applyTorch(fresh.getVideoTracks()[0], true, Number(torchSlider.value) / 100 || 1);
+    return fresh;
+  }
+
+  flipBtn.addEventListener("click", async () => {
+    facing = facing === "environment" ? "user" : "environment";
+    try {
+      await switchTo({ nextFacing: facing });
+    } catch (err) {
+      showToast(err.message || "Could not switch camera");
+    }
+  });
+  camSelect.addEventListener("change", async () => {
+    const value = camSelect.value;
+    const nextFacing = value === "user" || value === "environment" ? value : "";
+    try {
+      await switchTo({ deviceId: nextFacing ? "" : value, nextFacing });
+    } catch (err) {
+      showToast(err.message || "Could not switch camera");
+    }
+  });
+  async function setFlash(on, level) {
+    torchOn = !!on && level > 0;
+    torchSlider.value = String(Math.round((torchOn ? level : 0) * 100));
+    torchBtn.textContent = torchOn ? "Flash on" : "Flash";
+    torchBtn.classList.toggle("active", torchOn);
+    await applyTorch(getStream()?.getVideoTracks()?.[0], torchOn, level);
+  }
+  torchBtn.addEventListener("click", async () => {
+    const next = !torchOn;
+    await setFlash(next, next ? (Number(torchSlider.value) / 100 || 1) : 0);
+  });
+  torchSlider.addEventListener("input", async () => {
+    const level = Number(torchSlider.value) / 100;
+    await setFlash(level > 0, level);
+  });
+  if (!includeTorch) {
+    torchBtn.classList.add("hidden");
+    torchSlider.classList.add("hidden");
+  }
+  refreshList().catch(() => {});
+  return { refreshList, switchTo, setFlash, row };
+}
+
+/**
+ * In-app photo capture using getUserMedia — never hands off to the gallery.
+ */
+async function openInAppCamera({ onCapture } = {}) {
+  const video = el("video", { className: "in-app-camera-video" });
+  const status = el("p", { className: "muted" }, "Starting camera…");
+  const captureBtn = el("button", { type: "button", className: "primary-btn", disabled: "true" }, "📷 Capture");
   const cancelBtn = el("button", { type: "button", className: "ghost-btn" }, "Cancel");
+  const tools = el("div", { className: "stack" });
   const backdrop = el("div", { className: "modal-backdrop in-app-camera-modal" });
   const card = el("div", { className: "card stack in-app-camera-card" }, [
     video,
+    status,
+    tools,
     el("div", { className: "row wrap" }, [captureBtn, cancelBtn]),
   ]);
   backdrop.appendChild(card);
   document.body.appendChild(backdrop);
 
+  let stream = null;
   let done = false;
   function cleanup() {
     if (done) return;
     done = true;
-    stream.getTracks().forEach((track) => track.stop());
+    stream?.getTracks().forEach((track) => track.stop());
     backdrop.remove();
   }
-
   cancelBtn.addEventListener("click", cleanup);
   backdrop.addEventListener("click", (ev) => {
     if (ev.target === backdrop) cleanup();
   });
+
+  try {
+    stream = await requestUserMedia({ video: true, audio: false, preferFacing: "environment" });
+    bindVideoEl(video, stream);
+    status.textContent = "Line up the shot, then capture. Flip or pick a camera if you need the other one.";
+    captureBtn.disabled = false;
+    attachCameraSwitcher({
+      getStream: () => stream,
+      setStream: (next) => {
+        stream = next;
+        bindVideoEl(video, next);
+      },
+      host: tools,
+      includeTorch: true,
+    });
+  } catch (err) {
+    status.textContent = err.message || "Could not open the camera.";
+    status.classList.add("error");
+    status.classList.remove("muted");
+    return;
+  }
 
   captureBtn.addEventListener("click", () => {
     const canvas = document.createElement("canvas");
@@ -14531,6 +17088,1037 @@ async function openInAppCamera({ onCapture, onFallback } = {}) {
       if (onCapture) onCapture(file);
     }, "image/jpeg", 0.92);
   });
+}
+
+function isVideoFile(file) {
+  return !!file && String(file.type || "").startsWith("video/");
+}
+
+function isVideoSrc(src, mediaKind) {
+  if (mediaKind === "video") return true;
+  const s = String(src || "");
+  return s.startsWith("data:video") || /video\/(webm|mp4|ogg|quicktime)/i.test(s);
+}
+
+function mediaKindFromFile(file) {
+  return isVideoFile(file) ? "video" : "image";
+}
+
+function pickRecorderMime() {
+  const types = [
+    "video/webm;codecs=vp8,opus",
+    "video/webm;codecs=vp9,opus",
+    "video/webm",
+    "video/mp4",
+  ];
+  for (const type of types) {
+    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return "";
+}
+
+async function openInAppRecorder({ onCapture, maxSeconds = 12 } = {}) {
+  const video = el("video", { className: "in-app-camera-video" });
+  const timerEl = el("p", { className: "muted" }, "Starting camera…");
+  const recordBtn = el("button", { type: "button", className: "primary-btn", disabled: "true" }, "● Record");
+  const cancelBtn = el("button", { type: "button", className: "ghost-btn" }, "Cancel");
+  const tools = el("div", { className: "stack" });
+  const backdrop = el("div", { className: "modal-backdrop in-app-camera-modal" });
+  const card = el("div", { className: "card stack in-app-camera-card" }, [
+    video,
+    timerEl,
+    tools,
+    el("div", { className: "row wrap" }, [recordBtn, cancelBtn]),
+  ]);
+  backdrop.appendChild(card);
+  document.body.appendChild(backdrop);
+
+  let stream = null;
+  let recorder = null;
+  let chunks = [];
+  let tick = null;
+  let startedAt = 0;
+  let done = false;
+
+  function cleanup() {
+    if (done) return;
+    done = true;
+    if (tick) clearInterval(tick);
+    try { recorder?.stop(); } catch { /* ignore */ }
+    stream?.getTracks().forEach((track) => track.stop());
+    backdrop.remove();
+  }
+
+  cancelBtn.addEventListener("click", cleanup);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop && !recorder) cleanup();
+  });
+
+  if (typeof MediaRecorder === "undefined") {
+    timerEl.textContent = "This browser cannot record video in-app. Try Chrome, or the installed app.";
+    timerEl.classList.add("error");
+    timerEl.classList.remove("muted");
+    return;
+  }
+
+  try {
+    stream = await requestUserMedia({ video: true, audio: true, preferFacing: "user" });
+    bindVideoEl(video, stream);
+    timerEl.textContent = `Tap record — max ${maxSeconds}s. Flip camera if you need the other one.`;
+    recordBtn.disabled = false;
+    attachCameraSwitcher({
+      getStream: () => stream,
+      setStream: (next) => {
+        stream = next;
+        bindVideoEl(video, next);
+      },
+      audio: true,
+      host: tools,
+      includeTorch: true,
+    });
+  } catch (err) {
+    timerEl.textContent = err.message || "Could not open the camera.";
+    timerEl.classList.add("error");
+    timerEl.classList.remove("muted");
+    return;
+  }
+
+  const mime = pickRecorderMime();
+  recordBtn.addEventListener("click", () => {
+    if (recorder) return;
+    chunks = [];
+    try {
+      recorder = mime
+        ? new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 600000 })
+        : new MediaRecorder(stream);
+    } catch (err) {
+      timerEl.textContent = err.message || "Could not start the recorder.";
+      timerEl.classList.add("error");
+      return;
+    }
+    recorder.ondataavailable = (ev) => {
+      if (ev.data && ev.data.size) chunks.push(ev.data);
+    };
+    recorder.onstop = () => {
+      const type = recorder.mimeType || mime || "video/webm";
+      const blob = new Blob(chunks, { type });
+      const ext = type.includes("mp4") ? "mp4" : "webm";
+      const file = new File([blob], `clip-${Date.now()}.${ext}`, { type });
+      cleanup();
+      if (onCapture && blob.size) onCapture(file);
+    };
+    recorder.start(200);
+    startedAt = Date.now();
+    recordBtn.disabled = true;
+    recordBtn.textContent = "Recording…";
+    tick = setInterval(() => {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      timerEl.textContent = `${elapsed}s / ${maxSeconds}s`;
+      if (elapsed >= maxSeconds) {
+        try { recorder.stop(); } catch { /* ignore */ }
+      }
+    }, 250);
+  });
+}
+
+let videoCallCtl = null;
+let incomingCallCtl = null;
+let videoWatchTimer = null;
+
+function startVideoCallWatcher() {
+  if (videoWatchTimer) return;
+  videoWatchTimer = setInterval(() => {
+    pollIncomingVideoCall().catch(() => {});
+  }, 2000);
+  pollIncomingVideoCall().catch(() => {});
+}
+
+function stopVideoCallWatcher() {
+  if (videoWatchTimer) {
+    clearInterval(videoWatchTimer);
+    videoWatchTimer = null;
+  }
+}
+
+async function pollIncomingVideoCall() {
+  if (!state.token) return;
+  const dynamicId = getActiveDynamicId();
+  if (!dynamicId) return;
+  const live = await api(`/dynamics/${dynamicId}/instructor/live`).catch(() => null);
+  const instructorLive = !!(live?.session_id && !live.force_end);
+  const data = await api(`/dynamics/${dynamicId}/video/call`).catch(() => null);
+  const call = data?.call;
+  if (!call || call.status === "ended") {
+    if (incomingCallCtl && incomingCallCtl.callId !== call?.id) hideIncomingVideoCall();
+    return;
+  }
+  if (window.UbetraInstructor?.isOpen?.()) {
+    window.UbetraInstructor.handleIncomingCall?.(dynamicId, call);
+    return;
+  }
+  if (videoCallCtl) return;
+  const demandCam = !!call.controls?.demand_camera;
+  if (instructorLive && !demandCam) return;
+  if (call.status === "active" || (call.status === "ringing" && call.you_are_caller)) {
+    hideIncomingVideoCall();
+    await joinVideoCall(dynamicId, call, { isCaller: !!call.you_are_caller, alreadyAccepted: call.status === "active" });
+    return;
+  }
+  if (call.status === "ringing" && !call.you_are_caller) {
+    const auto = await maybeAutoAcceptVideoCall(dynamicId, call);
+    if (!auto) showIncomingVideoCall(dynamicId, call);
+  }
+}
+
+async function maybeAutoAcceptVideoCall(dynamicId, call) {
+  if (!call?.controls?.demand_camera) return false;
+  try {
+    await ensureNativeMediaPermissions({ video: true, audio: true });
+  } catch {
+    return false;
+  }
+  hideIncomingVideoCall();
+  await api(`/dynamics/${dynamicId}/video/calls/${call.id}/accept`, { method: "POST", body: "{}" });
+  await joinVideoCall(dynamicId, call, { isCaller: false, alreadyAccepted: true });
+  showToast("Keyholder turned your camera on");
+  return true;
+}
+
+function hideIncomingVideoCall() {
+  if (!incomingCallCtl) return;
+  incomingCallCtl.root.remove();
+  incomingCallCtl = null;
+}
+
+function showIncomingVideoCall(dynamicId, call) {
+  if (incomingCallCtl?.callId === call.id) return;
+  hideIncomingVideoCall();
+  const acceptBtn = el("button", { type: "button", className: "primary-btn" }, "Accept");
+  const declineBtn = el("button", { type: "button", className: "ghost-btn" }, "Decline");
+  const root = el("div", { className: "video-incoming", role: "dialog", "aria-label": "Incoming video call" }, [
+    el("div", { className: "card stack video-incoming-card" }, [
+      el("strong", {}, "Video call"),
+      el("p", {}, `${call.caller_name || "Partner"} is calling`),
+      call.controls?.demand_camera
+        ? el("p", { className: "muted" }, "Keyholder is turning your camera on. Allow camera and microphone if asked.")
+        : null,
+      el("div", { className: "row wrap" }, [
+        acceptBtn,
+        call.controls?.demand_camera ? null : declineBtn,
+      ]),
+    ]),
+  ]);
+  document.body.appendChild(root);
+  incomingCallCtl = { root, callId: call.id, dynamicId };
+  try { navigator.vibrate?.([300, 120, 300, 120, 300]); } catch { /* ignore */ }
+  acceptBtn.addEventListener("click", async () => {
+    hideIncomingVideoCall();
+    try {
+      await api(`/dynamics/${dynamicId}/video/calls/${call.id}/accept`, { method: "POST", body: "{}" });
+      await joinVideoCall(dynamicId, call, { isCaller: false, alreadyAccepted: true });
+    } catch (err) {
+      showToast(err.message || "Could not join call");
+    }
+  });
+  declineBtn.addEventListener("click", async () => {
+    hideIncomingVideoCall();
+    await api(`/dynamics/${dynamicId}/video/calls/${call.id}/end`, { method: "POST", body: "{}" }).catch(() => {});
+  });
+}
+
+async function startVideoCall(dynamicId, { demandCamera = false, embed } = {}) {
+  const call = await api(`/dynamics/${dynamicId}/video/calls`, {
+    method: "POST",
+    body: JSON.stringify({ demand_camera: !!demandCamera }),
+  });
+  return joinVideoCall(dynamicId, call, { isCaller: true, alreadyAccepted: false, embed });
+}
+
+function makeDraggablePip(node) {
+  let drag = null;
+  node.addEventListener("pointerdown", (ev) => {
+    if (ev.button && ev.button !== 0) return;
+    ev.stopPropagation();
+    ev.preventDefault();
+    node.setPointerCapture(ev.pointerId);
+    const r = node.getBoundingClientRect();
+    drag = { dx: ev.clientX - r.left, dy: ev.clientY - r.top };
+    node.classList.add("dragging");
+  });
+  node.addEventListener("pointermove", (ev) => {
+    if (!drag) return;
+    const parent = node.parentElement?.getBoundingClientRect?.();
+    if (!parent) return;
+    const w = node.offsetWidth;
+    const h = node.offsetHeight;
+    let left = ev.clientX - parent.left - drag.dx;
+    let top = ev.clientY - parent.top - drag.dy;
+    left = Math.max(0, Math.min(parent.width - w, left));
+    top = Math.max(0, Math.min(parent.height - h, top));
+    node.style.left = `${left}px`;
+    node.style.top = `${top}px`;
+    node.style.right = "auto";
+    node.style.bottom = "auto";
+  });
+  const end = () => {
+    drag = null;
+    node.classList.remove("dragging");
+  };
+  node.addEventListener("pointerup", end);
+  node.addEventListener("pointercancel", end);
+}
+
+function clientCanRunMlCensor() {
+  const cores = Number(navigator.hardwareConcurrency || 0);
+  try {
+    const c = document.createElement("canvas");
+    const gl = c.getContext("webgl2") || c.getContext("webgl");
+    return cores >= 4 && !!gl;
+  } catch {
+    return false;
+  }
+}
+
+async function loadNsfwModel() {
+  if (window.__ubetraNsfw) return window.__ubetraNsfw;
+  const loadScript = (src) => new Promise((resolve, reject) => {
+    const existing = [...document.scripts].some((s) => s.src.includes(src.split("/").pop()));
+    if (existing) return resolve();
+    const s = document.createElement("script");
+    s.src = src;
+    s.async = true;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("Could not load censor model"));
+    document.head.appendChild(s);
+  });
+  if (!window.tf) {
+    await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js");
+  }
+  if (!window.nsfwjs) {
+    await loadScript("https://cdn.jsdelivr.net/npm/nsfwjs@2.4.2/dist/nsfwjs.min.js");
+  }
+  window.__ubetraNsfw = await window.nsfwjs.load();
+  return window.__ubetraNsfw;
+}
+
+function startDisplayCensor(sourceEl, { enabledFn, sourceFn } = {}) {
+  const canvas = el("canvas", { className: "video-censor-overlay" });
+  const ctx = canvas.getContext("2d");
+  let raf = 0;
+  let running = true;
+  let model = null;
+  let lastClass = "";
+  let lastCheck = 0;
+  loadNsfwModel().then((m) => { model = m; }).catch(() => { model = false; });
+  function currentSource() {
+    return (typeof sourceFn === "function" ? sourceFn() : sourceEl) || sourceEl;
+  }
+  function paintBlur(src) {
+    const w = src.videoWidth || src.width || canvas.width || 640;
+    const h = src.videoHeight || src.height || canvas.height || 480;
+    if (!w || !h) return;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    ctx.filter = "blur(28px)";
+    ctx.drawImage(src, 0, 0, w, h);
+    ctx.filter = "none";
+    ctx.fillStyle = "rgba(12, 8, 10, 0.18)";
+    ctx.fillRect(0, 0, w, h);
+  }
+  async function tick(now) {
+    if (!running) return;
+    const on = !enabledFn || enabledFn();
+    const src = currentSource();
+    canvas.classList.toggle("hidden", !on);
+    if (on && src) {
+      if (model && now - lastCheck > 450) {
+        lastCheck = now;
+        try {
+          const preds = await model.classify(src, 4);
+          const hot = (preds || []).some((p) => (
+            ["Porn", "Sexy", "Hentai"].includes(p.className) && p.probability > 0.45
+          ));
+          lastClass = hot ? "nsfw" : "safe";
+        } catch {
+          lastClass = lastClass || "nsfw";
+        }
+      }
+      if (model === false || lastClass === "nsfw") paintBlur(src);
+      else if (model && lastClass === "safe") {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+    raf = requestAnimationFrame(tick);
+  }
+  raf = requestAnimationFrame(tick);
+  return {
+    canvas,
+    stop() {
+      running = false;
+      if (raf) cancelAnimationFrame(raf);
+      canvas.remove();
+    },
+  };
+}
+
+async function currentMlCensorMode(dynamicId) {
+  try {
+    const policy = await api(`/dynamics/${dynamicId}/policy`);
+    return (policy?.ml_censor_mode || "off").toLowerCase();
+  } catch {
+    return "off";
+  }
+}
+
+function shouldEnableSubCensor(mode) {
+  if (mode === "off") return false;
+  if (mode === "client" || mode === "cuda") return true;
+  return clientCanRunMlCensor();
+}
+
+function startSensorCanvas(videoEl, enabledFn) {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const tmp = document.createElement("canvas");
+  const tctx = tmp.getContext("2d");
+  let raf = 0;
+  let running = true;
+  function blurBand(w, h, y, bandH) {
+    tmp.width = w;
+    tmp.height = Math.max(1, bandH);
+    tctx.drawImage(videoEl, 0, -y, w, h);
+    ctx.filter = "blur(24px)";
+    ctx.drawImage(tmp, 0, y, w, bandH);
+    ctx.filter = "none";
+    ctx.fillStyle = "rgba(18, 6, 10, 0.22)";
+    ctx.fillRect(0, y, w, bandH);
+  }
+  function draw() {
+    if (!running) return;
+    const w = videoEl.videoWidth || 640;
+    const h = videoEl.videoHeight || 480;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    ctx.filter = "none";
+    ctx.drawImage(videoEl, 0, 0, w, h);
+    if (enabledFn()) {
+      blurBand(w, h, Math.round(h * 0.22), Math.round(h * 0.28));
+      blurBand(w, h, Math.round(h * 0.55), Math.round(h * 0.32));
+    }
+    raf = requestAnimationFrame(draw);
+  }
+  draw();
+  return {
+    stream: canvas.captureStream(16),
+    stop() {
+      running = false;
+      if (raf) cancelAnimationFrame(raf);
+    },
+  };
+}
+
+async function replaceCallTracks(ctl, fresh) {
+  const vTrack = fresh.getVideoTracks()[0];
+  const aTrack = fresh.getAudioTracks()[0];
+  const vSender = ctl.pc.getSenders().find((s) => s.track?.kind === "video");
+  const aSender = ctl.pc.getSenders().find((s) => s.track?.kind === "audio");
+  if (vSender && vTrack) await vSender.replaceTrack(vTrack);
+  if (aSender && aTrack) await aSender.replaceTrack(aTrack);
+  ctl.rawStream?.getTracks().forEach((track) => {
+    if (track !== vTrack && track !== aTrack) track.stop();
+  });
+  ctl.rawStream = fresh;
+  if (ctl.localVideo) ctl.localVideo.srcObject = fresh;
+}
+
+async function switchCallCamera(ctl, choice) {
+  const preferFacing = choice === "user" || choice === "environment" ? choice : "user";
+  const deviceId = preferFacing === choice ? "" : choice;
+  const fresh = await requestUserMedia({
+    video: true,
+    audio: !ctl.embedded,
+    preferFacing,
+    deviceId,
+  });
+  await replaceCallTracks(ctl, fresh);
+  ctl.cameraFacing = choice;
+  if (ctl.torchOn) await applyTorch(fresh.getVideoTracks()[0], true, ctl.torchLevel || 1);
+  return fresh;
+}
+
+async function enableEmbeddedCamera(ctl, { deviceId = "", preferFacing = "user" } = {}) {
+  if (!ctl?.pc) return null;
+  const fresh = await requestUserMedia({
+    video: true,
+    audio: false,
+    preferFacing,
+    deviceId,
+  });
+  const track = fresh.getVideoTracks()[0];
+  if (!track) return null;
+  const sender = ctl.pc.getSenders().find((s) => !s.track || s.track.kind === "video");
+  if (sender) {
+    try { sender.track?.stop(); } catch { /* ignore */ }
+    await sender.replaceTrack(track);
+  } else {
+    ctl.pc.addTrack(track, fresh);
+  }
+  try {
+    ctl.pc.getTransceivers().forEach((t) => {
+      if (t.receiver?.track?.kind === "video" || t.sender === sender) t.direction = "sendrecv";
+    });
+  } catch { /* ignore */ }
+  ctl.rawStream?.getVideoTracks().forEach((old) => {
+    if (old !== track) old.stop();
+  });
+  ctl.rawStream = fresh;
+  if (ctl.localVideo) ctl.localVideo.srcObject = fresh;
+  ctl.cameraFacing = deviceId || preferFacing;
+  if (ctl.isCaller) {
+    const offer = await ctl.pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: false });
+    await ctl.pc.setLocalDescription(offer);
+    await api(`/dynamics/${ctl.dynamicId}/video/calls/${ctl.callId}/signals`, {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "offer",
+        payload: { type: ctl.pc.localDescription.type, sdp: ctl.pc.localDescription.sdp },
+      }),
+    });
+  }
+  return fresh;
+}
+
+async function setCallVideoEnabled(ctl, on) {
+  ctl?.rawStream?.getVideoTracks().forEach((t) => { t.enabled = !!on; });
+}
+
+async function joinVideoCall(dynamicId, call, { isCaller, alreadyAccepted, embed } = {}) {
+  if (videoCallCtl) return videoCallCtl;
+  hideIncomingVideoCall();
+
+  const embedded = !!embed?.remoteEl;
+  let stream;
+  try {
+    if (embedded && call.you_are_dominant) {
+      stream = new MediaStream();
+    } else {
+      stream = await requestUserMedia({
+        video: true,
+        audio: !embedded,
+        preferFacing: "user",
+      });
+    }
+  } catch {
+    showToast("Camera or microphone permission is needed for video call. Open Settings → Permissions if Android never asked.");
+    if (isCaller) {
+      await api(`/dynamics/${dynamicId}/video/calls/${call.id}/end`, { method: "POST", body: "{}" }).catch(() => {});
+    }
+    return;
+  }
+
+  const remoteVideo = embedded
+    ? embed.remoteEl
+    : el("video", { autoplay: "true", playsinline: "true", className: "video-call-remote" });
+  const localVideo = el("video", { autoplay: "true", playsinline: "true", muted: "true", className: "video-call-local" });
+  if (stream.getTracks().length) localVideo.srcObject = stream;
+  localVideo.muted = true;
+  localVideo.playsInline = true;
+  localVideo.autoplay = true;
+  remoteVideo.playsInline = true;
+  remoteVideo.autoplay = true;
+  localVideo.play?.().catch(() => {});
+  const statusEl = el("p", { className: "video-call-status" }, isCaller && !alreadyAccepted ? "Calling…" : "Connecting…");
+  const redCover = el("div", { className: "video-red-cover hidden" }, "RED LIGHT");
+  const hangBtn = el("button", { type: "button", className: "danger-btn video-hang-btn" }, "Hang up");
+  const muteBtn = el("button", { type: "button", className: "ghost-btn" }, "Mute");
+  const camBtn = el("button", { type: "button", className: "ghost-btn" }, "Camera off");
+  const flipBtn = el("button", { type: "button", className: "ghost-btn" }, "Flip");
+  const webBtn = el("button", { type: "button", className: "ghost-btn" }, "Instructor");
+  const chatInput = el("input", { type: "text", className: "video-call-chat-input", placeholder: "Chat…" });
+  const chatSend = el("button", { type: "button", className: "ghost-btn" }, "Send");
+  const chatLog = el("div", { className: "video-call-chat-log" });
+  const controlsBox = el("div", { className: "video-call-dom-controls hidden stack" });
+  const root = embedded
+    ? el("div", { className: "hidden" })
+    : el("div", { className: "video-call-overlay", role: "dialog", "aria-label": "Video call" }, [
+      el("div", { className: "video-call-stage" }, [remoteVideo, localVideo, redCover, statusEl]),
+      controlsBox,
+      chatLog,
+      el("div", { className: "video-call-bar" }, [
+        muteBtn, camBtn, flipBtn, webBtn, hangBtn,
+      ]),
+      el("form", { className: "video-call-chat" }, [chatInput, chatSend]),
+    ]);
+  if (!embedded) document.body.appendChild(root);
+
+  const pc = new RTCPeerConnection({ iceServers: call.ice_servers || [{ urls: "stun:stun.l.google.com:19302" }] });
+  if (embedded && call.you_are_dominant) {
+    pc.addTransceiver("video", { direction: "recvonly" });
+  }
+  stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+  pc.ontrack = (ev) => {
+    remoteVideo.srcObject = ev.streams[0] || new MediaStream([ev.track]);
+    remoteVideo.muted = true;
+    remoteVideo.play?.().catch(() => {});
+    statusEl.textContent = "Live";
+    embed?.onLive?.();
+  };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "connected") statusEl.textContent = "Live";
+    if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+      statusEl.textContent = "Connection lost";
+      setTimeout(() => {
+        if (videoCallCtl === ctl && (pc.connectionState === "failed" || pc.connectionState === "disconnected")) {
+          leaveVideoCall({ remote: false });
+        }
+      }, 1800);
+    }
+  };
+
+  const ctl = {
+    dynamicId,
+    callId: call.id,
+    youAreDominant: !!call.you_are_dominant,
+    isCaller: !!isCaller,
+    root,
+    pc,
+    rawStream: stream,
+    localVideo,
+    remoteVideo,
+    redCover,
+    statusEl,
+    chatLog,
+    chatInput,
+    controlsBox,
+    afterSignal: "",
+    pendingIce: [],
+    sensorOn: false,
+    sensorStop: null,
+    sensorVideo: null,
+    lastControls: "",
+    lastKioskUrl: "",
+    pollTimer: null,
+    chatTimer: null,
+    leaving: false,
+    camOff: false,
+    micOff: false,
+    cameraFacing: "user",
+    torchOn: false,
+    torchLevel: 0,
+    embedded,
+  };
+  videoCallCtl = ctl;
+  if (!embedded) makeDraggablePip(localVideo);
+  ctl.onPageHide = () => leaveVideoCall({ remote: false });
+  window.addEventListener("pagehide", ctl.onPageHide);
+  api(`/dynamics/${dynamicId}/chat/settings`).then((s) => { ctl.e2eEnabled = !!s?.e2e_enabled; }).catch(() => {});
+  if (!call.you_are_dominant) {
+    currentMlCensorMode(dynamicId).then((mode) => {
+      if (!shouldEnableSubCensor(mode) || videoCallCtl !== ctl) return;
+      const censor = startDisplayCensor(remoteVideo, { enabledFn: () => videoCallCtl === ctl });
+      ctl.displayCensor = censor;
+      remoteVideo.parentElement?.appendChild(censor.canvas);
+    }).catch(() => {});
+  }
+
+  pc.onicecandidate = (ev) => {
+    if (!ev.candidate) return;
+    api(`/dynamics/${dynamicId}/video/calls/${call.id}/signals`, {
+      method: "POST",
+      body: JSON.stringify({ kind: "ice", payload: ev.candidate.toJSON() }),
+    }).catch(() => {});
+  };
+
+  hangBtn.addEventListener("click", () => leaveVideoCall());
+  webBtn.addEventListener("click", async () => {
+    if (ctl.youAreDominant) {
+      await patchVideoControls(ctl, { kiosk_url: "instructor:" });
+    }
+    window.UbetraInstructor?.openSession(ctl.dynamicId, { source: "video-call" });
+  });
+  muteBtn.addEventListener("click", () => {
+    ctl.micOff = !ctl.micOff;
+    stream.getAudioTracks().forEach((t) => { t.enabled = !ctl.micOff; });
+    muteBtn.textContent = ctl.micOff ? "Unmute" : "Mute";
+  });
+  camBtn.addEventListener("click", () => {
+    ctl.camOff = !ctl.camOff;
+    ctl.rawStream?.getVideoTracks().forEach((t) => { t.enabled = !ctl.camOff; });
+    camBtn.textContent = ctl.camOff ? "Camera on" : "Camera off";
+  });
+  flipBtn.addEventListener("click", async () => {
+    const next = ctl.cameraFacing === "environment" ? "user" : "environment";
+    try {
+      await switchCallCamera(ctl, next);
+      if (ctl.youAreDominant) {
+        await patchVideoControls(ctl, { camera_facing: next });
+      }
+    } catch (err) {
+      showToast(err.message || "Could not switch camera");
+    }
+  });
+
+  const sendChat = async (ev) => {
+    ev?.preventDefault?.();
+    const text = chatInput.value.trim();
+    if (!text) return;
+    chatInput.value = "";
+    const body = { message_type: "text", body: text, body_encrypted: "" };
+    try {
+      if (ctl.e2eEnabled == null) {
+        const s = await api(`/dynamics/${dynamicId}/chat/settings`);
+        ctl.e2eEnabled = !!s?.e2e_enabled;
+      }
+      if (ctl.e2eEnabled) {
+        if (!cryptoSubtleAvailable()) throw encryptionUnavailableError();
+        body.body = "";
+        body.body_encrypted = await encryptChatText(dynamicId, text);
+      }
+      await api(`/dynamics/${dynamicId}/chat/messages`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      showToast(err.message || "Chat failed");
+    }
+    refreshVideoCallChat(ctl).catch(() => {});
+  };
+  chatSend.addEventListener("click", sendChat);
+  if (!embedded) root.querySelector(".video-call-chat")?.addEventListener("submit", sendChat);
+
+  if (!embedded && call.you_are_dominant) {
+    controlsBox.classList.remove("hidden");
+    paintVideoDomControls(ctl, call.controls || {});
+  }
+
+  if (isCaller) {
+    try {
+      const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: false });
+      await pc.setLocalDescription(offer);
+      await api(`/dynamics/${dynamicId}/video/calls/${call.id}/signals`, {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "offer",
+          payload: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
+        }),
+      });
+    } catch (err) {
+      showToast(err.message || "Could not start call");
+      await leaveVideoCall();
+      return;
+    }
+  }
+
+  async function tick() {
+    if (!videoCallCtl || videoCallCtl !== ctl || ctl.leaving) return;
+    try {
+      await drainVideoSignals(ctl);
+      const data = await api(`/dynamics/${dynamicId}/video/call`);
+      const next = data?.call;
+      if (!next || next.id !== ctl.callId || next.status === "ended") {
+        await leaveVideoCall({ remote: true });
+        return;
+      }
+      if (next.status === "active" && statusEl.textContent === "Calling…") statusEl.textContent = "Connecting…";
+      applyVideoCallControls(ctl, next.controls || {});
+      if (!embedded && next.you_are_dominant) paintVideoDomControls(ctl, next.controls || {});
+    } catch {
+      /* ignore poll errors */
+    }
+  }
+
+  ctl.pollTimer = setInterval(tick, 400);
+  if (!embedded) {
+    ctl.chatTimer = setInterval(() => refreshVideoCallChat(ctl).catch(() => {}), 2500);
+    refreshVideoCallChat(ctl).catch(() => {});
+  }
+  tick();
+  return ctl;
+}
+
+async function drainVideoSignals(ctl) {
+  const q = ctl.afterSignal ? `?after=${encodeURIComponent(ctl.afterSignal)}` : "";
+  const signals = await api(`/dynamics/${ctl.dynamicId}/video/calls/${ctl.callId}/signals${q}`);
+  for (const sig of signals) {
+    ctl.afterSignal = sig.id;
+    if (sig.kind === "hangup") {
+      await leaveVideoCall({ remote: true });
+      return;
+    }
+    if (sig.kind === "offer" && sig.payload) {
+      await ctl.pc.setRemoteDescription(new RTCSessionDescription(sig.payload));
+      const answer = await ctl.pc.createAnswer();
+      await ctl.pc.setLocalDescription(answer);
+      await api(`/dynamics/${ctl.dynamicId}/video/calls/${ctl.callId}/signals`, {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "answer",
+          payload: { type: ctl.pc.localDescription.type, sdp: ctl.pc.localDescription.sdp },
+        }),
+      });
+      await flushPendingIce(ctl);
+    } else if (sig.kind === "answer" && sig.payload) {
+      if (!ctl.pc.currentRemoteDescription || ctl.pc.signalingState === "have-local-offer") {
+        await ctl.pc.setRemoteDescription(new RTCSessionDescription(sig.payload));
+        await flushPendingIce(ctl);
+      }
+    } else if (sig.kind === "ice" && sig.payload) {
+      if (!ctl.pc.remoteDescription) ctl.pendingIce.push(sig.payload);
+      else {
+        try { await ctl.pc.addIceCandidate(new RTCIceCandidate(sig.payload)); } catch { /* ignore */ }
+      }
+    }
+  }
+}
+
+async function flushPendingIce(ctl) {
+  const pending = ctl.pendingIce.splice(0, ctl.pendingIce.length);
+  for (const cand of pending) {
+    try { await ctl.pc.addIceCandidate(new RTCIceCandidate(cand)); } catch { /* ignore */ }
+  }
+}
+
+async function refreshVideoCallChat(ctl) {
+  const msgs = await api(`/dynamics/${ctl.dynamicId}/chat/messages`);
+  const recent = (msgs || []).filter((m) => m.message_type === "text").slice(-6);
+  const lines = [];
+  for (const m of recent) {
+    let text = m.body || "";
+    if (m.body_encrypted) {
+      try {
+        text = await decryptChatText(ctl.dynamicId, m.body_encrypted);
+      } catch {
+        text = "(encrypted)";
+      }
+    }
+    lines.push(`${m.is_yours ? "You" : (m.sender_display_name || "Partner")}: ${text}`);
+  }
+  ctl.chatLog.replaceChildren(...lines.map((line) => el("p", { className: "video-call-chat-line" }, line)));
+}
+
+function paintVideoDomControls(ctl, controls) {
+  const box = ctl.controlsBox;
+  if (!box) return;
+  const sig = JSON.stringify(controls || {});
+  if (ctl.lastDomPaint === sig && box.childNodes.length) return;
+  ctl.lastDomPaint = sig;
+  const toggle = (key, label) => el("button", {
+    type: "button",
+    className: `ghost-btn ${controls[key] ? "active" : ""}`,
+    onClick: () => patchVideoControls(ctl, { [key]: !controls[key] }),
+  }, `${controls[key] ? "● " : ""}${label}`);
+  box.replaceChildren(
+    el("p", { className: "muted" }, "Keyholder controls"),
+    el("div", { className: "row wrap" }, [
+      toggle("sensor", "Sensor (beta)"),
+      toggle("red_light", "Red light"),
+      toggle("mute_audio", "Mute their sound"),
+      toggle("demand_camera", "Force camera"),
+      toggle("demand_screen", "See their screen"),
+      toggle("kiosk_locked", "Lock Instructor"),
+      toggle("hide_chrome", "Hide chrome"),
+      toggle("disable_touch", "Lock touch"),
+      toggle("instructor_paused", "Pause Instructor"),
+    ]),
+    el("p", { className: "muted" }, "Their camera & flashlight"),
+    el("div", { className: "row wrap" }, [
+      el("button", {
+        type: "button",
+        className: `ghost-btn ${controls.camera_facing === "user" ? "active" : ""}`,
+        onClick: () => patchVideoControls(ctl, { camera_facing: "user" }),
+      }, "Front camera"),
+      el("button", {
+        type: "button",
+        className: `ghost-btn ${controls.camera_facing === "environment" ? "active" : ""}`,
+        onClick: () => patchVideoControls(ctl, { camera_facing: "environment" }),
+      }, "Rear camera"),
+      toggle("torch", "Flashlight"),
+    ]),
+    el("label", {}, [
+      "Flash brightness",
+      el("input", {
+        type: "range",
+        min: "0",
+        max: "100",
+        value: String(Math.round(Number(controls.torch_level || (controls.torch ? 1 : 0)) * 100)),
+        onChange: (ev) => {
+          const level = Number(ev.target.value) / 100;
+          patchVideoControls(ctl, { torch: level > 0, torch_level: level });
+        },
+      }),
+    ]),
+    el("div", { className: "row wrap" }, [
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => patchVideoControls(ctl, { kiosk_url: "instructor:" }),
+      }, "Open Instructor on their device"),
+    ])
+  );
+}
+
+async function patchVideoControls(ctl, patch) {
+  try {
+    const call = await api(`/dynamics/${ctl.dynamicId}/video/calls/${ctl.callId}/controls`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    applyVideoCallControls(ctl, call.controls || {});
+    if (ctl.youAreDominant) paintVideoDomControls(ctl, call.controls || {});
+    const livePatch = {};
+    if ("instructor_paused" in (patch || {})) livePatch.paused = !!patch.instructor_paused;
+    if ("red_light" in (patch || {})) livePatch.red_light = !!patch.red_light;
+    if ("kiosk_locked" in (patch || {})) livePatch.lock_input = !!patch.kiosk_locked;
+    if ("mute_audio" in (patch || {})) livePatch.mute = !!patch.mute_audio;
+    if (ctl.youAreDominant && Object.keys(livePatch).length) {
+      api(`/dynamics/${ctl.dynamicId}/instructor/live`, {
+        method: "PATCH",
+        body: JSON.stringify(livePatch),
+      }).catch(() => {});
+    }
+  } catch (err) {
+    showToast(err.message || "Could not update controls");
+  }
+}
+
+async function applyVideoCallControls(ctl, controls) {
+  const sig = JSON.stringify(controls || {});
+  const red = !!controls.red_light;
+  const mute = !!controls.mute_audio || red;
+  ctl.redCover.classList.toggle("hidden", ctl.youAreDominant || !red);
+  ctl.root.classList.toggle("video-call-pip", !ctl.youAreDominant && !!(controls.kiosk_url || kioskCtl));
+  if (ctl.remoteVideo) ctl.remoteVideo.muted = mute && !ctl.youAreDominant;
+  setKioskRedLight(red);
+  if (controls.kiosk_url && controls.kiosk_url !== ctl.lastKioskUrl) {
+    ctl.lastKioskUrl = controls.kiosk_url;
+    if (String(controls.kiosk_url).startsWith("instructor:")) {
+      window.UbetraInstructor?.openSession(ctl.dynamicId, { source: "video-call" });
+    }
+  } else if (kioskCtl && !ctl.youAreDominant) {
+    setKioskRemoteLock({
+      locked: !!controls.kiosk_locked,
+      hideChrome: !!controls.hide_chrome,
+      disableTouch: !!controls.disable_touch,
+    });
+  }
+  if (!ctl.youAreDominant && !controls.kiosk_locked && !controls.kiosk_url && kioskCtl?.locked) {
+    setKioskRemoteLock({ locked: false, hideChrome: false, disableTouch: false });
+  }
+  if (sig === ctl.lastControls) return;
+  ctl.lastControls = sig;
+
+  if (!ctl.youAreDominant) {
+    await applyOutgoingSensor(ctl, !!controls.sensor);
+    if (controls.demand_camera) {
+      ctl.camOff = false;
+      ctl.rawStream?.getVideoTracks().forEach((t) => { t.enabled = true; });
+      if (!ctl.rawStream?.getVideoTracks().some((t) => t.readyState === "live")) {
+        try {
+          const fresh = await requestUserMedia({ video: true, audio: true, preferFacing: ctl.cameraFacing || "user" });
+          await replaceCallTracks(ctl, fresh);
+        } catch {
+          showToast("Keyholder requested camera — permission was blocked. Open Settings → Permissions.");
+        }
+      }
+    }
+    const facing = controls.camera_facing || "";
+    if (facing && facing !== ctl.cameraFacing) {
+      try {
+        await switchCallCamera(ctl, facing);
+      } catch (err) {
+        showToast(err.message || "Could not switch their camera");
+      }
+    }
+    const torchOn = !!controls.torch;
+    const torchLevel = Number(controls.torch_level || (torchOn ? 1 : 0));
+    if (torchOn !== ctl.torchOn || torchLevel !== ctl.torchLevel) {
+      ctl.torchOn = torchOn;
+      ctl.torchLevel = torchLevel;
+      await applyTorch(ctl.rawStream?.getVideoTracks()?.[0], torchOn, torchLevel);
+    }
+    if (controls.demand_screen) {
+      await tryShareScreen(ctl);
+    }
+  }
+}
+
+async function applyOutgoingSensor(ctl, on) {
+  if (on === ctl.sensorOn) return;
+  if (typeof HTMLCanvasElement === "undefined" || !HTMLCanvasElement.prototype.captureStream) {
+    if (on) showToast("Sensor needs a newer browser on this device");
+    return;
+  }
+  const liveTrack = ctl.rawStream?.getVideoTracks()?.[0];
+  if (!liveTrack) return;
+  ctl.sensorOn = on;
+  const sender = ctl.pc.getSenders().find((s) => s.track?.kind === "video");
+  if (!on) {
+    ctl.sensorStop?.();
+    ctl.sensorStop = null;
+    ctl.sensorVideo = null;
+    if (sender) await sender.replaceTrack(liveTrack);
+    ctl.localVideo.srcObject = ctl.rawStream;
+    return;
+  }
+  const rawVideo = document.createElement("video");
+  rawVideo.muted = true;
+  rawVideo.playsInline = true;
+  rawVideo.srcObject = ctl.rawStream;
+  await rawVideo.play().catch(() => {});
+  const filter = startSensorCanvas(rawVideo, () => ctl.sensorOn);
+  ctl.sensorVideo = rawVideo;
+  ctl.sensorStop = () => {
+    filter.stop();
+    rawVideo.srcObject = null;
+  };
+  const filtered = filter.stream.getVideoTracks()[0];
+  if (sender && filtered) await sender.replaceTrack(filtered);
+  ctl.localVideo.srcObject = filter.stream;
+}
+
+async function tryShareScreen(ctl) {
+  if (ctl.sharingScreen) return;
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    showToast("Screen share is not available in this browser");
+    return;
+  }
+  ctl.sharingScreen = true;
+  try {
+    const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    const track = display.getVideoTracks()[0];
+    const sender = ctl.pc.getSenders().find((s) => s.track?.kind === "video");
+    if (sender && track) await sender.replaceTrack(track);
+    showToast("Sharing your screen with keyholder");
+    track.onended = async () => {
+      ctl.sharingScreen = false;
+      const cam = ctl.rawStream?.getVideoTracks()?.[0];
+      if (sender && cam) await sender.replaceTrack(cam);
+    };
+  } catch {
+    ctl.sharingScreen = false;
+    showToast("Screen share was blocked");
+  }
+}
+
+async function leaveVideoCall({ remote = false } = {}) {
+  const ctl = videoCallCtl;
+  if (!ctl || ctl.leaving) return;
+  ctl.leaving = true;
+  videoCallCtl = null;
+  if (ctl.pollTimer) clearInterval(ctl.pollTimer);
+  if (ctl.chatTimer) clearInterval(ctl.chatTimer);
+  if (ctl.onPageHide) window.removeEventListener("pagehide", ctl.onPageHide);
+  ctl.displayCensor?.stop?.();
+  ctl.sensorStop?.();
+  try { ctl.pc?.getSenders().forEach((s) => { try { s.track?.stop(); } catch { /* ignore */ } }); } catch { /* ignore */ }
+  try { ctl.pc?.close(); } catch { /* ignore */ }
+  ctl.rawStream?.getTracks().forEach((t) => t.stop());
+  ctl.root?.remove();
+  setKioskRedLight(false);
+  if (kioskCtl?.locked) closeKiosk({ force: true });
+  if (!remote) {
+    await api(`/dynamics/${ctl.dynamicId}/video/calls/${ctl.callId}/end`, { method: "POST", body: "{}" }).catch(() => {});
+  }
 }
 
 function trimChatUrlMatch(raw) {
@@ -14557,8 +18145,10 @@ function linkifyText(text) {
           {
             className: "chat-text-link",
             href,
-            target: "_blank",
-            rel: "noopener noreferrer",
+            onClick: (ev) => {
+              ev.preventDefault();
+              window.open(href, "_blank", "noopener,noreferrer");
+            },
           },
           raw
         )
@@ -15209,14 +18799,23 @@ function renderChat(dynamicId) {
         if (isDecryptError) {
           bubbleKids.push(el("p", { className: "muted" }, imageSrc));
         } else {
-          const img = el("img", {
-            className: `chat-image ${shouldBlur ? "blurred" : ""}`,
-            src: imageSrc,
-            alt: "Shared image",
-          });
+          const isVideo = isVideoSrc(imageSrc);
+          const media = isVideo
+            ? el("video", {
+                className: `chat-image ${shouldBlur ? "blurred" : ""}`,
+                src: imageSrc,
+                controls: "true",
+                playsinline: "true",
+                preload: "metadata",
+              })
+            : el("img", {
+                className: `chat-image ${shouldBlur ? "blurred" : ""}`,
+                src: imageSrc,
+                alt: "Shared image",
+              });
           if (permissionBlocked) {
             bubbleKids.push(
-              wrapChatImage(img, { id: msg.id, revealedSet: revealedImages, locked: true }),
+              isVideo ? media : wrapChatImage(media, { id: msg.id, revealedSet: revealedImages, locked: true }),
               el("p", { className: "muted" }, "Locked — permission required to view."),
               el("button", {
                 type: "button",
@@ -15240,12 +18839,14 @@ function renderChat(dynamicId) {
             );
           } else {
             bubbleKids.push(
-              wrapChatImage(img, {
-                id: msg.id,
-                revealedSet: revealedImages,
-                locked: false,
-                holdUnblur: true,
-              })
+              isVideo
+                ? media
+                : wrapChatImage(media, {
+                    id: msg.id,
+                    revealedSet: revealedImages,
+                    locked: false,
+                    holdUnblur: true,
+                  })
             );
           }
         }
@@ -15364,6 +18965,7 @@ function renderChat(dynamicId) {
   }
 
   async function sendImage(file, { locked = false } = {}) {
+    if (file?.size > 12 * 1024 * 1024) throw new Error("Clip is too large (max 12 MB). Try a shorter recording.");
     const data = await readImageFile(file);
     let image_data = data;
     if (settings.e2e_enabled) {
@@ -15384,6 +18986,7 @@ function renderChat(dynamicId) {
         image_locked: lock,
         vault_image_encrypted,
         save_to_vault: true,
+        media_kind: mediaKindFromFile(file),
       }),
     });
   }
@@ -15392,8 +18995,8 @@ function renderChat(dynamicId) {
     return new Promise((resolve) => {
       const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
       const sheet = el("div", { className: "chat-image-sheet card stack" }, [
-        el("strong", {}, "Send image"),
-        el("p", { className: "muted" }, file?.name || "Choose how to send this photo."),
+        el("strong", {}, isVideoFile(file) ? "Send video" : "Send image"),
+        el("p", { className: "muted" }, file?.name || (isVideoFile(file) ? "Choose how to send this clip." : "Choose how to send this photo.")),
         el("button", {
           type: "button",
           className: "primary-btn",
@@ -15469,7 +19072,7 @@ function renderChat(dynamicId) {
       });
       const imageInput = el("input", {
         type: "file",
-        accept: "image/*",
+        accept: "image/*,video/*",
         className: "hidden",
       });
       const cameraInput = el("input", {
@@ -15478,11 +19081,16 @@ function renderChat(dynamicId) {
         capture: "environment",
         className: "hidden",
       });
+      const videoFileInput = el("input", {
+        type: "file",
+        accept: "video/*",
+        className: "hidden",
+      });
       const attachBtn = el("button", {
         className: "chat-icon-btn",
         type: "button",
-        title: "Attach or take photo",
-        "aria-label": "Attach or take photo",
+        title: "Add photo, video, or call",
+        "aria-label": "Add photo, video, or call",
       }, "+");
       const sendBtn = el("button", {
         className: "chat-send-btn",
@@ -15595,18 +19203,51 @@ function renderChat(dynamicId) {
       attachBtn.addEventListener("click", () => {
         const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
         const sheet = el("div", { className: "chat-image-sheet card stack" }, [
-          el("strong", {}, "Add photo"),
+          el("strong", {}, "Add media"),
           el("button", {
             type: "button",
             className: "primary-btn",
             onClick: () => {
               backdrop.remove();
+              startVideoCall(id).catch((err) => {
+                error.textContent = err.message || "Could not start video call";
+                error.classList.remove("hidden");
+              });
+            },
+          }, "Video call"),
+          settings.you_are_dominant
+            ? el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: () => {
+                backdrop.remove();
+                startVideoCall(id, { demandCamera: true }).catch((err) => {
+                  error.textContent = err.message || "Could not start video call";
+                  error.classList.remove("hidden");
+                });
+              },
+            }, "Force their camera")
+            : null,
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              backdrop.remove();
               openInAppCamera({
                 onCapture: (file) => handleImageFile(file),
-                onFallback: () => cameraInput.click(),
               });
             },
           }, "Take photo"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              backdrop.remove();
+              openInAppRecorder({
+                onCapture: (file) => handleImageFile(file),
+              });
+            },
+          }, "Record video"),
           el("button", {
             type: "button",
             className: "ghost-btn",
@@ -15629,6 +19270,7 @@ function renderChat(dynamicId) {
       });
       imageInput.addEventListener("change", () => handlePickedImage(imageInput));
       cameraInput.addEventListener("change", () => handlePickedImage(cameraInput));
+      videoFileInput.addEventListener("change", () => handlePickedImage(videoFileInput));
 
       let typingPingAt = 0;
       function pingTyping() {
@@ -16031,6 +19673,7 @@ function renderChat(dynamicId) {
         composer,
         imageInput,
         cameraInput,
+        videoFileInput,
       ]);
       viewEl.classList.add("chat-view");
       setViewContent(screen);
@@ -16196,6 +19839,42 @@ function renderAiRoutingSettings() {
     .catch((err) => setViewContent(el("div", { className: "error" }, err.message)));
 }
 
+function renderHelpWiki() {
+  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading wiki…"));
+  api("/app/wiki")
+    .then((data) => {
+      const pages = data.pages || [];
+      const list = el("div", { className: "stack" });
+      if (!pages.length) {
+        list.appendChild(el("p", { className: "muted" }, "No wiki pages are bundled with this install."));
+      }
+      pages.forEach((page) => {
+        list.appendChild(el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => openWikiKiosk(page.slug),
+        }, page.title || page.slug));
+      });
+      setViewContent(el("div", { className: "stack" }, [
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => navigate("/settings"),
+        }, "← Settings"),
+        el("h1", {}, "Help"),
+        el("h2", {}, "Wiki"),
+        el("p", { className: "muted" }, "These pages shipped with this UBETRA version."),
+        el("button", {
+          type: "button",
+          className: "primary-btn",
+          onClick: () => openWikiKiosk("Home"),
+        }, "Open Home"),
+        list,
+      ]));
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+}
+
 function renderSettings() {
   viewEl.replaceChildren(el("p", { className: "muted" }, "Loading settings..."));
   const { query } = parseRoute();
@@ -16215,9 +19894,18 @@ function renderSettings() {
     initialDynamicId
       ? api(`/dynamics/${initialDynamicId}/features`).catch(() => null)
       : Promise.resolve(null),
-    api("/app/android").catch(() => ({ available: false })),
+    api("/app/updates").catch(() => ({ available: false })),
+    initialDynamicId
+      ? api(`/dynamics/${initialDynamicId}/auto-punish`).catch(() => null)
+      : Promise.resolve(null),
+    initialDynamicId
+      ? api(`/dynamics/${initialDynamicId}/chastity-goals`).catch(() => null)
+      : Promise.resolve(null),
+    initialDynamicId
+      ? api(`/dynamics/${initialDynamicId}/tags`).catch(() => ({ task_presets: DEFAULT_TASK_CATEGORY_TAGS }))
+      : Promise.resolve({ task_presets: DEFAULT_TASK_CATEGORY_TAGS }),
   ])
-    .then(([settings, providers, assistantSettings, tones, dynamics, googleStatus, policy, featuresBundle, androidApp]) => {
+    .then(([settings, providers, assistantSettings, tones, dynamics, googleStatus, policy, featuresBundle, androidApp, autoPunish, goalsData, tagData]) => {
       if (dynamics.length) state.dynamics = dynamics;
       const providerMap = Object.fromEntries(providers.map((p) => [p.id, p]));
       const isSubmissive = !!(policy && policy.you_are_dominant === false);
@@ -16334,6 +20022,28 @@ function renderSettings() {
       extraInstructions.value = assistantSettings.extra_instructions || "";
       const includeTracking = el("input", { type: "checkbox" });
       includeTracking.checked = assistantSettings.include_tracking !== false;
+      const aiEnabledBox = el("input", { type: "checkbox" });
+      aiEnabledBox.checked = assistantSettings.ai_enabled !== false;
+      const shareFlags = {
+        journals: assistantSettings.share_flags?.journals !== false,
+        stories: assistantSettings.share_flags?.stories !== false,
+        scenes: assistantSettings.share_flags?.scenes !== false,
+        agreements: assistantSettings.share_flags?.agreements !== false,
+        tracking: assistantSettings.share_flags?.tracking !== false,
+      };
+      const shareChecks = {};
+      Object.entries({
+        journals: "Journal entries",
+        stories: "Stories",
+        scenes: "Scene inspiration",
+        agreements: "Ground rules & agreements",
+        tracking: "Orgasm & chastity tracking",
+      }).forEach(([key, label]) => {
+        const box = el("input", { type: "checkbox" });
+        box.checked = shareFlags[key] !== false;
+        shareChecks[key] = box;
+      });
+      includeTracking.checked = shareChecks.tracking.checked;
 
       function refreshToneUi() {
         const selected = tones.find((t) => t.id === toneSelect.value);
@@ -16709,7 +20419,37 @@ function renderSettings() {
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Settings"),
       ]);
-      appendAndroidAppCard(stack, androidApp || { available: false });
+      const updates = androidApp || {};
+      const androidInfo = updates.android || updates;
+      if (updates.local_version || updates.github_url) {
+        const bits = [
+          el("h2", {}, "About"),
+          el("p", { className: "muted" }, `This server: ${updates.local_version || "unknown"}${updates.github_version ? ` · GitHub: ${updates.github_version}` : ""}`),
+        ];
+        if (updates.github_newer) {
+          bits.push(el("p", {}, "A newer version is on GitHub."));
+        }
+        bits.push(el("div", { className: "row wrap" }, [
+          el("a", {
+            className: "ghost-btn",
+            href: updates.github_url || "https://github.com/ubetra-beep/ubetra",
+            target: "_blank",
+            rel: "noopener noreferrer",
+          }, "GitHub repo"),
+        ]));
+        stack.appendChild(el("div", { className: "card stack" }, bits));
+      }
+      stack.appendChild(el("div", { className: "card stack" }, [
+        el("h2", {}, "Wiki"),
+        el("p", { className: "muted" }, "Guides shipped with this install (not a live GitHub copy)."),
+        el("button", {
+          type: "button",
+          className: "primary-btn",
+          onClick: () => navigate("/settings/help"),
+        }, "Open wiki"),
+      ]));
+      appendAndroidAppCard(stack, androidInfo);
+      stack.appendChild(buildDevicePermissionsCard());
 
       const usernameInput = el("input", {
         type: "text",
@@ -17408,24 +21148,40 @@ function renderSettings() {
             ? el("p", { className: "muted" }, "Tone and extra instructions are set by the keyholder. Change them below, then Submit settings change to request approval.")
             : el("p", { className: "muted" }, "As keyholder you set the assistant voice for this dynamic. Your partner can request changes."),
           assistantStatus,
+          el("label", { className: "checkbox-label" }, [
+            aiEnabledBox,
+            " Enable AI features",
+          ]),
+          el("p", { className: "muted" }, "Turn this off for a non-AI mode. AI buttons stay visible (grey) so you can browse what they would do."),
           assistantToneBlock,
           assistantExtraBlock,
-          el("label", { className: "checkbox-label" }, [
-            includeTracking,
-            " Share orgasm & chastity tracking with the assistant",
-          ]),
+          el("h3", {}, "What to share with AI"),
+          el("p", { className: "muted" }, "One list for the whole app. Individual journal and library items still need their own Use for AI toggle."),
+          ...Object.entries({
+            journals: "Journal entries",
+            stories: "Stories",
+            scenes: "Scene inspiration",
+            agreements: "Ground rules & agreements",
+            tracking: "Orgasm & chastity tracking",
+          }).map(([key, label]) => el("label", { className: "checkbox-label" }, [shareChecks[key], ` ${label}`])),
       ]));
       stack.appendChild(assistantError);
+      function snapshotShare() {
+        return Object.fromEntries(Object.entries(shareChecks).map(([k, box]) => [k, box.checked]));
+      }
       let assistantBaseline = {
         tone: toneSelect.value,
         extra: extraInstructions.value,
-        tracking: includeTracking.checked,
+        tracking: shareChecks.tracking.checked,
+        aiOn: aiEnabledBox.checked,
+        share: snapshotShare(),
       };
       draft.register({
         isDirty: () => (
           toneSelect.value !== assistantBaseline.tone
           || extraInstructions.value !== assistantBaseline.extra
-          || includeTracking.checked !== assistantBaseline.tracking
+          || aiEnabledBox.checked !== assistantBaseline.aiOn
+          || JSON.stringify(snapshotShare()) !== JSON.stringify(assistantBaseline.share)
         ),
         needsApproval: () => (
           assistantDomOnly
@@ -17447,7 +21203,9 @@ function renderSettings() {
             body: JSON.stringify({
               tone: toneSelect.value,
               extra_instructions: extraInstructions.value,
-              include_tracking: includeTracking.checked,
+              include_tracking: shareChecks.tracking.checked,
+              ai_enabled: aiEnabledBox.checked,
+              share_flags: snapshotShare(),
             }),
           });
           if (assistantDomOnly && toneChanged && dynId) {
@@ -17462,10 +21220,14 @@ function renderSettings() {
             });
           }
           const toneLabel = tones.find((t) => t.id === updated.tone)?.label || updated.tone;
+          if (state.user) state.user.ai_enabled = aiEnabledBox.checked;
+          applyAiMode();
           assistantBaseline = {
             tone: toneSelect.value,
             extra: extraInstructions.value,
-            tracking: includeTracking.checked,
+            tracking: shareChecks.tracking.checked,
+            aiOn: aiEnabledBox.checked,
+            share: snapshotShare(),
           };
           // After request, reset tone UI to server (dom-controlled) values for sub
           if (assistantDomOnly && toneChanged) {
@@ -17483,6 +21245,349 @@ function renderSettings() {
           return "Assistant settings saved";
         },
       });
+      if (!isSubmissive && initialDynamicId) {
+        const autoOn = el("input", { type: "checkbox" });
+        autoOn.checked = !!autoPunish?.enabled;
+        const autoStatus = el("p", { className: "muted" });
+        const autoError = el("div", { className: "error hidden" });
+        const reqTypes = [
+          ["days_since_full_orgasm", "Days since last full orgasm"],
+          ["days_since_lockup", "Days in lockup"],
+          ["tasks_completed", "Tasks completed"],
+          ["orgasms_to_dominant", "Orgasms to keyholder"],
+          ["ruins", "Ruined orgasms"],
+          ["denials", "Denials"],
+        ];
+        const goals = (goalsData?.goals || []).filter((g) => g.active !== false);
+        const tagPresets = (tagData?.task_presets && tagData.task_presets.length)
+          ? tagData.task_presets
+          : DEFAULT_TASK_CATEGORY_TAGS;
+        const ruleRows = [];
+        function addRuleRow(rule = {}) {
+          const tagSel = el("select");
+          tagPresets.forEach((t) => {
+            const o = el("option", { value: String(t).toLowerCase() }, t);
+            if (String(t).toLowerCase() === String(rule.tag || "").toLowerCase()) o.selected = true;
+            tagSel.appendChild(o);
+          });
+          const goalSel = el("select");
+          if (!goals.length) goalSel.appendChild(el("option", { value: "" }, "Create a goal first"));
+          goals.forEach((g) => {
+            const o = el("option", { value: g.id }, g.title || "Goal");
+            if (g.id === rule.goal_id) o.selected = true;
+            goalSel.appendChild(o);
+          });
+          const reqSel = el("select");
+          reqTypes.forEach(([id, label]) => {
+            const o = el("option", { value: id }, label);
+            if (id === rule.requirement_type) o.selected = true;
+            reqSel.appendChild(o);
+          });
+          const addInput = el("input", { type: "number", min: "0.5", step: "0.5", value: String(rule.add || 1) });
+          const wrap = el("div", { className: "card stack" }, [
+            el("label", {}, ["Task tag", tagSel]),
+            el("label", {}, ["Goal section", goalSel]),
+            el("label", {}, ["Increase", reqSel]),
+            el("label", {}, ["By", addInput]),
+            el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: () => {
+                wrap.remove();
+                const idx = ruleRows.indexOf(entry);
+                if (idx >= 0) ruleRows.splice(idx, 1);
+              },
+            }, "Remove rule"),
+          ]);
+          const entry = { wrap, tagSel, goalSel, reqSel, addInput };
+          ruleRows.push(entry);
+          rulesHost.appendChild(wrap);
+        }
+        const rulesHost = el("div", { className: "stack" });
+        (autoPunish?.rules || []).forEach((r) => addRuleRow(r));
+        if (autoPunish?.missing_tags?.length) {
+          autoStatus.appendChild(el("span", {}, `Missing rules for: ${autoPunish.missing_tags.join(", ")}. `));
+          autoStatus.appendChild(el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => navigate(`/dynamic/${initialDynamicId}/tasks?tab=goals`),
+          }, "Open goals"));
+        }
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Auto punish"),
+          el("p", { className: "muted" }, "When a tagged task is missed, increase an existing goal by the amount you set. If a tag has no rule, you get an inbox alert with a link to Goals."),
+          el("label", { className: "checkbox-label" }, [autoOn, " Enable auto punish"]),
+          rulesHost,
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => addRuleRow(),
+          }, "Add tag rule"),
+          autoStatus,
+          autoError,
+        ]));
+        let autoBaseline = JSON.stringify({
+          enabled: autoOn.checked,
+          rules: (autoPunish?.rules || []),
+        });
+        draft.register({
+          isDirty: () => JSON.stringify({
+            enabled: autoOn.checked,
+            rules: ruleRows.map((r) => ({
+              tag: r.tagSel.value,
+              goal_id: r.goalSel.value,
+              requirement_type: r.reqSel.value,
+              add: Number(r.addInput.value || 0),
+            })),
+          }) !== autoBaseline,
+          save: async () => {
+            autoError.classList.add("hidden");
+            const rules = ruleRows.map((r) => ({
+              tag: r.tagSel.value,
+              goal_id: r.goalSel.value,
+              requirement_type: r.reqSel.value,
+              add: Number(r.addInput.value || 0),
+            })).filter((r) => r.tag && r.goal_id && r.add > 0);
+            await api(`/dynamics/${initialDynamicId}/auto-punish`, {
+              method: "PUT",
+              body: JSON.stringify({ enabled: autoOn.checked, rules }),
+            });
+            autoBaseline = JSON.stringify({ enabled: autoOn.checked, rules });
+            return "Auto punish saved";
+          },
+        });
+      }
+      if (initialDynamicId && policy) {
+        const taskPush = el("input", { type: "checkbox" });
+        taskPush.checked = policy.task_push_enabled !== false;
+        const dueLead = el("select");
+        [5, 10, 15, 30, 60].forEach((n) => {
+          const o = el("option", { value: String(n) }, `${n} minutes before`);
+          if (Number(policy.task_due_lead_minutes || 15) === n) o.selected = true;
+          dueLead.appendChild(o);
+        });
+        const censorMode = el("select");
+        [
+          ["off", "Off"],
+          ["auto", "Auto (this phone if it is powerful enough)"],
+          ["client", "On — detect on this phone"],
+          ["cuda", "Prefer server GPU when available"],
+        ].forEach(([v, l]) => {
+          const o = el("option", { value: v }, l);
+          if (v === (policy.ml_censor_mode || "off")) o.selected = true;
+          censorMode.appendChild(o);
+        });
+        const playStatus = el("p", { className: "muted" });
+        const playError = el("div", { className: "error hidden" });
+        const playLocked = !!isSubmissive;
+        const tzLine = displayTimeZone()
+          ? `This device reports ${displayTimeZone()} so due times match your clock.`
+          : "Time zone is taken from this device.";
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Tasks & notifications"),
+          el("p", { className: "muted" }, tzLine),
+          lockedSettingsWrap({
+            locked: playLocked,
+            children: el("div", { className: "stack" }, [
+              el("label", { className: "checkbox-label" }, [taskPush, " Push when tasks are added, available, or due soon"]),
+              el("label", {}, ["Warn before due", dueLead]),
+              el("p", { className: "muted" }, "Android uses a separate Tasks notification channel (you can pick a different sound in system settings)."),
+            ]),
+          }),
+          playStatus,
+          playError,
+        ]));
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Smart censor"),
+          el("p", { className: "muted" }, "When on, only the sub’s screen is scanned (incoming video and Instructor). The keyholder’s view is not blurred. Uses on-device detection; server GPU is used only when that path is available."),
+          lockedSettingsWrap({
+            locked: playLocked,
+            children: el("label", {}, ["Mode", censorMode]),
+          }),
+        ]));
+        let playBaseline = {
+          push: taskPush.checked,
+          lead: dueLead.value,
+          censor: censorMode.value,
+        };
+        draft.register({
+          isDirty: () => (
+            taskPush.checked !== playBaseline.push
+            || dueLead.value !== playBaseline.lead
+            || censorMode.value !== playBaseline.censor
+          ),
+          needsApproval: () => playLocked && (
+            taskPush.checked !== playBaseline.push
+            || dueLead.value !== playBaseline.lead
+            || censorMode.value !== playBaseline.censor
+          ),
+          save: async () => {
+            playError.classList.add("hidden");
+            if (playLocked) {
+              const requests = [];
+              if (taskPush.checked !== playBaseline.push) {
+                requests.push(postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "tasks.push_enabled",
+                  settingLabel: "Task push notifications",
+                  requestedValue: taskPush.checked,
+                }));
+              }
+              if (dueLead.value !== playBaseline.lead) {
+                requests.push(postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "tasks.due_lead_minutes",
+                  settingLabel: "Minutes before due to notify",
+                  requestedValue: Number(dueLead.value),
+                }));
+              }
+              if (censorMode.value !== playBaseline.censor) {
+                requests.push(postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "video.ml_censor_mode",
+                  settingLabel: "Smart censor on sub display",
+                  requestedValue: censorMode.value,
+                }));
+              }
+              await Promise.all(requests);
+              playStatus.textContent = "Change request sent.";
+              return "Change request sent";
+            }
+            await api(`/dynamics/${initialDynamicId}/policy`, {
+              method: "PATCH",
+              body: JSON.stringify({
+                task_push_enabled: taskPush.checked,
+                task_due_lead_minutes: Number(dueLead.value),
+                ml_censor_mode: censorMode.value,
+              }),
+            });
+            playBaseline = { push: taskPush.checked, lead: dueLead.value, censor: censorMode.value };
+            playStatus.textContent = "Task notifications saved.";
+            return "Task notifications saved";
+          },
+        });
+        const feelMode = el("select");
+        [
+          ["soft", "Soft reminders"],
+          ["hard", "Hard gates (block play until feelings are logged)"],
+        ].forEach(([v, l]) => {
+          const o = el("option", { value: v }, l);
+          if (v === (policy.feelings_prompt_mode || "soft")) o.selected = true;
+          feelMode.appendChild(o);
+        });
+        const feelAfter = el("input", { type: "checkbox" });
+        feelAfter.checked = policy.feelings_prompt_after_events !== false;
+        const feelInbox = el("input", { type: "checkbox" });
+        feelInbox.checked = !!policy.feelings_notify_inbox;
+        const feelEod = el("input", { type: "checkbox" });
+        feelEod.checked = policy.feelings_require_end_of_day !== false;
+        const feelStatus = el("p", { className: "muted" });
+        const feelError = el("div", { className: "error hidden" });
+        const feelLocked = !!isSubmissive;
+        const feelCard = el("div", { className: "card stack" }, [
+          el("h2", {}, "Feelings notifications"),
+          el("p", { className: "muted" }, "Stop repeating overlays, and choose when the wheel should open after play."),
+          lockedSettingsWrap({
+            locked: feelLocked,
+            children: el("div", { className: "stack" }, [
+              el("label", {}, ["Prompt mode", feelMode]),
+              el("label", { className: "checkbox-label" }, [feelAfter, " Open the feelings wheel after orgasm, play, or chastity"]),
+              el("label", { className: "checkbox-label" }, [feelInbox, " Show feelings check-ins in the “While you were away” popup"]),
+              el("label", { className: "checkbox-label" }, [feelEod, " End-of-day reminder"]),
+            ]),
+          }),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => navigate(`/dynamic/${initialDynamicId}/feelings`, { skipInbox: true }),
+          }, "Open feelings wheel"),
+          feelStatus,
+          feelError,
+        ]);
+        stack.appendChild(feelCard);
+        let feelBaseline = {
+          mode: feelMode.value,
+          after: feelAfter.checked,
+          inbox: feelInbox.checked,
+          eod: feelEod.checked,
+        };
+        draft.register({
+          isDirty: () => (
+            feelMode.value !== feelBaseline.mode
+            || feelAfter.checked !== feelBaseline.after
+            || feelInbox.checked !== feelBaseline.inbox
+            || feelEod.checked !== feelBaseline.eod
+          ),
+          needsApproval: () => feelLocked && (
+            feelMode.value !== feelBaseline.mode
+            || feelAfter.checked !== feelBaseline.after
+            || feelInbox.checked !== feelBaseline.inbox
+            || feelEod.checked !== feelBaseline.eod
+          ),
+          save: async () => {
+            feelError.classList.add("hidden");
+            if (feelLocked) {
+              const requests = [];
+              if (feelMode.value !== feelBaseline.mode) {
+                requests.push(postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "feelings.prompt_mode",
+                  settingLabel: "Feelings prompt mode",
+                  requestedValue: feelMode.value,
+                }));
+              }
+              if (feelAfter.checked !== feelBaseline.after) {
+                requests.push(postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "feelings.prompt_after_events",
+                  settingLabel: "Prompt feelings after play",
+                  requestedValue: feelAfter.checked,
+                }));
+              }
+              if (feelInbox.checked !== feelBaseline.inbox) {
+                requests.push(postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "feelings.notify_inbox",
+                  settingLabel: "Feelings return overlay",
+                  requestedValue: feelInbox.checked,
+                }));
+              }
+              if (feelEod.checked !== feelBaseline.eod) {
+                requests.push(postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "feelings.require_end_of_day",
+                  settingLabel: "End-of-day feelings reminder",
+                  requestedValue: feelEod.checked,
+                }));
+              }
+              await Promise.all(requests);
+              feelMode.value = feelBaseline.mode;
+              feelAfter.checked = feelBaseline.after;
+              feelInbox.checked = feelBaseline.inbox;
+              feelEod.checked = feelBaseline.eod;
+              feelStatus.textContent = "Request sent to your keyholder.";
+              return "Feelings notification request submitted";
+            }
+            await api(`/dynamics/${initialDynamicId}/feelings/settings`, {
+              method: "PUT",
+              body: JSON.stringify({
+                prompt_mode: feelMode.value,
+                require_end_of_day: feelEod.checked,
+                prompt_after_events: feelAfter.checked,
+                notify_inbox: feelInbox.checked,
+              }),
+            });
+            feelBaseline = {
+              mode: feelMode.value,
+              after: feelAfter.checked,
+              inbox: feelInbox.checked,
+              eod: feelEod.checked,
+            };
+            feelStatus.textContent = "Feelings notifications saved.";
+            return "Feelings notifications saved";
+          },
+        });
+      }
       stack.appendChild(el("div", { className: "card stack" }, [
           el("h2", {}, "Privacy & security"),
           el("p", { className: "muted" }, "Partner chat privacy, auto-expire, and encrypted chat. The encryption key is shared on the server for your dynamic (like the AI key) so every signed-in device can decrypt."),
@@ -17939,30 +22044,41 @@ function renderSettings() {
         Appearance: [],
         Dynamics: [],
         Features: [],
+        Playtime: [],
+        Feelings: [],
         Chastity: [],
         "Chat & privacy": [],
         "AI & assistant": [],
         Integrations: [],
         Support: [],
+        "This device": [],
+        Help: [],
       };
       const bucketIds = {
         Account: "account",
         Appearance: "appearance",
         Dynamics: "dynamics",
         Features: "features",
+        Playtime: "playtime",
+        Feelings: "feelings",
         Chastity: "chastity",
         "Chat & privacy": "chat",
         "AI & assistant": "ai",
         Integrations: "integrations",
         Support: "support",
+        "This device": "permissions",
+        Help: "help",
       };
       const bucketHelp = {
         Appearance: "Theme is stored on this device only.",
         "AI & assistant": "Gemini: open Google AI Studio → Create API key → paste here. OpenAI: platform.openai.com → API keys. Used by the assistant, suggested ground rules, acts, and interviews. Server default uses the host .env key.",
         Integrations: "Optional third-party connections (currently none enabled).",
+        Feelings: "After-play prompts, the return overlay, and end-of-day reminders.",
         Chastity: "Keyholder policy for whether the sub can delete their own break records.",
         "Chat & privacy": "History retention, end-to-end chat keys, and push notifications for this device.",
         Support: "Optional donations — the app stays free either way.",
+        "This device": "Camera, microphone, notifications, and extra Android steps (battery, DND, dedicated phone).",
+        Help: "In-app wiki for this install. https links open in your phone browser.",
       };
       const titleMap = {
         Username: "Account",
@@ -17976,12 +22092,20 @@ function renderSettings() {
         "Your dynamics": "Dynamics",
         "Start or join a dynamic": "Dynamics",
         "Application features": "Features",
+        "Auto punish": "Playtime",
+        "Tasks & notifications": "Playtime",
+        "Smart censor": "Playtime",
+        "Feelings notifications": "Feelings",
         "Chastity policy": "Chastity",
         "Privacy & security": "Chat & privacy",
         "Assistant domme": "AI & assistant",
         "Google Tasks": "Integrations",
         "Sex & orgasm tracking details": "Features",
         "Support the project": "Support",
+        "Android app": "This device",
+        "Update app": "This device",
+        Permissions: "This device",
+        Wiki: "Help",
       };
       [...stack.children].forEach((child) => {
         if (child === heading) return;
@@ -18060,6 +22184,7 @@ async function renderRoute() {
   }
   if (parts[0] === "settings") {
     if (parts[1] === "ai-routing") return renderAiRoutingSettings();
+    if (parts[1] === "help" || parts[1] === "wiki") return renderHelpWiki();
     return renderSettings();
   }
   // Legacy History URL — keep Dynamic tab active, never a bottom-nav item.
@@ -18108,6 +22233,11 @@ async function renderRoute() {
     if (parts[2] === "sleep") return renderSleep(dynamicId);
     if (parts[2] === "cycle") return renderCycle(dynamicId);
     if (parts[2] === "manga") return renderManga(dynamicId);
+    if (parts[2] === "instructor" || parts[2] === "web-play") return renderInstructor(dynamicId);
+    if (parts[2] === "wiki") {
+      history.replaceState(null, "", "#/settings/help");
+      return renderHelpWiki();
+    }
     if (parts[2] === "punishment") {
       if (parts[3]) return renderPunishment(dynamicId, parts[3]);
       return renderPunishment(dynamicId);
@@ -18120,7 +22250,7 @@ async function renderRoute() {
     if (parts[2] === "gear") return renderGear(dynamicId);
     if (parts[2] === "vault") return renderVault(dynamicId);
     if (parts[2] === "features") return renderFeatureSettings(dynamicId);
-    return renderDynamicOverview(dynamicId);
+    return renderTrackingHub(dynamicId);
   }
 
   renderHome();

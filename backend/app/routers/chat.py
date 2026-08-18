@@ -521,6 +521,9 @@ def send_message(
                     title="From chat",
                     image_encrypted=encrypted,
                     image_blurred=payload.image_blurred,
+                    media_kind=(payload.media_kind or "image").strip().lower()
+                    if (payload.media_kind or "").strip().lower() in ("image", "video")
+                    else "image",
                 )
             )
 

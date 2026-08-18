@@ -1,8 +1,9 @@
-const CACHE = "ubetra-v106";
+const CACHE = "ubetra-v136";
 const ASSETS = [
   "/",
   "/assets/styles.css",
   "/assets/app.js",
+  "/assets/instructor.js",
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
@@ -116,7 +117,7 @@ self.addEventListener("push", (event) => {
             silent: false,
             icon: "/icons/icon-192.png",
             badge: "/icons/icon-192.png",
-            vibrate: kind === "call" ? [300, 120, 300, 120, 300] : [180, 80, 180],
+            vibrate: kind === "call" ? [300, 120, 300, 120, 300] : kind === "task" ? [120, 60, 120] : [180, 80, 180],
           })
         );
       }

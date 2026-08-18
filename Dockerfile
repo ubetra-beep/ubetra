@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
@@ -8,12 +8,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UBETRA_MFA_REQUIRED=true
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY backend ./backend
 COPY frontend ./frontend
+COPY wiki ./wiki
+COPY plugins ./plugins
+COPY VERSION ./VERSION
 
-RUN mkdir -p /app/backend/data
+RUN mkdir -p /app/backend/data /app/backend/data/redgifs
 
 EXPOSE 8000
 

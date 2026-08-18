@@ -13,6 +13,7 @@ from ..schemas import (
     DynamicJoin,
     DynamicOut,
     DynamicPolicyOut,
+    DynamicPolicyUpdate,
     MenuSummariesOut,
     PartnerOut,
     PartnerUsernameUpdate,
@@ -27,7 +28,7 @@ from ..services.features import (
     parse_enabled_features,
     serialize_enabled_features,
 )
-from ..services.settings_policy import DOM_CONTROLLED_SETTING_KEYS, is_dominant, policy_snapshot
+from ..services.settings_policy import DOM_CONTROLLED_SETTING_KEYS, apply_setting, is_dominant, policy_snapshot
 from ..services.llm import PROVIDER_CATALOG, is_llm_configured, mask_api_key, resolve_llm_config_for_dynamic
 from .auth import apply_username
 
@@ -366,11 +367,42 @@ def get_dynamic_policy(
         chastity_sub_can_delete_breaks=snap["chastity_sub_can_delete_breaks"],
         feelings_prompt_mode=snap["feelings_prompt_mode"],
         feelings_require_end_of_day=snap["feelings_require_end_of_day"],
+        feelings_prompt_after_events=snap.get("feelings_prompt_after_events", True),
+        feelings_notify_inbox=snap.get("feelings_notify_inbox", False),
         chat_system_events=snap["chat_system_events"],
         chat_retain_history=snap["chat_retain_history"],
         enabled_features=snap["enabled_features"],
         locked_setting_keys=locked,
+        task_push_enabled=snap.get("task_push_enabled", True),
+        task_due_lead_minutes=snap.get("task_due_lead_minutes", 15),
+        ml_censor_mode=snap.get("ml_censor_mode", "off"),
     )
+
+
+@router.patch("/{dynamic_id}/policy", response_model=DynamicPolicyOut)
+def update_dynamic_policy(
+    dynamic_id: str,
+    payload: DynamicPolicyUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DynamicPolicyOut:
+    membership = get_membership(dynamic_id, user, db)
+    if not is_dominant(membership):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the keyholder can change these settings",
+        )
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    if payload.task_push_enabled is not None:
+        apply_setting(db, dynamic, setting_key="tasks.push_enabled", value=payload.task_push_enabled)
+    if payload.task_due_lead_minutes is not None:
+        apply_setting(db, dynamic, setting_key="tasks.due_lead_minutes", value=payload.task_due_lead_minutes)
+    if payload.ml_censor_mode is not None:
+        apply_setting(db, dynamic, setting_key="video.ml_censor_mode", value=payload.ml_censor_mode)
+    db.commit()
+    return get_dynamic_policy(dynamic_id, user, db)
 
 
 @router.get("/{dynamic_id}/menu-summaries", response_model=MenuSummariesOut)

@@ -63,6 +63,8 @@ class FeelingCheckInOut(BaseModel):
 class FeelingsSettingsUpdate(BaseModel):
     prompt_mode: Literal["soft", "hard"] = "soft"
     require_end_of_day: bool = True
+    prompt_after_events: bool = True
+    notify_inbox: bool = False
 
 
 def _membership_map(db: Session, dynamic_id: str) -> dict[str, Membership]:
@@ -142,6 +144,8 @@ def update_feelings_settings(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
     dynamic.feelings_prompt_mode = payload.prompt_mode
     dynamic.feelings_require_end_of_day = payload.require_end_of_day
+    dynamic.feelings_prompt_after_events = bool(payload.prompt_after_events)
+    dynamic.feelings_notify_inbox = bool(payload.notify_inbox)
     db.commit()
     return feelings_status(db, dynamic_id, membership, dynamic)
 

@@ -8,6 +8,7 @@ from ..config import settings
 from ..database import get_db
 from ..models import AiService, Dynamic, LlmProvider, Membership, User
 from ..schemas import (
+    AiShareFlags,
     AssistantSettingsOut,
     AssistantSettingsUpdate,
     AssistantToneOption,
@@ -251,12 +252,16 @@ def _assistant_settings_out(
         extra = user.assistant_extra_instructions or ""
     if tone not in ASSISTANT_TONES:
         tone = "balanced"
+    from ..services.tasks_service import parse_ai_share_flags
+
     return AssistantSettingsOut(
         tone=tone,
         extra_instructions=extra,
         include_tracking=bool(user.assistant_include_tracking),
         you_are_dominant=is_dominant(membership) if membership else True,
         dynamic_id=dynamic.id if dynamic else None,
+        ai_enabled=bool(getattr(user, "ai_enabled", True)),
+        share_flags=AiShareFlags(**parse_ai_share_flags(getattr(user, "ai_share_flags", None))),
     )
 
 
@@ -333,6 +338,11 @@ def update_assistant_settings(
 
     # Tracking visibility stays per-user (privacy preference).
     user.assistant_include_tracking = payload.include_tracking
+    if payload.ai_enabled is not None:
+        user.ai_enabled = bool(payload.ai_enabled)
+    if payload.share_flags is not None:
+        user.ai_share_flags = payload.share_flags.model_dump_json()
+        user.assistant_include_tracking = bool(payload.share_flags.tracking)
     db.commit()
     db.refresh(user)
     if dynamic is not None:

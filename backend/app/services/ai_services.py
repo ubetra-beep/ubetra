@@ -115,7 +115,7 @@ AI_TOOLS: dict[str, AiToolSpec] = {
     "tasks": AiToolSpec(
         id="tasks",
         label="Task / make-up assist",
-        description="Domme notes and task help text.",
+        description="Domme notes, task help text, and training regimen builder.",
         needs=(CAP_TEXT, CAP_TEXT_NSFW),
         recommend_providers=(LlmProvider.lmstudio.value, LlmProvider.openrouter.value),
     ),
