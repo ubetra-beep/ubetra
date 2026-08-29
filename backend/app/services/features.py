@@ -4,6 +4,14 @@ import json
 
 from ..models import Dynamic
 
+SECTION_ORDER = ("tracking", "playtime", "knowledge", "chat")
+SECTION_LABELS = {
+    "tracking": "Tracking",
+    "playtime": "Playtime",
+    "knowledge": "Setup & knowledge",
+    "chat": "Chat",
+}
+
 # Always shown — app is not useful without these.
 CORE_FEATURES = {
     "ground_rules",
@@ -13,39 +21,121 @@ CORE_FEATURES = {
     "history",
 }
 
+CORE_FEATURE_META = {
+    "history": {
+        "title": "History",
+        "section": "tracking",
+        "blurb": "Reports, calendars, and linked session logs.",
+    },
+    "ground_rules": {
+        "title": "Ground rules",
+        "section": "knowledge",
+        "blurb": "Agreements you both approve.",
+    },
+    "interview": {
+        "title": "Dynamic interview",
+        "section": "knowledge",
+        "blurb": "What each of you wants from the dynamic.",
+    },
+    "kink_list": {
+        "title": "Kink list",
+        "section": "knowledge",
+        "blurb": "Rate interests and compare overlap.",
+    },
+    "core_knowledge": {
+        "title": "Core knowledge",
+        "section": "knowledge",
+        "blurb": "Logistics, space, budget, and desires for AI context.",
+    },
+}
+
 # Optional menu items partners can hide when unused.
 OPTIONAL_FEATURES = {
-    "spti": {"title": "SPTI profile", "section": "knowledge"},
-    "context_library": {"title": "Context library", "section": "knowledge"},
-    "gear": {"title": "Gear", "section": "knowledge"},
-    "org_tracking": {"title": "Sex & orgasm tracking", "section": "tracking"},
-    "chastity": {"title": "Chastity tracking", "section": "tracking"},
-    "feelings": {"title": "Feelings tracking", "section": "tracking"},
-    "punishment": {"title": "Punishment self-report", "section": "tracking"},
+    "spti": {
+        "title": "SPTI profile",
+        "section": "knowledge",
+        "blurb": "Paste personality-test results for AI tone and scene ideas.",
+    },
+    "context_library": {
+        "title": "Context library",
+        "section": "knowledge",
+        "blurb": "Stories, contracts, and notes tagged for the assistant.",
+    },
+    "gear": {
+        "title": "Gear",
+        "section": "knowledge",
+        "blurb": "Inventory of toys, outfits, and kinky stuff.",
+    },
+    "org_tracking": {
+        "title": "Sex & orgasm tracking",
+        "section": "tracking",
+        "blurb": "Log orgasms, denial, and play for either partner.",
+    },
+    "chastity": {
+        "title": "Chastity tracking",
+        "section": "tracking",
+        "blurb": "Lockups, breaks, Eventual Release, and gift goals.",
+    },
+    "feelings": {
+        "title": "Feelings tracking",
+        "section": "tracking",
+        "blurb": "Wheel check-ins before/after play or at end of day.",
+    },
+    "punishment": {
+        "title": "Punishment self-report",
+        "section": "tracking",
+        "blurb": "Confessions the keyholder assigns or covers.",
+    },
     "sleep_tracking": {
         "title": "Sleep tracking",
         "section": "tracking",
+        "blurb": "Night log; Health Connect on Android.",
         "default_enabled": False,
         "partner_enableable": True,
     },
     "cycle_tracking": {
         "title": "Cycle tracking",
         "section": "tracking",
+        "blurb": "Period flow and symptoms either partner can view.",
         "default_enabled": False,
         "partner_enableable": True,
     },
     # tasks + acts are one Playtime menu item (merged UI); keep both keys for API gates
-    "tasks": {"title": "Tasks & acts", "section": "playtime", "paired_with": "acts"},
-    "acts": {"title": "Tasks & acts", "section": "playtime", "hidden": True, "paired_with": "tasks"},
-    "image_vault": {"title": "Image vault", "section": "tracking"},
-    "scene_workshop": {"title": "Playtime", "section": "playtime"},
+    "tasks": {
+        "title": "Tasks & acts",
+        "section": "playtime",
+        "blurb": "Assign, request, and verify tasks and acts of submission.",
+        "paired_with": "acts",
+    },
+    "acts": {
+        "title": "Tasks & acts",
+        "section": "playtime",
+        "blurb": "Assign, request, and verify tasks and acts of submission.",
+        "hidden": True,
+        "paired_with": "tasks",
+    },
+    "image_vault": {
+        "title": "Image vault",
+        "section": "chat",
+        "blurb": "Private copies of photos from Chat.",
+    },
+    "scene_workshop": {
+        "title": "Playtime",
+        "section": "playtime",
+        "blurb": "Scene builder, spin the wheel, and Instructor.",
+    },
     "manga_comics": {
         "title": "Monthly manga",
         "section": "playtime",
+        "blurb": "One generated comic a month. Either partner can enable.",
         "default_enabled": False,
         "partner_enableable": True,
     },
-    "journal": {"title": "Journal", "section": "tracking"},
+    "journal": {
+        "title": "Journal",
+        "section": "tracking",
+        "blurb": "Private writing; per-entry share with partner and AI.",
+    },
 }
 
 DEFAULT_OPTIONAL_ENABLED = {
@@ -96,16 +186,30 @@ def features_for_dynamic(dynamic: Dynamic) -> dict:
                 "id": feature_id,
                 "title": meta["title"],
                 "section": meta["section"],
+                "blurb": meta.get("blurb") or "",
                 "enabled": is_on,
                 "paired_with": pair,
                 "default_enabled": meta.get("default_enabled", True),
                 "partner_enableable": bool(meta.get("partner_enableable")),
             }
         )
+    core_items = [
+        {
+            "id": fid,
+            "title": CORE_FEATURE_META[fid]["title"],
+            "section": CORE_FEATURE_META[fid]["section"],
+            "blurb": CORE_FEATURE_META[fid]["blurb"],
+        }
+        for fid in ("history", "ground_rules", "interview", "kink_list", "core_knowledge")
+        if fid in CORE_FEATURE_META
+    ]
     return {
         "enabled": sorted(enabled),
         "core": sorted(CORE_FEATURES),
+        "core_items": core_items,
+        "sections": [{"id": sid, "title": SECTION_LABELS[sid]} for sid in SECTION_ORDER],
         "optional": optional_rows,
+        "features_picked": bool(getattr(dynamic, "features_onboarded", False)),
     }
 
 

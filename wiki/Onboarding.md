@@ -2,9 +2,9 @@
 
 Route: `/#/onboarding`
 
-Setup steps: **Dynamic → AI key → SPTI → Kinks → Done**
+Setup steps: **Dynamic → Features → AI key → SPTI (if enabled) → Kinks → Done**
 
-After onboarding, configure modules and privacy using **[Features & Settings](Features-and-Settings)**.
+After onboarding, change modules anytime using the same index in **[Settings](Settings) → This dynamic** or a hub **☰**. Full map: **[Features & Settings](Features-and-Settings)**.
 
 ---
 
@@ -24,7 +24,24 @@ After onboarding, configure modules and privacy using **[Features & Settings](Fe
 
 ---
 
-## 2. Shared AI key
+## 2. Features
+
+Pick what this dynamic will use. Core setup stays on (history, ground rules, interview, kink list, core knowledge). Optional modules are grouped:
+
+| Group | Examples |
+|-------|----------|
+| Tracking | Sex/orgasm log, chastity, feelings, journal, punishment, sleep, cycle |
+| Playtime | Scene workshop, tasks & acts, monthly manga |
+| Setup & knowledge | SPTI, context library, gear |
+| Chat | Image vault |
+
+Presets: **Typical D/s** (defaults), **Tracking**, **Playtime**, **Minimal**. You can change this later; a joining partner does not redo the index if the dynamic already picked features.
+
+If **SPTI profile** is off, the SPTI paste step is skipped.
+
+---
+
+## 3. Shared AI key
 
 Paste a Gemini or OpenAI key for the **dynamic**. Both partners use it (same pattern as the shared chat encryption key). You can **Fill out later** and add a key in Settings anytime.
 
@@ -32,13 +49,13 @@ If you skip the key (or later turn AI off), the **dynamic interview** is a table
 
 ---
 
-## 3. SPTI
+## 4. SPTI
 
-Optional personality results from [spti-test.com](https://spti-test.com/) for AI context. Private to you; not shown verbatim to your partner. Skip if you prefer.
+Shown only when the SPTI module is on. Optional personality results from [spti-test.com](https://spti-test.com/) for AI context. Private to you; not shown verbatim to your partner. Skip if you prefer.
 
 ---
 
-## 4. Kink survey
+## 5. Kink survey
 
 Open the full survey or fill out later. Ratings:
 
@@ -55,7 +72,7 @@ Sharing the list with your partner is **off by default**.
 
 ---
 
-## 5. Done
+## 6. Done
 
 You’ll see your **invite code** to send to your partner. Then open the dynamic overview.
 

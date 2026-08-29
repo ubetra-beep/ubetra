@@ -490,8 +490,9 @@ function providerHelpBtn(provider) {
 
 function onboardingStep(status) {
   if (!status.has_dynamic) return "dynamic";
+  if (!status.features_picked) return "features";
   if (!status.shared_llm_configured && !status.api_skipped) return "api";
-  if (!status.spti_completed && !status.spti_skipped) return "spti";
+  if (status.spti_feature_on !== false && !status.spti_completed && !status.spti_skipped) return "spti";
   if (!status.survey_submitted && !status.survey_skipped) return "survey";
   return "finish";
 }
@@ -4198,31 +4199,18 @@ function openAppFeaturesPanel(dynamicId, sectionFilter = "all") {
     .then(([features, policy]) => {
       const youAreDominant = policy?.you_are_dominant === true;
       const checks = {};
-      const list = el("div", { className: "stack" });
-      const optional = (features.optional || []).filter((f) => {
-        if (sectionFilter === "all") return true;
-        if (sectionFilter === "tracking") return f.section === "tracking" || f.section === "knowledge";
-        if (sectionFilter === "playtime") return f.section === "playtime";
-        if (sectionFilter === "chat") return f.id === "image_vault";
-        return true;
+      const optional = (features.optional || []).filter((f) => featureMatchesFilter(f, sectionFilter));
+      const index = buildFeatureIndex(features, {
+        checksOut: checks,
+        youAreDominant,
+        filter: sectionFilter,
+        showPresets: youAreDominant && sectionFilter === "all",
       });
       if (!optional.length) {
-        list.appendChild(el("p", { className: "muted" }, "No optional features for this menu."));
+        body.appendChild(el("p", { className: "muted" }, "No optional features for this menu."));
+      } else {
+        body.appendChild(index);
       }
-      optional.forEach((feature) => {
-        const box = el("input", { type: "checkbox" });
-        box.checked = feature.enabled;
-        checks[feature.id] = box;
-        const canToggle = youAreDominant || feature.partner_enableable;
-        if (!canToggle) box.disabled = true;
-        const note = feature.partner_enableable && !feature.default_enabled
-          ? " (off by default · either partner)"
-          : feature.partner_enableable
-            ? " (either partner)"
-            : "";
-        list.appendChild(el("label", { className: "checkbox-label" }, [box, ` ${feature.title}${note}`]));
-      });
-      body.appendChild(list);
       body.appendChild(el("div", { className: "row wrap" }, [
         el("button", {
           type: "button",
@@ -4230,25 +4218,11 @@ function openAppFeaturesPanel(dynamicId, sectionFilter = "all") {
           onClick: async () => {
             error.classList.add("hidden");
             try {
-              const partnerOnly = !youAreDominant;
-              const enabled_optional = [];
+              const enabled_optional = collectEnabledOptional(checks, features, sectionFilter);
               if (youAreDominant) {
-                Object.entries(checks).forEach(([id, box]) => {
-                  if (!box.checked) return;
-                  enabled_optional.push(id);
-                  const meta = features.optional.find((f) => f.id === id);
-                  if (meta?.paired_with) enabled_optional.push(meta.paired_with);
-                });
-                (features.optional || []).forEach((f) => {
-                  if (optional.some((o) => o.id === f.id)) return;
-                  if (f.enabled) {
-                    enabled_optional.push(f.id);
-                    if (f.paired_with) enabled_optional.push(f.paired_with);
-                  }
-                });
                 const updated = await api(`/dynamics/${dynamicId}/features`, {
                   method: "PUT",
-                  body: JSON.stringify({ enabled_optional: [...new Set(enabled_optional)] }),
+                  body: JSON.stringify({ enabled_optional }),
                 });
                 if (state.currentDynamic?.id === dynamicId) {
                   state.currentDynamic.enabled_features = updated.enabled;
@@ -4262,17 +4236,9 @@ function openAppFeaturesPanel(dynamicId, sectionFilter = "all") {
               // Sub: direct-save partner_enableable; request the rest
               const partnerIds = optional.filter((f) => f.partner_enableable).map((f) => f.id);
               if (partnerIds.length) {
-                (features.optional || []).forEach((f) => {
-                  if (partnerIds.includes(f.id)) {
-                    if (checks[f.id]?.checked) enabled_optional.push(f.id);
-                  } else if (f.enabled) {
-                    enabled_optional.push(f.id);
-                    if (f.paired_with) enabled_optional.push(f.paired_with);
-                  }
-                });
                 const updated = await api(`/dynamics/${dynamicId}/features`, {
                   method: "PUT",
-                  body: JSON.stringify({ enabled_optional: [...new Set(enabled_optional)] }),
+                  body: JSON.stringify({ enabled_optional }),
                 });
                 if (state.currentDynamic?.id === dynamicId) {
                   state.currentDynamic.enabled_features = updated.enabled;
@@ -4987,14 +4953,16 @@ function renderOnboarding() {
       const error = el("div", { className: "error hidden" });
       const stack = el("div", { className: "stack onboarding" }, [
         el("h1", {}, "Welcome to UBETRA"),
-        el("p", { className: "muted" }, "A short setup so the assistant can tailor suggestions to your dynamic."),
+        el("p", { className: "muted" }, "Pick what you will use, then finish a short setup."),
         error,
       ]);
 
-      const steps = ["dynamic", "api", "spti", "survey", "finish"];
-      const stepLabels = ["Dynamic", "AI key", "SPTI", "Kinks", "Done"];
+      const steps = ["dynamic", "features", "api", "spti", "survey", "finish"];
+      const stepLabels = ["Dynamic", "Features", "AI key", "SPTI", "Kinks", "Done"];
+      const visibleSteps = steps.filter((id) => id !== "spti" || status.spti_feature_on !== false);
       const stepper = el("div", { className: "onboarding-steps" });
-      steps.forEach((id, idx) => {
+      visibleSteps.forEach((id) => {
+        const idx = steps.indexOf(id);
         const active = id === step;
         const done = steps.indexOf(step) > idx;
         stepper.appendChild(el("span", {
@@ -5075,6 +5043,48 @@ function renderOnboarding() {
         ]);
         panel.appendChild(createCard);
         panel.appendChild(joinCard);
+      }
+
+      if (step === "features") {
+        panel.appendChild(el("h2", {}, "What will you use?"));
+        panel.appendChild(el("p", { className: "muted" }, "An index of every optional module. Turn on only what this dynamic needs — you can change it later in Settings. Core setup (interview, ground rules, history) stays on."));
+        const checks = {};
+        let loadedFeatures = null;
+        const indexHost = el("div", { className: "muted" }, "Loading features…");
+        panel.appendChild(indexHost);
+        const saveBtn = el("button", { className: "primary-btn", type: "button" }, "Continue");
+        saveBtn.disabled = true;
+        panel.appendChild(saveBtn);
+        api(`/dynamics/${status.dynamic_id}/features`)
+          .then((features) => {
+            loadedFeatures = features;
+            const you = (state.dynamics || []).find((d) => d.id === status.dynamic_id)
+              ?.partners?.find((p) => p.is_you);
+            const youAreDom = you?.role !== "submissive";
+            indexHost.replaceChildren(buildFeatureIndex(features, {
+              checksOut: checks,
+              youAreDominant: youAreDom,
+              showPresets: youAreDom,
+            }));
+            saveBtn.disabled = false;
+          })
+          .catch((err) => {
+            indexHost.replaceChildren(el("p", { className: "error" }, err.message));
+          });
+        saveBtn.addEventListener("click", async () => {
+          error.classList.add("hidden");
+          if (!loadedFeatures) return;
+          try {
+            await api("/onboarding/features", {
+              method: "POST",
+              body: JSON.stringify({ enabled_optional: enabledOptionalFromChecks(checks, loadedFeatures) }),
+            });
+            renderOnboarding();
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+          }
+        });
       }
 
       if (step === "api") {
@@ -16716,28 +16726,14 @@ function renderFeatureSettings(dynamicId) {
       const error = el("div", { className: "error hidden" });
       const status = el("p", { className: "muted" });
       const checks = {};
-      const list = el("div", { className: "stack" });
-      list.appendChild(el("p", { className: "muted" }, "Core items stay on. Turn optional features off when you do not need them."));
-      list.appendChild(el("div", { className: "card stack" }, [
-        el("strong", {}, "Always included"),
-        el("p", { className: "muted" }, features.core.map((id) => {
-          const item = allFacetItems().find((f) => f.id === id);
-          return item?.title || id;
-        }).join(" · ")),
-      ]));
-
-      const optionalCard = el("div", { className: "card stack" }, [
-        el("strong", {}, "Optional features"),
+      const list = el("div", { className: "stack" }, [
+        el("p", { className: "muted" }, "Same index as onboarding. Core setup stays on."),
+        buildFeatureIndex(features, {
+          checksOut: checks,
+          youAreDominant,
+          showPresets: youAreDominant,
+        }),
       ]);
-      features.optional.forEach((feature) => {
-        const box = el("input", { type: "checkbox" });
-        box.checked = feature.enabled;
-        checks[feature.id] = box;
-        optionalCard.appendChild(
-          el("label", { className: "checkbox-label" }, [box, feature.title])
-        );
-      });
-      list.appendChild(optionalCard);
 
       const actions = [
         el("h1", {}, "Application features"),
@@ -16751,16 +16747,10 @@ function renderFeatureSettings(dynamicId) {
           onClick: async () => {
             error.classList.add("hidden");
             try {
-              const enabled_optional = [];
-              Object.entries(checks).forEach(([id, box]) => {
-                if (!box.checked) return;
-                enabled_optional.push(id);
-                const meta = features.optional.find((f) => f.id === id);
-                if (meta?.paired_with) enabled_optional.push(meta.paired_with);
-              });
+              const enabled_optional = enabledOptionalFromChecks(checks, features);
               const updated = await api(`/dynamics/${dynamicId}/features`, {
                 method: "PUT",
-                body: JSON.stringify({ enabled_optional: [...new Set(enabled_optional)] }),
+                body: JSON.stringify({ enabled_optional }),
               });
               if (state.currentDynamic?.id === dynamicId) {
                 state.currentDynamic.enabled_features = updated.enabled;
@@ -18744,6 +18734,129 @@ function settingsHelp(text) {
   return el("span", { className: "settings-help-wrap" }, [btn, tip]);
 }
 
+const FEATURE_SECTION_ORDER = ["tracking", "playtime", "knowledge", "chat"];
+const FEATURE_SECTION_LABELS = {
+  tracking: "Tracking",
+  playtime: "Playtime",
+  knowledge: "Setup & knowledge",
+  chat: "Chat",
+};
+
+function featureMatchesFilter(feature, filter) {
+  if (!filter || filter === "all") return true;
+  if (filter === "tracking") return feature.section === "tracking" || feature.section === "knowledge";
+  if (filter === "playtime") return feature.section === "playtime";
+  if (filter === "chat") return feature.section === "chat" || feature.id === "image_vault";
+  return true;
+}
+
+function enabledOptionalFromChecks(checks, features) {
+  const enabled_optional = [];
+  Object.entries(checks).forEach(([id, box]) => {
+    if (!box.checked) return;
+    enabled_optional.push(id);
+    const meta = (features.optional || []).find((f) => f.id === id);
+    if (meta?.paired_with) enabled_optional.push(meta.paired_with);
+  });
+  return [...new Set(enabled_optional)];
+}
+
+function collectEnabledOptional(checks, features, filter = "all") {
+  const enabled = new Set(enabledOptionalFromChecks(checks, features));
+  (features.optional || []).forEach((f) => {
+    if (featureMatchesFilter(f, filter)) return;
+    if (!f.enabled) return;
+    enabled.add(f.id);
+    if (f.paired_with) enabled.add(f.paired_with);
+  });
+  return [...enabled];
+}
+
+function optionalFeatureEnabled(featuresBundle, featureId) {
+  if (!featuresBundle || !featureId) return true;
+  const row = (featuresBundle.optional || []).find((f) => f.id === featureId);
+  if (!row) return true;
+  return !!row.enabled;
+}
+
+function applyFeaturePreset(checks, features, preset) {
+  const optional = features.optional || [];
+  const ids = new Set();
+  if (preset === "typical") {
+    optional.forEach((f) => { if (f.default_enabled !== false) ids.add(f.id); });
+  } else if (preset === "tracking") {
+    ["org_tracking", "chastity", "feelings", "journal", "punishment", "image_vault"].forEach((id) => ids.add(id));
+  } else if (preset === "playtime") {
+    ["scene_workshop", "tasks", "image_vault"].forEach((id) => ids.add(id));
+  }
+  optional.forEach((f) => {
+    const box = checks[f.id];
+    if (!box || box.disabled) return;
+    box.checked = ids.has(f.id);
+  });
+}
+
+function buildFeatureIndex(features, { checksOut = {}, youAreDominant = true, filter = "all", showPresets = false } = {}) {
+  const wrap = el("div", { className: "feature-index" });
+  const coreTitles = (features.core_items || []).map((c) => c.title);
+  wrap.appendChild(el("div", { className: "feature-index-group" }, [
+    el("h3", {}, "Always on"),
+    el("p", { className: "muted" }, coreTitles.length
+      ? coreTitles.join(" · ")
+      : "History, ground rules, interview, kink list, core knowledge"),
+  ]));
+  if (showPresets) {
+    const row = el("div", { className: "row wrap feature-index-presets" });
+    [
+      ["typical", "Typical D/s"],
+      ["tracking", "Tracking"],
+      ["playtime", "Playtime"],
+      ["minimal", "Minimal"],
+    ].forEach(([id, label]) => {
+      row.appendChild(el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => applyFeaturePreset(checksOut, features, id),
+      }, label));
+    });
+    wrap.appendChild(row);
+  }
+  const bySection = {};
+  (features.optional || []).forEach((feature) => {
+    if (!featureMatchesFilter(feature, filter)) return;
+    (bySection[feature.section] || (bySection[feature.section] = [])).push(feature);
+  });
+  FEATURE_SECTION_ORDER.forEach((sec) => {
+    const rows = bySection[sec];
+    if (!rows || !rows.length) return;
+    const group = el("div", { className: "feature-index-group" }, [
+      el("h3", {}, FEATURE_SECTION_LABELS[sec] || sec),
+    ]);
+    rows.forEach((feature) => {
+      const box = el("input", { type: "checkbox" });
+      box.checked = !!feature.enabled;
+      const canToggle = youAreDominant || feature.partner_enableable;
+      if (!canToggle) box.disabled = true;
+      checksOut[feature.id] = box;
+      const note = feature.partner_enableable && feature.default_enabled === false
+        ? "Off by default · either partner"
+        : feature.partner_enableable
+          ? "Either partner"
+          : "";
+      group.appendChild(el("label", { className: "feature-index-row" }, [
+        box,
+        el("span", { className: "feature-index-copy" }, [
+          el("strong", {}, feature.title),
+          note ? el("span", { className: "muted" }, note) : null,
+          feature.blurb ? el("span", { className: "muted" }, feature.blurb) : null,
+        ]),
+      ]));
+    });
+    wrap.appendChild(group);
+  });
+  return wrap;
+}
+
 function settingsSection(title, children, { id = "", open = false, help = "" } = {}) {
   const body = (Array.isArray(children) ? children : [children]).filter(Boolean);
   const summaryKids = [title];
@@ -18782,7 +18895,7 @@ function buildSettingsSetupChecklist({ user, llmSettings, googleStatus, dynamics
       id: "dynamic",
       title: "Join or create a dynamic",
       why: "Almost every feature needs a relationship space.",
-      focus: "dynamics",
+      focus: "features",
     });
   }
   if (!llmSettings?.configured && !llmSettings?.shared_configured && !dynamics?.some((d) => d.shared_llm_configured)) {
@@ -18798,7 +18911,7 @@ function buildSettingsSetupChecklist({ user, llmSettings, googleStatus, dynamics
       id: "google",
       title: "Connect Google Tasks (optional)",
       why: "Lets discreet code-word tasks sync to Google Tasks.",
-      focus: "integrations",
+      focus: "permissions",
     });
   }
   if (!items.length) return null;
@@ -21696,7 +21809,7 @@ function renderSettings() {
           return "Assistant settings saved";
         },
       });
-      if (!isSubmissive && initialDynamicId) {
+      if (!isSubmissive && initialDynamicId && optionalFeatureEnabled(featuresBundle, "punishment")) {
         const autoOn = el("input", { type: "checkbox" });
         autoOn.checked = !!autoPunish?.enabled;
         const autoStatus = el("p", { className: "muted" });
@@ -21834,7 +21947,7 @@ function renderSettings() {
         const tzLine = displayTimeZone()
           ? `This device reports ${displayTimeZone()} so due times match your clock.`
           : "Time zone is taken from this device.";
-        stack.appendChild(el("div", { className: "card stack" }, [
+        const tasksCard = el("div", { className: "card stack" }, [
           el("h2", {}, "Tasks & notifications"),
           el("p", { className: "muted" }, tzLine),
           lockedSettingsWrap({
@@ -21847,15 +21960,17 @@ function renderSettings() {
           }),
           playStatus,
           playError,
-        ]));
-        stack.appendChild(el("div", { className: "card stack" }, [
+        ]);
+        if (optionalFeatureEnabled(featuresBundle, "tasks")) stack.appendChild(tasksCard);
+        const censorCard = el("div", { className: "card stack" }, [
           el("h2", {}, "Smart censor"),
           el("p", { className: "muted" }, "When on, only the sub’s screen is scanned (incoming video and Instructor). The keyholder’s view is not blurred. Uses on-device detection; server GPU is used only when that path is available."),
           lockedSettingsWrap({
             locked: playLocked,
             children: el("label", {}, ["Mode", censorMode]),
           }),
-        ]));
+        ]);
+        if (optionalFeatureEnabled(featuresBundle, "scene_workshop")) stack.appendChild(censorCard);
         let playBaseline = {
           push: taskPush.checked,
           lead: dueLead.value,
@@ -21955,7 +22070,7 @@ function renderSettings() {
           feelStatus,
           feelError,
         ]);
-        stack.appendChild(feelCard);
+        if (optionalFeatureEnabled(featuresBundle, "feelings")) stack.appendChild(feelCard);
         let feelBaseline = {
           mode: feelMode.value,
           after: feelAfter.checked,
@@ -22241,27 +22356,20 @@ function renderSettings() {
 
       if (featuresBundle && initialDynamicId) {
         const featureChecks = {};
-        const featureRows = [];
         const featureBaseline = {};
         (featuresBundle.optional || []).forEach((feature) => {
-          const box = el("input", { type: "checkbox" });
-          box.checked = feature.enabled;
-          featureChecks[feature.id] = box;
           featureBaseline[feature.id] = !!feature.enabled;
-          const row = el("label", { className: "checkbox-label" }, [box, feature.title]);
-          featureRows.push(
-            lockedSettingsWrap({
-              locked: !!(policy && !policy.you_are_dominant),
-              children: row,
-            })
-          );
         });
         const featureStatus = el("p", { className: "muted" });
         const featureError = el("div", { className: "error hidden" });
         const featureCard = el("div", { className: "card stack" }, [
           el("h2", {}, "Application features"),
-          el("p", { className: "muted" }, "Hide optional app areas you are not using. Core items stay available."),
-          ...featureRows,
+          el("p", { className: "muted" }, "Same index as onboarding. Hide modules you are not using; core setup stays on."),
+          buildFeatureIndex(featuresBundle, {
+            checksOut: featureChecks,
+            youAreDominant: !!(policy && policy.you_are_dominant),
+            showPresets: !!(policy && policy.you_are_dominant),
+          }),
           featureStatus,
           featureError,
         ]);
@@ -22317,7 +22425,7 @@ function renderSettings() {
       snapshotPrivacyBaseline();
       draft.refresh();
 
-      if (initialDynamicId) {
+      if (initialDynamicId && optionalFeatureEnabled(featuresBundle, "org_tracking")) {
         const orgPrefsStatus = el("p", { className: "muted" });
         const orgPrefsError = el("div", { className: "error hidden" });
         const orgPrefsCard = el("div", { className: "card stack" }, [
@@ -22387,7 +22495,7 @@ function renderSettings() {
         stack.appendChild(orgPrefsCard);
       }
 
-      if (policy && initialDynamicId) {
+      if (policy && initialDynamicId && optionalFeatureEnabled(featuresBundle, "chastity")) {
         const allowDelete = el("input", { type: "checkbox" });
         allowDelete.checked = policy.chastity_sub_can_delete_breaks !== false;
         let chastityBaseline = allowDelete.checked;
@@ -22540,77 +22648,74 @@ function renderSettings() {
       const heading = stack.firstElementChild;
       const leftovers = [];
       const buckets = {
-        Account: [],
-        Appearance: [],
-        Dynamics: [],
-        Features: [],
-        Playtime: [],
-        Feelings: [],
-        Chastity: [],
+        You: [],
+        "This dynamic": [],
         "Chat & privacy": [],
         "AI & assistant": [],
-        Integrations: [],
-        Support: [],
         "This device": [],
         Help: [],
       };
       const bucketIds = {
-        Account: "account",
-        Appearance: "appearance",
-        Dynamics: "dynamics",
-        Features: "features",
-        Playtime: "playtime",
-        Feelings: "feelings",
-        Chastity: "chastity",
+        You: "account",
+        "This dynamic": "features",
         "Chat & privacy": "chat",
         "AI & assistant": "ai",
-        Integrations: "integrations",
-        Support: "support",
         "This device": "permissions",
         Help: "help",
       };
       const bucketHelp = {
-        Appearance: "Theme is stored on this device only.",
-        "AI & assistant": "Gemini: open Google AI Studio → Create API key → paste here. OpenAI: platform.openai.com → API keys. Used by the assistant, suggested ground rules, acts, and interviews. Server default uses the host .env key.",
-        Integrations: "Optional third-party connections (currently none enabled).",
-        Feelings: "After-play prompts, the return overlay, and end-of-day reminders.",
-        Chastity: "Keyholder policy for whether the sub can delete their own break records.",
-        "Chat & privacy": "History retention, end-to-end chat keys, and push notifications for this device.",
-        Support: "Optional donations — the app stays free either way.",
-        "This device": "Camera, microphone, notifications, and extra Android steps (battery, DND, dedicated phone).",
-        Help: "In-app wiki for this install. https links open in your phone browser.",
+        You: "Account, appearance, backup, and optional tips. Theme and icon stay on this device.",
+        "This dynamic": "The same feature index as onboarding, plus settings for modules you turned on.",
+        "AI & assistant": "Gemini: Google AI Studio → Create API key. OpenAI: platform.openai.com → API keys. Powers scenes, interviews, and Assistant Domme.",
+        "Chat & privacy": "History retention, encryption, and push for this device.",
+        "This device": "Camera, microphone, notifications, and Android extras.",
+        Help: "In-app wiki for this install.",
       };
       const titleMap = {
-        Username: "Account",
-        Appearance: "Appearance",
-        "Biological sex": "Account",
-        "Account email": "Account",
-        "Change password": "Account",
-        "Backup & restore": "Account",
-        "Partner username": "Account",
-        "Log out": "Account",
-        "Your dynamics": "Dynamics",
-        "Start or join a dynamic": "Dynamics",
-        "Application features": "Features",
-        "Auto punish": "Playtime",
-        "Tasks & notifications": "Playtime",
-        "Smart censor": "Playtime",
-        "Feelings notifications": "Feelings",
-        "Chastity policy": "Chastity",
+        Username: "You",
+        Appearance: "You",
+        "Biological sex": "You",
+        "Account email": "You",
+        "Change password": "You",
+        "Backup & restore": "You",
+        "Partner username": "You",
+        "Log out": "You",
+        "Support the project": "You",
+        "Your dynamics": "This dynamic",
+        "Start or join a dynamic": "This dynamic",
+        "Application features": "This dynamic",
+        "Auto punish": "This dynamic",
+        "Tasks & notifications": "This dynamic",
+        "Smart censor": "This dynamic",
+        "Feelings notifications": "This dynamic",
+        "Chastity policy": "This dynamic",
+        "Sex & orgasm tracking details": "This dynamic",
         "Privacy & security": "Chat & privacy",
         "Assistant domme": "AI & assistant",
-        "Google Tasks": "Integrations",
-        "Sex & orgasm tracking details": "Features",
-        "Support the project": "Support",
+        "Google Tasks": "This device",
         "Android app": "This device",
         "Update app": "This device",
         Permissions: "This device",
         Wiki: "Help",
+        About: "Help",
+      };
+      const focusAliases = {
+        appearance: "account",
+        dynamics: "features",
+        playtime: "features",
+        feelings: "features",
+        chastity: "features",
+        integrations: "permissions",
+        support: "account",
       };
       [...stack.children].forEach((child) => {
         if (child === heading) return;
         const h2 = child.querySelector?.("h2");
         const title = h2?.textContent?.trim() || "";
+        if (title === "Application features") {
+          buckets["This dynamic"].unshift(child);
+          return;
+        }
         if (titleMap[title]) {
           buckets[titleMap[title]].push(child);
           return;
@@ -22629,7 +22734,7 @@ function renderSettings() {
         dynamics,
         providers,
       });
-      const focus = query.get("focus") || "";
+      const focus = focusAliases[query.get("focus") || ""] || query.get("focus") || "";
       const grouped = el("div", { className: "stack settings-page" }, [heading]);
       if (checklist) grouped.appendChild(checklist);
       Object.entries(buckets).forEach(([name, items]) => {

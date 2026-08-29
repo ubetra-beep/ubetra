@@ -36,9 +36,9 @@ flowchart TD
   R[Register / login] --> D{Have a dynamic?}
   D -->|no| C[Create dynamic as keyholder]
   D -->|invite code| J[Join as submissive]
-  C --> I[Invite partner]
-  J --> I
-  I --> K{Need AI?}
+  C --> Feat[Pick features]
+  J --> Feat
+  Feat --> K{Need AI?}
   K -->|yes| L[Settings: AI connection]
   K -->|no| N[Hubs]
   L --> SPTI[Optional SPTI paste]

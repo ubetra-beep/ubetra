@@ -13,7 +13,7 @@ Screenshots on these pages come from a local **WikiDom** (Dominant) / **WikiSub*
 | Page | What it covers |
 |------|----------------|
 | [Getting Started](Getting-Started) | Install, first login, PWA |
-| [Onboarding](Onboarding) | Create/join dynamic, AI key, SPTI, kink survey |
+| [Onboarding](Onboarding) | Create/join dynamic, **pick features**, AI key, SPTI, kink survey |
 | [Features & Settings](Features-and-Settings) | **Full map of modules, settings, and how to use them** |
 | [Workflows](Workflows) | Flowcharts of how processes run (troubleshooting) |
 | [Feature map](Feature-map) | How features interact; known workflow risks |
@@ -24,7 +24,7 @@ Screenshots on these pages come from a local **WikiDom** (Dominant) / **WikiSub*
 | [Tracking](Tracking) | History, chastity, orgasm log, feelings, punishment, journal, vault |
 | [Chat](Chat) | Messaging, encryption, push, images, clear chat |
 | [Playtime](Playtime) | Assistant, scene builder, spin game, tasks & acts |
-| [Settings](Settings) | Account, privacy, AI, features, Help (wiki), backup |
+| [Settings](Settings) | You, this dynamic (feature index), privacy, AI, this device, Help |
 | [Roles & Permissions](Roles-and-Permissions) | Dom vs Sub, approvals |
 | [Self-Hosting](Self-Hosting) | Docker/native config, HTTPS, env vars |
 
@@ -50,7 +50,7 @@ Screenshots on these pages come from a local **WikiDom** (Dominant) / **WikiSub*
 | Talk, share photos, see activity logs | [Chat](Chat) |
 | Assign tasks, Instructor, spin games, AI scenes | [Playtime](Playtime) |
 | Teach the AI about you | Interview + Core knowledge ([Dynamics](Dynamics)) |
-| Turn modules on/off | Settings → Features or hub ☰ **Application features** |
+| Turn modules on/off | Settings → This dynamic, or hub ☰ **Application features** |
 | Privacy, encryption, who can clear chat | Settings → Privacy ([Features & Settings](Features-and-Settings)) |
 
 ---

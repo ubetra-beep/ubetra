@@ -2,7 +2,7 @@
 
 How modules touch each other. Companion pages: [Workflows](Workflows) (step-by-step) and [AI context](AI-context) (LLM visibility).
 
-Feature **on/off** lives on Settings → Features and each hub ☰ **Application features**. Empty stored list = factory defaults (most modules on; sleep, cycle, manga off).
+Feature **on/off** lives on Settings → This dynamic (same index as onboarding) and each hub ☰ **Application features**. Empty stored list = factory defaults (most modules on; sleep, cycle, manga off).
 
 ---
 

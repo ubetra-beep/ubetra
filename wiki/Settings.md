@@ -4,6 +4,17 @@ Route: `/#/settings` (optional `?dynamic={id}`)
 
 One sticky **Save** appears when something changed. Subs see **Submit settings change** for Dom-controlled fields.
 
+Six groups (not a long list of accordions):
+
+| Group | What’s inside |
+|-------|----------------|
+| **You** | Username, appearance, email, password, backup, log out |
+| **This dynamic** | Same **feature index** as onboarding, plus settings for modules that are on |
+| **Chat & privacy** | Retention, encryption, push |
+| **AI & assistant** | Keys, routing, Assistant Domme |
+| **This device** | Permissions, Android, Google Tasks (hidden until ready) |
+| **Help** | Wiki, About |
+
 For the full module map and “how to use it,” see **[Features & Settings](Features-and-Settings)**.
 
 ![Settings — Dom](images/20-settings.png)
@@ -14,19 +25,21 @@ For the full module map and “how to use it,” see **[Features & Settings](Fea
 
 ---
 
-## Account
+## You
 
-Username, biological sex, email, password, and **Log out**. Dom may rename a Sub’s username for the dynamic. Password reset uses email (when SMTP is configured) and also pushes a code/link to phones that already have UBETRA notifications.
-
-## Appearance
+Username, biological sex, email, password, appearance, backup, and **Log out**. Dom may rename a Sub’s username for the dynamic. Password reset uses email (when SMTP is configured) and also pushes a code/link to phones that already have UBETRA notifications.
 
 Color theme for this device (Midnight, Ember, Forest, Slate). **App icon** style (violet, sage, midnight, ember, cream) is used when you install the PWA. Stored in localStorage — not synced yet.
 
 ![Appearance / app icon](images/40-appearance.png)
 
-## Dynamics
+Export / import JSON lives here too. Treat exports as **secret** (may include API keys and chat material).
 
-Switch, create, or view invite context for the selected dynamic.
+## This dynamic
+
+Switch, create, or view invite context. The **feature index** is the same grouped list as onboarding (Tracking / Playtime / Setup & knowledge / Chat). Detail cards (chastity policy, feelings notifications, orgasm-log fields, auto punish, task push, smart censor) only appear when that module is on.
+
+Feature toggles are Dom-controlled except partner-enableable sleep / cycle / manga.
 
 ## AI & assistant
 
@@ -46,22 +59,10 @@ Switch, create, or view invite context for the selected dynamic.
 - Image blur  
 - Device + dynamic push  
 
-## Features
+## This device
 
-Toggle optional menu modules. Feature toggles are Dom-controlled (except partner-enableable sleep / cycle / manga).
-
-## Chastity policy
-
-e.g. whether the Sub may delete temporary unlock log entries.
-
-## Integrations
-
-Google Tasks UI is currently hidden until ready. Sleep/cycle Health Connect lives in the Android APK. Garmin OAuth appears when Sleep tracking is enabled.
+Camera, microphone, notifications, Android extras. Google Tasks UI is currently hidden until ready. Sleep/cycle Health Connect lives in the Android APK. Garmin OAuth appears when Sleep tracking is enabled.
 
 ## Help
 
 In-app **Wiki** (markdown bundled with this install). Open Settings → Help → Wiki. External https links leave the app.
-
-## Backup
-
-Export / import JSON. Treat exports as **secret** (may include API keys and chat material).

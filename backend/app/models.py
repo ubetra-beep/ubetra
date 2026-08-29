@@ -300,6 +300,7 @@ class Dynamic(Base):
         ForeignKey("memberships.id"), nullable=True
     )
     enabled_features: Mapped[str] = mapped_column(Text, default="")
+    features_onboarded: Mapped[bool] = mapped_column(Boolean, default=False)
     act_categories: Mapped[str] = mapped_column(Text, default="")
     # soft | hard
     feelings_prompt_mode: Mapped[str] = mapped_column(String(16), default="soft")

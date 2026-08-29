@@ -193,7 +193,10 @@ class DynamicOut(BaseModel):
 class DynamicFeaturesOut(BaseModel):
     enabled: list[str]
     core: list[str]
+    core_items: list[dict] = []
+    sections: list[dict] = []
     optional: list[dict]
+    features_picked: bool = False
 
 
 class DynamicFeaturesUpdate(BaseModel):
@@ -229,6 +232,8 @@ class OnboardingStatusOut(BaseModel):
     spti_skipped: bool = False
     survey_submitted: bool
     survey_skipped: bool = False
+    features_picked: bool = False
+    spti_feature_on: bool = True
 
 
 class OnboardingCompleteOut(BaseModel):

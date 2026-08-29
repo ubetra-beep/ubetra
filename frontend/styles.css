@@ -2186,6 +2186,54 @@ textarea {
   margin-bottom: 0.5rem;
 }
 
+.feature-index {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.feature-index-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.feature-index-group h3 {
+  margin: 0.15rem 0 0.2rem;
+  font-size: 0.95rem;
+}
+
+.feature-index-presets {
+  margin: 0.1rem 0 0.35rem;
+}
+
+.feature-index-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.5rem 0.1rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.feature-index-row input[type="checkbox"] {
+  margin-top: 0.25rem;
+  flex-shrink: 0;
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.feature-index-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.feature-index-copy strong {
+  font-weight: 650;
+}
+
 .checkbox-label {
   display: flex;
   flex-direction: row;
@@ -3735,6 +3783,8 @@ details[open] summary {
 
 .app-features-backdrop .app-features-panel {
   width: min(420px, 100%);
+  max-height: min(88vh, 720px);
+  overflow: auto;
 }
 
 .hub-setup-details {

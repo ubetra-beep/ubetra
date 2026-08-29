@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import Dynamic, Membership, User
-from ..schemas import OnboardingCompleteOut, OnboardingStatusOut, SptiUpdate
+from ..schemas import DynamicFeaturesUpdate, OnboardingCompleteOut, OnboardingStatusOut, SptiUpdate
+from ..services.features import is_feature_enabled, serialize_enabled_features, OPTIONAL_FEATURES, parse_enabled_features
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
@@ -36,6 +37,9 @@ def onboarding_status(
     spti_data = (membership.spti_data or "") if membership else ""
     spti_skipped = spti_data == "__skipped__"
     api_skipped = bool(dynamic and (dynamic.shared_llm_model or "") == "__skipped__")
+    spti_on = True
+    if dynamic is not None:
+        spti_on = is_feature_enabled(dynamic, "spti")
     return OnboardingStatusOut(
         onboarding_completed=bool(user.onboarding_completed),
         has_dynamic=membership is not None,
@@ -48,6 +52,8 @@ def onboarding_status(
         spti_skipped=spti_skipped,
         survey_submitted=bool(membership and membership.survey_submitted),
         survey_skipped=bool(membership and membership.survey_skipped),
+        features_picked=bool(dynamic and getattr(dynamic, "features_onboarded", False)),
+        spti_feature_on=spti_on,
     )
 
 
@@ -80,6 +86,47 @@ def skip_survey(
             detail="Create or join a dynamic before skipping the kink survey",
         )
     membership.survey_skipped = True
+    db.commit()
+    return onboarding_status(user, db)
+
+
+@router.post("/features", response_model=OnboardingStatusOut)
+def save_onboarding_features(
+    payload: DynamicFeaturesUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OnboardingStatusOut:
+    from ..services.settings_policy import is_dominant
+
+    membership, dynamic = _primary_membership(db, user.id)
+    if membership is None or dynamic is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Create or join a dynamic before choosing features",
+        )
+    selected = {item for item in payload.enabled_optional if item in OPTIONAL_FEATURES}
+    for feature_id in list(selected):
+        pair = OPTIONAL_FEATURES.get(feature_id, {}).get("paired_with")
+        if pair:
+            selected.add(pair)
+    if not is_dominant(membership):
+        current = parse_enabled_features(dynamic.enabled_features)
+        partner_ids = {
+            fid for fid, meta in OPTIONAL_FEATURES.items() if meta.get("partner_enableable")
+        }
+        for fid in partner_ids:
+            if fid in selected:
+                current.add(fid)
+            else:
+                current.discard(fid)
+        selected = {fid for fid in current if fid in OPTIONAL_FEATURES}
+        for fid, meta in OPTIONAL_FEATURES.items():
+            if meta.get("partner_enableable"):
+                continue
+            if fid in parse_enabled_features(dynamic.enabled_features):
+                selected.add(fid)
+    dynamic.enabled_features = serialize_enabled_features(selected)
+    dynamic.features_onboarded = True
     db.commit()
     return onboarding_status(user, db)
 

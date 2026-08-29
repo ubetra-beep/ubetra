@@ -1524,3 +1524,10 @@ def run_migrations() -> None:
     if asst_msg_cols and "cleared_at" not in asst_msg_cols:
       conn.execute(text("ALTER TABLE assistant_messages ADD COLUMN cleared_at DATETIME"))
       conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assistant_messages_cleared_at ON assistant_messages (cleared_at)"))
+
+    dyn_feat_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(dynamics)")).fetchall()
+    }
+    if dyn_feat_cols and "features_onboarded" not in dyn_feat_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN features_onboarded BOOLEAN DEFAULT 0"))

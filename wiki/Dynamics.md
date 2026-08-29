@@ -42,7 +42,7 @@ Yellow **Needed** badges mean that partner hasn’t finished interview or kink s
 
 Files and journal entries each have **Use for AI** and **Visible to partner** toggles.
 
-Optional modules: **Application features** (Tracking hub → Setup, or [Settings](Settings) → Features). Full map: [Features & Settings](Features-and-Settings).
+Optional modules: **Application features** (Tracking hub → Setup, Settings → This dynamic, or [Onboarding](Onboarding) Features). Full map: [Features & Settings](Features-and-Settings).
 
 ---
 

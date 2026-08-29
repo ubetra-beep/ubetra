@@ -16,7 +16,7 @@ This page is the map of **what UBETRA can do** and **where you configure it**. S
 | **Playtime** | Games, AI scenes, tasks | Scene builder, spin the wheel, Instructor, tasks & acts, monthly manga (opt-in). Keyholder **Assistant Domme** bubble is on every dynamic page when AI is on — [Assistant Domme](Assistant-Domme) |
 | **Chat** | Conversation + activity feed | Messages, photos, system logs (lockups, tracking, settings approvals) |
 
-Each hub’s **☰** opens **Application features** for that area (same toggles as Settings → Features).
+Each hub’s **☰** opens the same **feature index** as onboarding (filtered to that hub). Settings → **This dynamic** has the full index.
 
 ---
 
@@ -47,14 +47,13 @@ Dom-controlled for most toggles; sleep / cycle / manga are partner-enableable.
 
 ## Settings sections (how to utilize)
 
-### Account
-Change username, email, password; log out. Dom may rename the Sub’s username for the dynamic.
+Six groups. Old deep links (`?focus=appearance`, `playtime`, `feelings`, `chastity`) still open the right group.
 
-### Appearance
-Device theme (Midnight, Ember, Forest, Slate) and **PWA app icon** style — local to this browser/app.
+### You
+Change username, email, password; appearance (theme + PWA icon); backup; log out. Dom may rename the Sub’s username for the dynamic.
 
-### Dynamics
-Pick the active dynamic, create another, or copy invite context.
+### This dynamic
+Pick the active dynamic, then the **feature index** (same as [Onboarding](Onboarding)). Cards for chastity policy, feelings, orgasm-log fields, auto punish, and task push only show when that module is on.
 
 ### AI & assistant
 - Add **named AI connections** (Gemini, OpenAI, OpenRouter, LM Studio, OpenAI-compatible).
@@ -78,17 +77,11 @@ Use this when Playtime scenes, journal assist, Domme review, Assistant Domme cha
 
 Chat **⋯** mirrors many of these for quick changes. **Clear chat…** deletes messages and posts a log line.
 
-### Features
-Same as Application features above — hide modules you do not use.
-
-### Chastity policy
-e.g. whether the Sub may delete temporary unlock log entries.
+### This device
+Permissions, Android extras. Google Tasks UI is hidden until ready.
 
 ### Help
-**Wiki** lives here — in-app markdown for this install. Open Settings → Help → Wiki.
-
-### Backup
-Export / import JSON. Treat exports as **secret**.
+**Wiki** lives here — in-app markdown for this install. Open Settings → Help → Wiki. Backup/export is under **You**.
 
 ---
 
@@ -103,7 +96,7 @@ When a Sub changes a Dom-controlled setting, Chat shows a **settings request** f
 ## Suggested setup order
 
 1. Create/join dynamic ([Onboarding](Onboarding)).
-2. Enable the modules you actually use (Features).
+2. Enable the modules you actually use (onboarding Features, or Settings → This dynamic).
 3. Both partners: Core knowledge + interview ([Dynamics](Dynamics)).
 4. Dom: ground rules; chastity settings; task list.
 5. Chat privacy (encryption / logs / clear policy) and push on each phone.
