@@ -681,3 +681,333 @@ def create_assistant_task(
         .one()
     )
     return task_list_out(task_list, membership)
+
+
+def _assistant_message_out(msg) -> dict:
+    import json as _json
+
+    try:
+        suggestions = _json.loads(msg.suggestions_json or "[]")
+    except _json.JSONDecodeError:
+        suggestions = []
+    if not isinstance(suggestions, list):
+        suggestions = []
+    return {
+        "id": msg.id,
+        "role": msg.role,
+        "content": msg.content,
+        "suggestions": suggestions,
+        "created_at": msg.created_at,
+    }
+
+
+@router.get("/{dynamic_id}/assistant/triggers")
+def get_assistant_triggers(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import EXAMPLE_PROMPTS, demo_suggestions
+    from ..services.assistant_permissions import public_permissions
+    from ..services.assistant_triggers import evaluate_triggers, index_payload
+    from ..services.llm import is_llm_configured
+
+    available = membership.role.value == "dominant" and bool(getattr(user, "ai_enabled", True))
+    llm_configured = is_llm_configured(user, dynamic)
+    if not available:
+        return {
+            "available": False,
+            "llm_configured": False,
+            "triggers": [],
+            "subjects": [],
+            "nag_count": 0,
+            "permissions": {"capabilities": []},
+            "example_prompts": [],
+            "demo_suggestions": [],
+        }
+    triggers = evaluate_triggers(db, dynamic=dynamic, membership=membership)
+    subjects = index_payload(db, dynamic=dynamic, membership=membership, triggers=triggers)
+    nag_count = sum(1 for t in triggers if t.get("nag"))
+    return {
+        "available": True,
+        "llm_configured": llm_configured,
+        "triggers": triggers,
+        "subjects": subjects,
+        "nag_count": nag_count,
+        "permissions": public_permissions(dynamic),
+        "example_prompts": EXAMPLE_PROMPTS,
+        "demo_suggestions": demo_suggestions(dynamic_id),
+    }
+
+
+@router.get("/{dynamic_id}/assistant/chat")
+def get_assistant_thread(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    subject_id: str = "open_chat",
+    related_entity_id: str = "",
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import (
+        EXAMPLE_PROMPTS,
+        change_log_rows,
+        demo_suggestions,
+        get_or_create_thread,
+        purge_assistant_trash,
+        require_domme_assistant,
+        thread_messages,
+    )
+    from ..services.assistant_permissions import public_permissions
+    from ..services.llm import is_llm_configured
+
+    require_domme_assistant(user, membership, dynamic, need_llm=False)
+    purge_assistant_trash(db, dynamic_id, membership.id)
+    thread = get_or_create_thread(
+        db,
+        dynamic_id=dynamic_id,
+        membership_id=membership.id,
+        subject_id=subject_id,
+        related_entity_id=related_entity_id,
+    )
+    db.commit()
+    msgs = thread_messages(db, thread.id)
+    return {
+        "id": thread.id,
+        "subject_id": thread.subject_id,
+        "related_entity_id": thread.related_entity_id or "",
+        "unread": bool(thread.unread),
+        "messages": [_assistant_message_out(m) for m in msgs],
+        "llm_configured": is_llm_configured(user, dynamic),
+        "permissions": public_permissions(dynamic),
+        "example_prompts": EXAMPLE_PROMPTS,
+        "demo_suggestions": demo_suggestions(dynamic_id) if subject_id == "what_can_you_do" else [],
+        "changes": change_log_rows(db, dynamic_id),
+    }
+
+
+@router.post("/{dynamic_id}/assistant/chat")
+def post_assistant_chat(
+    dynamic_id: str,
+    payload: dict,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import (
+        change_log_rows,
+        get_or_create_thread,
+        reply_to_assistant,
+        require_domme_assistant,
+        thread_messages,
+    )
+
+    require_domme_assistant(user, membership, dynamic, need_llm=True)
+    body = payload if isinstance(payload, dict) else {}
+    message = str(body.get("message") or "").strip()
+    if not message:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="message required")
+    subject_id = str(body.get("subject_id") or "open_chat")
+    related_entity_id = str(body.get("related_entity_id") or "")
+    thread = get_or_create_thread(
+        db,
+        dynamic_id=dynamic_id,
+        membership_id=membership.id,
+        subject_id=subject_id,
+        related_entity_id=related_entity_id,
+    )
+    reply_to_assistant(
+        db,
+        user=user,
+        dynamic=dynamic,
+        membership=membership,
+        thread=thread,
+        message=message,
+        route=str(body.get("route") or ""),
+        feature_id=str(body.get("feature_id") or ""),
+    )
+    db.refresh(thread)
+    msgs = thread_messages(db, thread.id)
+    return {
+        "id": thread.id,
+        "subject_id": thread.subject_id,
+        "related_entity_id": thread.related_entity_id or "",
+        "unread": bool(thread.unread),
+        "messages": [_assistant_message_out(m) for m in msgs],
+        "changes": change_log_rows(db, dynamic_id),
+    }
+
+
+@router.get("/{dynamic_id}/assistant/chat/trashed")
+def assistant_chat_trashed(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import (
+        ASSISTANT_TRASH_DAYS,
+        assistant_trash_count,
+        require_domme_assistant,
+    )
+
+    require_domme_assistant(user, membership, dynamic, need_llm=False)
+    count = assistant_trash_count(db, dynamic_id, membership.id)
+    db.commit()
+    return {"count": count, "recover_days": ASSISTANT_TRASH_DAYS}
+
+
+@router.post("/{dynamic_id}/assistant/chat/clear")
+def clear_assistant_chat(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import (
+        ASSISTANT_TRASH_DAYS,
+        clear_assistant_messages,
+        require_domme_assistant,
+    )
+
+    require_domme_assistant(user, membership, dynamic, need_llm=False)
+    deleted = clear_assistant_messages(db, dynamic_id, membership.id)
+    db.commit()
+    return {"ok": True, "deleted": deleted, "recover_days": ASSISTANT_TRASH_DAYS}
+
+
+@router.post("/{dynamic_id}/assistant/chat/recover")
+def recover_assistant_chat(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import recover_assistant_messages, require_domme_assistant
+
+    require_domme_assistant(user, membership, dynamic, need_llm=False)
+    restored = recover_assistant_messages(db, dynamic_id, membership.id)
+    db.commit()
+    return {"ok": True, "restored": restored}
+
+
+@router.post("/{dynamic_id}/assistant/suggestions/apply")
+def apply_assistant_suggestion(
+    dynamic_id: str,
+    payload: dict,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import apply_suggestion, require_domme_assistant
+
+    require_domme_assistant(user, membership, dynamic, need_llm=False)
+    body = payload if isinstance(payload, dict) else {}
+    grant = body.get("grant")
+    subject_id = str(body.get("subject_id") or "")
+    return apply_suggestion(
+        db,
+        dynamic=dynamic,
+        membership=membership,
+        suggestion=body,
+        subject_id=subject_id,
+        grant=str(grant) if grant else None,
+    )
+
+
+@router.get("/{dynamic_id}/assistant/permissions")
+def get_assistant_permissions(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import require_domme_assistant
+    from ..services.assistant_permissions import public_permissions
+
+    require_domme_assistant(user, membership, dynamic, need_llm=False)
+    return public_permissions(dynamic)
+
+
+@router.put("/{dynamic_id}/assistant/permissions")
+def put_assistant_permissions(
+    dynamic_id: str,
+    payload: dict,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import require_domme_assistant
+    from ..services.assistant_permissions import set_grant
+
+    require_domme_assistant(user, membership, dynamic, need_llm=False)
+    body = payload if isinstance(payload, dict) else {}
+    capability = str(body.get("capability") or "").strip()
+    level = str(body.get("level") or "").strip()
+    result = set_grant(dynamic, capability, level)
+    db.commit()
+    return result
+
+
+@router.post("/{dynamic_id}/assistant/permissions/end-session")
+def end_assistant_permission_session(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import require_domme_assistant
+    from ..services.assistant_permissions import end_sessions
+
+    require_domme_assistant(user, membership, dynamic, need_llm=False)
+    result = end_sessions(dynamic)
+    db.commit()
+    return result
+
+
+@router.get("/{dynamic_id}/assistant/changes")
+def get_assistant_changes(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.assistant_chat import change_log_rows, require_domme_assistant
+
+    require_domme_assistant(user, membership, dynamic, need_llm=False)
+    return {"changes": change_log_rows(db, dynamic_id)}
+

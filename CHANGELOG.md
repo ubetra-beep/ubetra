@@ -3,6 +3,44 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.09] — 2026-08-29
+
+### Added
+- Labeled **Chat with Assistant** on Tracking, Playtime, Chat, chastity, orgasm log, and tasks, plus full-page `/assistant/chat`
+- Seeded confirm-to-apply cards on **What can assistant do?** (no model wait)
+- Agent **permissions** (ask / session / always / deny) for Assistant mutations
+- **Changes from chat** log after each Apply
+- Coaching subjects: goal coach, feature audit, orgasm/chastity review, tease, punishment, service
+- Apply types: standing target create, gift goal edit, optional feature toggle, punishment task
+- Per-screen [context maps](wiki/Context-maps.md): catalog of all areas, live packs only for the current key
+- Partner Chat and Assistant **clear-all → 7-day trash**, then permanent delete; Recover in Chat ⋯ / Privacy / Assistant Chat tools
+### Changed
+- Assistant bubble is labeled, **draggable**, and hide/show from the bubble ×, edge tab, hub ☰, Chat ⋯, or Settings
+- Assistant chat sends indexed packs instead of a full context dump on every follow-up turn
+- Service worker cache `ubetra-v141`
+- Chat hub uses the Assistant bubble only (no large banner); composer sits flush above the nav
+- Punishment Recent is collapsed; rows are yellow (pending), blue (task/goal assigned), pink (remind tomorrow), pale grey (covered)
+- Assistant bubble turns teal on screens it can coach; tap opens a page-context chat instead of the full subject list
+- Clear-all is available to both partners (legacy keyholder-only checkbox no longer blocks it)
+### Fixed
+- Running image no longer hides the only Assistant entry behind a missing LLM key
+- `currentRoute is not defined` blocked sending Assistant chat from most screens
+
+## [1.08] — 2026-08-28
+
+### Added
+- **Assistant Domme** keyholder chat bubble with indexed subjects, page context, and confirm-to-apply suggestions
+- Triggers for confessions, task drought, orgasm balance, lockup trend, inbox, journals, and gift-goal progress
+- Standing weighted **Goals & balance** targets (current vs previous window vs target)
+- Interview **table** when AI is off or no key is configured
+- Manual act-type catalog when generate is unavailable
+### Changed
+- AI-only controls hide (instead of dim) when AI is off
+- Playtime hub still offers Tasks, Instructor, and games without an LLM key
+- Service worker cache `ubetra-v138`
+### Fixed
+- Interview complete no longer requires an LLM summary in no-AI mode
+
 ## [1.07] — 2026-08-17
 
 ### Added
@@ -14,7 +52,8 @@ Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be 
 - Web play / server Chromium is gone. https links open in the phone browser
 - In-app **Wiki** lives under Settings → Help (not Playtime)
 - Docker image no longer ships Playwright, Xvfb, Pulse, or jellyfin-ffmpeg
-- Service worker cache `ubetra-v134`
+- Service worker cache `ubetra-v137`
+- Password reset also pushes a code/link to registered devices (primary when SMTP is off)
 - Instructor overlay uses the controlling partner's name; Domme controls sit in a collapsible left sidebar
 - Beat meter keeps a steady scroll speed and changes density with stroke speed
 ### Fixed

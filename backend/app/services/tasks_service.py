@@ -426,6 +426,7 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
         .filter(
             ChatMessage.dynamic_id == dynamic_id,
             ChatMessage.message_type == ChatMessageType.system,
+            ChatMessage.cleared_at.is_(None),
             ChatMessage.created_at > since,
         )
         .order_by(ChatMessage.created_at.desc())

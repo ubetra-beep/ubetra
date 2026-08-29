@@ -1422,3 +1422,105 @@ def run_migrations() -> None:
       )
       conn.execute(text("CREATE INDEX IF NOT EXISTS ix_instructor_sessions_dynamic_id ON instructor_sessions (dynamic_id)"))
       conn.execute(text("CREATE INDEX IF NOT EXISTS ix_instructor_sessions_membership_id ON instructor_sessions (membership_id)"))
+
+    dynamic_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(dynamics)")).fetchall()
+    }
+    if "standing_targets" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN standing_targets TEXT DEFAULT ''"))
+
+    mem_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(memberships)")).fetchall()
+    }
+    if "interview_answers" not in mem_cols:
+      conn.execute(text("ALTER TABLE memberships ADD COLUMN interview_answers TEXT DEFAULT ''"))
+
+    tables_assistant = {
+      row[0]
+      for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    }
+    if "assistant_threads" not in tables_assistant:
+      conn.execute(
+        text(
+          "CREATE TABLE assistant_threads ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "membership_id VARCHAR(36) NOT NULL,"
+          "subject_id VARCHAR(64) NOT NULL,"
+          "related_entity_id VARCHAR(36) DEFAULT '',"
+          "unread BOOLEAN DEFAULT 1,"
+          "created_at DATETIME,"
+          "updated_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(
+        text(
+          "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_thread_subject "
+          "ON assistant_threads (dynamic_id, membership_id, subject_id, related_entity_id)"
+        )
+      )
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assistant_threads_dynamic_id ON assistant_threads (dynamic_id)"))
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assistant_threads_membership_id ON assistant_threads (membership_id)"))
+    if "assistant_messages" not in tables_assistant:
+      conn.execute(
+        text(
+          "CREATE TABLE assistant_messages ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "thread_id VARCHAR(36) NOT NULL,"
+          "role VARCHAR(16) DEFAULT 'assistant',"
+          "content TEXT DEFAULT '',"
+          "suggestions_json TEXT DEFAULT '[]',"
+          "created_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assistant_messages_thread_id ON assistant_messages (thread_id)"))
+
+    dynamic_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(dynamics)")).fetchall()
+    }
+    if "assistant_permissions" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN assistant_permissions TEXT DEFAULT ''"))
+
+    tables_change = {
+      row[0]
+      for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    }
+    if "assistant_change_log" not in tables_change:
+      conn.execute(
+        text(
+          "CREATE TABLE assistant_change_log ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "membership_id VARCHAR(36) NOT NULL,"
+          "subject_id VARCHAR(64) DEFAULT '',"
+          "action VARCHAR(64) DEFAULT '',"
+          "summary VARCHAR(400) DEFAULT '',"
+          "payload_json TEXT DEFAULT '{}',"
+          "created_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assistant_change_log_dynamic_id ON assistant_change_log (dynamic_id)"))
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assistant_change_log_membership_id ON assistant_change_log (membership_id)"))
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assistant_change_log_created_at ON assistant_change_log (created_at)"))
+
+    chat_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(chat_messages)")).fetchall()
+    }
+    if chat_cols and "cleared_at" not in chat_cols:
+      conn.execute(text("ALTER TABLE chat_messages ADD COLUMN cleared_at DATETIME"))
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_chat_messages_cleared_at ON chat_messages (cleared_at)"))
+
+    asst_msg_cols = {
+      row[1]
+      for row in conn.execute(text("PRAGMA table_info(assistant_messages)")).fetchall()
+    }
+    if asst_msg_cols and "cleared_at" not in asst_msg_cols:
+      conn.execute(text("ALTER TABLE assistant_messages ADD COLUMN cleared_at DATETIME"))
+      conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assistant_messages_cleared_at ON assistant_messages (cleared_at)"))

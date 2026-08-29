@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 
 from fastapi import HTTPException, status
@@ -10,6 +11,112 @@ from .context import build_dynamic_context
 from .act_catalog import maybe_generate_act_catalog
 from .core_knowledge_from_interview import maybe_auto_fill_core_knowledge_from_interview
 from .llm import generate_text
+
+INTERVIEW_PROMPTS = [
+    {
+        "id": "goals",
+        "title": "Goals",
+        "hint": "What do you want from this dynamic day to day? Service, protocol, teasing, structure, sex, or something else?",
+    },
+    {
+        "id": "boundaries",
+        "title": "Boundaries",
+        "hint": "Hard limits and things to avoid. Be specific enough that a later suggestion can stay inside them.",
+    },
+    {
+        "id": "rituals",
+        "title": "Rituals and protocol",
+        "hint": "Titles, check-ins, morning/evening routines, kneeling, language — what matters here?",
+    },
+    {
+        "id": "frequency",
+        "title": "Frequency",
+        "hint": "How often do you want tasks, scenes, lockup, or orgasm control? What is too much or too little?",
+    },
+    {
+        "id": "emotional",
+        "title": "Emotional needs",
+        "hint": "Aftercare, praise, firmness, space. What should the other partner remember when things are intense?",
+    },
+    {
+        "id": "tasks",
+        "title": "Tasks and acts",
+        "hint": "What tasks and acts of submission are you willing to do? Include practical service (tidying, laundry, meals, errands) if it fits — and what is off-limits.",
+    },
+    {
+        "id": "play",
+        "title": "Play and scenes",
+        "hint": "Kinds of scenes, intensity, toys/gear you want used or avoided.",
+    },
+    {
+        "id": "tone",
+        "title": "Tone",
+        "hint": "How should guidance sound? Strict, playful, nurturing, clinical, mixed?",
+    },
+]
+
+
+def parse_interview_answers(raw: str | None) -> dict[str, str]:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    allowed = {p["id"] for p in INTERVIEW_PROMPTS}
+    return {k: str(v).strip() for k, v in data.items() if k in allowed and str(v).strip()}
+
+
+def serialize_interview_answers(answers: dict[str, str]) -> str:
+    return json.dumps(parse_interview_answers(json.dumps(answers)))
+
+
+def summary_from_answers(answers: dict[str, str]) -> str:
+    parts = []
+    by_id = {p["id"]: p for p in INTERVIEW_PROMPTS}
+    for prompt in INTERVIEW_PROMPTS:
+        value = (answers.get(prompt["id"]) or "").strip()
+        if not value:
+            continue
+        parts.append(f"{prompt['title']}: {value}")
+    return "\n\n".join(parts).strip() or "Interview notes captured in the intake table."
+
+
+def interview_uses_form(user: User, dynamic: Dynamic | None) -> bool:
+    from .llm import is_llm_configured
+
+    if not getattr(user, "ai_enabled", True):
+        return True
+    return not is_llm_configured(user, dynamic)
+
+
+def save_interview_answers(
+    db: Session,
+    *,
+    user: User,
+    dynamic: Dynamic,
+    membership: Membership,
+    answers: dict[str, str],
+    complete: bool = False,
+) -> Membership:
+    cleaned = parse_interview_answers(json.dumps(answers))
+    membership.interview_answers = json.dumps(cleaned)
+    if complete:
+        filled = sum(1 for prompt in INTERVIEW_PROMPTS if (cleaned.get(prompt["id"]) or "").strip())
+        if filled < 2:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Fill at least two rows in the interview table before marking it complete.",
+            )
+        summary = summary_from_answers(cleaned)
+        _mark_completed(db, user=user, dynamic=dynamic, membership=membership, summary=summary)
+    db.commit()
+    db.refresh(membership)
+    return membership
+
 
 INTERVIEW_COMPLETE = "INTERVIEW_COMPLETE"
 SUMMARY_PREFIX = "SUMMARY:"
@@ -209,6 +316,11 @@ def start_interview(
     dynamic: Dynamic,
     membership: Membership,
 ) -> InterviewMessage:
+    if interview_uses_form(user, dynamic):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AI is off. Fill out the interview table instead of chatting.",
+        )
     existing = get_interview_messages(db, membership.id)
     if existing:
         raise HTTPException(
@@ -345,6 +457,17 @@ def complete_interview(
     membership: Membership,
 ) -> Membership:
     """Manually mark the interview complete and generate/refresh the summary."""
+    if interview_uses_form(user, dynamic):
+        answers = parse_interview_answers(getattr(membership, "interview_answers", None))
+        return save_interview_answers(
+            db,
+            user=user,
+            dynamic=dynamic,
+            membership=membership,
+            answers=answers,
+            complete=True,
+        )
+
     messages = get_interview_messages(db, membership.id)
     if not messages:
         raise HTTPException(

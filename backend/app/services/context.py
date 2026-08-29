@@ -320,6 +320,10 @@ def build_dynamic_context(
     knowledge_focus_fields: list[str] | None = None,
     include_tracking: bool = True,
     context_flags=None,
+    assistant_chat: bool = False,
+    page_route: str | None = None,
+    related_entity_id: str | None = None,
+    subject_id: str | None = None,
 ) -> str:
     memberships = get_memberships(db, dynamic.id)
     if not memberships:
@@ -483,6 +487,127 @@ def build_dynamic_context(
             goals_block = format_goals_for_context(db, dynamic)
             if goals_block:
                 lines.append(goals_block)
+                lines.append("")
+        except Exception:
+            pass
+
+        try:
+            from .standing_targets import format_standing_targets_for_context
+
+            standing_block = format_standing_targets_for_context(db, dynamic)
+            if standing_block:
+                lines.append(standing_block)
+                lines.append("")
+        except Exception:
+            pass
+
+    if assistant_chat:
+        try:
+            from .features import parse_enabled_features
+            from .page_capabilities import feature_menu_lines, format_page_capabilities, lookup_page
+            from .tasks_service import build_inbox
+            from .standing_targets import build_standing_progress
+
+            if subject_id:
+                lines.append(f"Assistant subject: {subject_id}.")
+                if related_entity_id:
+                    lines.append(f"Related entity id: {related_entity_id}.")
+                lines.append("")
+            lines.extend(feature_menu_lines(dynamic))
+            lines.append("")
+            if page_route:
+                page = lookup_page(page_route)
+                feat_id = page.get("feature_id")
+                feat_on = True
+                if feat_id:
+                    feat_on = feat_id in parse_enabled_features(dynamic.enabled_features)
+                requester_role = "dominant"
+                requester = next((m for m in memberships if m.id == requesting_membership_id), None)
+                if requester:
+                    requester_role = requester.role.value
+                lines.append(
+                    format_page_capabilities(
+                        route_key=page_route,
+                        feature_enabled=feat_on,
+                        role=requester_role,
+                    )
+                )
+                lines.append("")
+            if requesting_membership_id:
+                requester = next((m for m in memberships if m.id == requesting_membership_id), None)
+                if requester:
+                    inbox = build_inbox(db, dynamic.id, requester)
+                    items = inbox.get("items") or []
+                    if items:
+                        lines.append("Inbox snapshot:")
+                        for item in items[:12]:
+                            lines.append(f"  - {item.get('title')}: {(item.get('body') or '')[:160]}")
+                        lines.append("")
+            progress = build_standing_progress(db, dynamic)
+            lines.append(
+                f"Open assigned tasks: {progress.get('open_task_count', 0)}. "
+                f"Last completed task: {progress.get('last_completed_task_at') or 'none logged'}."
+            )
+            lines.append("")
+            try:
+                from .feature_utilization import utilization_lines
+
+                lines.extend(utilization_lines(db, dynamic))
+                lines.append("")
+            except Exception:
+                pass
+            try:
+                from .assistant_permissions import public_permissions
+
+                perms = public_permissions(dynamic)
+                lines.append(
+                    "Assistant permission grants: "
+                    + ", ".join(
+                        f"{c['id']}={c['level']}"
+                        for c in (perms.get("capabilities") or [])
+                    )
+                )
+                lines.append("")
+            except Exception:
+                pass
+            try:
+                from ..models import AssistantChangeLog
+
+                logs = (
+                    db.query(AssistantChangeLog)
+                    .filter(AssistantChangeLog.dynamic_id == dynamic.id)
+                    .order_by(AssistantChangeLog.created_at.desc())
+                    .limit(12)
+                    .all()
+                )
+                if logs:
+                    lines.append("Recent Assistant-applied changes:")
+                    for row in logs:
+                        lines.append(f"  - {row.created_at}: {row.action} — {row.summary}")
+                    lines.append("")
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            from ..models import PunishmentReport
+
+            pending_reports = (
+                db.query(PunishmentReport)
+                .filter(
+                    PunishmentReport.dynamic_id == dynamic.id,
+                    PunishmentReport.status.in_(["pending", "ideas", "remind"]),
+                )
+                .order_by(PunishmentReport.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            if pending_reports:
+                lines.append("Pending confessions:")
+                for report in pending_reports:
+                    lines.append(
+                        f"  [{report.id}] {report.status}: {(report.action_text or '').strip()[:400]}"
+                    )
                 lines.append("")
         except Exception:
             pass

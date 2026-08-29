@@ -416,6 +416,54 @@ def get_menu_summaries(
     return MenuSummariesOut(**data)
 
 
+@router.get("/{dynamic_id}/standing-targets")
+def get_standing_targets(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.standing_targets import build_standing_progress
+
+    progress = build_standing_progress(db, dynamic)
+    progress["you_are_dominant"] = is_dominant(membership)
+    if not is_dominant(membership):
+        progress["targets"] = []
+        progress["config"] = {"targets": []}
+        return progress
+    from ..services.standing_targets import parse_standing_targets
+
+    progress["config"] = parse_standing_targets(getattr(dynamic, "standing_targets", None))
+    return progress
+
+
+@router.put("/{dynamic_id}/standing-targets")
+def put_standing_targets(
+    dynamic_id: str,
+    payload: dict,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    if not is_dominant(membership):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the keyholder can edit balance targets",
+        )
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.standing_targets import serialize_standing_targets
+
+    raw = payload if isinstance(payload, dict) else {}
+    dynamic.standing_targets = serialize_standing_targets(raw)
+    db.commit()
+    return get_standing_targets(dynamic_id, user, db)
+
+
 @router.put("/{dynamic_id}/partners/{membership_id}/username", response_model=PartnerOut)
 def update_partner_username(
     dynamic_id: str,

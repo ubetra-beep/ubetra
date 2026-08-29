@@ -171,7 +171,7 @@ class User(Base):
     assistant_tone: Mapped[str] = mapped_column(String(32), default="balanced")
     assistant_extra_instructions: Mapped[str] = mapped_column(Text, default="")
     assistant_include_tracking: Mapped[bool] = mapped_column(Boolean, default=True)
-    # When False, the app runs in non-AI mode (AI controls stay visible but gated).
+    # When False, AI buttons are hidden and interview is a fill-in table.
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # JSON: journals, stories, scenes, agreements, tracking
     ai_share_flags: Mapped[str] = mapped_column(Text, default="")
@@ -310,6 +310,8 @@ class Dynamic(Base):
     feelings_notify_inbox: Mapped[bool] = mapped_column(Boolean, default=False)
     # JSON: { fields: {...}, metrics: {...} } — couple opt-in tracking detail
     org_tracking_prefs: Mapped[str] = mapped_column(Text, default="")
+    # JSON: standing weighted balance targets (orgasm split, lockup, open tasks)
+    standing_targets: Mapped[str] = mapped_column(Text, default="")
     # JSON: keyholder unlock / gift goals
     chastity_goals: Mapped[str] = mapped_column(Text, default="")
     # Dom-controlled assistant voice for this dynamic
@@ -325,6 +327,8 @@ class Dynamic(Base):
     instructor_config: Mapped[str] = mapped_column(Text, default="")
     # JSON: live overlay flags {paused, red_light, lock_input, force_end}
     instructor_live: Mapped[str] = mapped_column(Text, default="")
+    # JSON: Assistant Domme agent grants {grants, session}
+    assistant_permissions: Mapped[str] = mapped_column(Text, default="")
 
     memberships: Mapped[list["Membership"]] = relationship(
         back_populates="dynamic",
@@ -353,6 +357,10 @@ class Dynamic(Base):
     web_play_apps: Mapped[list["WebPlayApp"]] = relationship(back_populates="dynamic")
     instructor_sessions: Mapped[list["InstructorSession"]] = relationship(back_populates="dynamic")
     video_calls: Mapped[list["VideoCall"]] = relationship(back_populates="dynamic")
+    assistant_threads: Mapped[list["AssistantThread"]] = relationship(back_populates="dynamic")
+    assistant_change_logs: Mapped[list["AssistantChangeLog"]] = relationship(
+        back_populates="dynamic"
+    )
 
 
 class PunishmentReport(Base):
@@ -431,6 +439,8 @@ class Membership(Base):
     share_kinks: Mapped[bool] = mapped_column(Boolean, default=False)
     interview_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     interview_summary: Mapped[str] = mapped_column(Text, default="")
+    # JSON object of static interview form answers (used when AI is off)
+    interview_answers: Mapped[str] = mapped_column(Text, default="")
     chastity_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     chastity_max_lock_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
     chastity_enrollment_requested: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -603,6 +613,7 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     edited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     dynamic: Mapped[Dynamic] = relationship(back_populates="chat_messages")
     sender: Mapped["Membership"] = relationship(foreign_keys=[sender_membership_id])
@@ -1149,3 +1160,66 @@ class VideoCallSignal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     call: Mapped[VideoCall] = relationship(back_populates="signals")
+
+
+class AssistantThread(Base):
+    """One Assistant Domme conversation per subject (+ optional related entity)."""
+
+    __tablename__ = "assistant_threads"
+    __table_args__ = (
+        UniqueConstraint(
+            "dynamic_id",
+            "membership_id",
+            "subject_id",
+            "related_entity_id",
+            name="uq_assistant_thread_subject",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"), index=True)
+    subject_id: Mapped[str] = mapped_column(String(64), index=True)
+    related_entity_id: Mapped[str] = mapped_column(String(36), default="")
+    unread: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    dynamic: Mapped[Dynamic] = relationship(back_populates="assistant_threads")
+    messages: Mapped[list["AssistantMessage"]] = relationship(
+        back_populates="thread", order_by="AssistantMessage.created_at"
+    )
+
+
+class AssistantMessage(Base):
+    __tablename__ = "assistant_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("assistant_threads.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16), default="assistant")  # user | assistant
+    content: Mapped[str] = mapped_column(Text, default="")
+    suggestions_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+    thread: Mapped[AssistantThread] = relationship(back_populates="messages")
+
+
+class AssistantChangeLog(Base):
+    """Keyholder-applied mutations from Assistant Domme suggestion cards."""
+
+    __tablename__ = "assistant_change_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"), index=True)
+    subject_id: Mapped[str] = mapped_column(String(64), default="")
+    action: Mapped[str] = mapped_column(String(64), default="")
+    summary: Mapped[str] = mapped_column(String(400), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    dynamic: Mapped["Dynamic"] = relationship(back_populates="assistant_change_logs")
+

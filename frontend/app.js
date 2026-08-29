@@ -271,6 +271,10 @@ function updateInstallPwaButton() {
 function doLogout() {
   stopVideoCallWatcher();
   leaveVideoCall({ remote: true }).catch(() => {});
+  const dynId = state.currentDynamic?.id || state.activeDynamicId || state.dynamics?.[0]?.id;
+  if (dynId && state.token) {
+    api(`/dynamics/${dynId}/assistant/permissions/end-session`, { method: "POST", body: "{}" }).catch(() => {});
+  }
   setToken(null);
   state.user = null;
   state.dynamics = [];
@@ -305,8 +309,7 @@ function setAuthVisible(visible) {
   }
 }
 
-function reloadAppFromBrand() {
-  if (!state.token) return;
+function reloadAppShell() {
   if (appBrandEl) appBrandEl.setAttribute("aria-busy", "true");
   const finish = () => {
     location.reload();
@@ -325,6 +328,11 @@ function reloadAppFromBrand() {
     );
   }
   Promise.all(tasks).then(finish, finish);
+}
+
+function reloadAppFromBrand() {
+  if (!state.token) return;
+  reloadAppShell();
 }
 
 function formatGoalCountdown(iso) {
@@ -528,6 +536,7 @@ function navigate(path, { skipInbox = false } = {}) {
   if (!skipInbox && parts[0] === "dynamic" && parts[1]) {
     maybeShowInbox(parts[1]);
   }
+  queueMicrotask(() => window.UbetraAssistantDomme?.sync?.());
 }
 
 const inboxCheckedDynamics = new Set();
@@ -1013,6 +1022,7 @@ function isAiEnabled() {
 
 function applyAiMode() {
   document.documentElement.dataset.ai = isAiEnabled() ? "on" : "off";
+  queueMicrotask(() => window.UbetraAssistantDomme?.sync?.());
 }
 
 function openAiOffSheet(label = "This feature uses AI.") {
@@ -4040,6 +4050,7 @@ function wireNativePushCallWake() {
     const wakeFromPush = (data) => {
       const kind = String(data?.kind || "");
       if (kind === "call") pollIncomingVideoCall().catch(() => {});
+      if (kind === "reload") reloadAppShell();
     };
     Push.addListener("pushNotificationReceived", (ev) => {
       wakeFromPush(ev?.notification?.data || ev?.data || {});
@@ -4047,6 +4058,7 @@ function wireNativePushCallWake() {
     Push.addListener("pushNotificationActionPerformed", (ev) => {
       const data = ev?.notification?.data || {};
       wakeFromPush(data);
+      if (String(data.kind || "") === "reload") return;
       let path = String(data.url || "");
       if (!path) return;
       if (path.startsWith("/#")) path = path.slice(2);
@@ -4299,6 +4311,17 @@ function openAppFeaturesPanel(dynamicId, sectionFilter = "all") {
         }, "Save"),
         el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Close"),
       ]));
+      if (youAreDominant && window.UbetraAssistantDomme) {
+        body.appendChild(el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => {
+            const hidden = UbetraAssistantDomme.isFabHidden();
+            UbetraAssistantDomme.setFabHidden(!hidden);
+            status.textContent = hidden ? "Assistant bubble shown." : "Assistant bubble hidden.";
+          },
+        }, UbetraAssistantDomme.isFabHidden() ? "Show Assistant bubble" : "Hide Assistant bubble"));
+      }
     })
     .catch((err) => {
       error.textContent = err.message;
@@ -4324,6 +4347,104 @@ function navigateFacet(dynamicId, facet) {
   navigate(`/dynamic/${dynamicId}/${facet.route}`);
 }
 
+function youAreDominant(dynamic) {
+  return dynamic?.partners?.find((p) => p.is_you)?.role === "dominant";
+}
+
+function assistantChatEntry(dynamicId, { variant = "button" } = {}) {
+  if (!isAiEnabled()) return null;
+  const dyn = state.currentDynamic?.id === dynamicId
+    ? state.currentDynamic
+    : (state.dynamics || []).find((d) => d.id === dynamicId);
+  if (dyn && !youAreDominant(dyn)) return null;
+  const go = () => navigate(`/dynamic/${dynamicId}/assistant/chat`);
+  if (variant === "facet") {
+    return renderFacetRow({
+      id: "assistant_chat",
+      icon: "✦",
+      title: "Chat with Assistant",
+      subtitle: "Goals, reviews, and confirm-to-apply changes",
+      route: "assistant/chat",
+      core: true,
+    }, dynamicId, dyn);
+  }
+  if (variant === "choice") {
+    return el("button", {
+      className: "choice-btn playtime-option ai-only",
+      type: "button",
+      onClick: go,
+    }, [
+      el("strong", {}, "Chat with Assistant"),
+      el("span", { className: "muted" }, "Coach goals, review tracking, apply with your OK"),
+    ]);
+  }
+  if (variant === "card") {
+    return el("div", { className: "card stack assistant-chat-entry ai-only" }, [
+      el("strong", {}, "Chat with Assistant"),
+      el("p", { className: "muted" }, "Separate from partner Chat. Partner messages are never sent to the model."),
+      el("button", { type: "button", className: "primary-btn", onClick: go }, "Open Assistant"),
+    ]);
+  }
+  return el("button", {
+    type: "button",
+    className: "primary-btn assistant-chat-entry ai-only",
+    onClick: go,
+  }, "Chat with Assistant");
+}
+
+function renderAssistantChatPage(dynamicId) {
+  setViewContent(el("p", { className: "muted" }, "Loading Assistant…"));
+  loadDynamic(dynamicId)
+    .then(() => {
+      const you = state.currentDynamic?.partners?.find((p) => p.is_you);
+      if (you?.role !== "dominant") {
+        setViewContent(el("p", { className: "error" }, "Assistant Domme is for the keyholder."));
+        return;
+      }
+      if (!isAiEnabled()) {
+        setViewContent(el("div", { className: "stack" }, [
+          el("h1", {}, "Assistant Domme"),
+          el("p", {}, "Turn on AI features in Settings to use Assistant."),
+          el("button", {
+            type: "button",
+            className: "primary-btn",
+            onClick: () => navigate("/settings?focus=ai"),
+          }, "Open AI settings"),
+        ]));
+        return;
+      }
+      const host = el("div", { id: "assistant-domme-page-host", className: "assistant-domme-page-host" });
+      const stack = el("div", { className: "stack" }, [
+        buildHubHeader(dynamicId, "Assistant Domme", {
+          subtitle: "Keyholder co-pilot. Partner Chat is never sent.",
+          sectionFilter: "playtime",
+        }),
+        host,
+      ]);
+      setViewContent(stack);
+      const { query } = parseRoute();
+      window.UbetraAssistantDomme?.open?.({
+        fullPage: true,
+        host,
+        dynamicId,
+        subjectId: query.get("subject") || "",
+      });
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+}
+
+function facetSubtitle(facet) {
+  if (isAiEnabled()) return facet.subtitle;
+  const map = {
+    interview: "Notes for this dynamic",
+    core_knowledge: "Relationship context",
+    spti: "Optional personality notes",
+    context_library: "Stories, scenes, and files",
+    journal: "Private writing",
+  };
+  return map[facet.id] || facet.subtitle;
+}
+
 function renderFacetRow(facet, dynamicId, dynamic) {
   const badge = facetBadge(facet, dynamic);
   const row = el("button", {
@@ -4334,7 +4455,7 @@ function renderFacetRow(facet, dynamicId, dynamic) {
     el("span", { className: "facet-icon" }, facet.icon),
     el("span", { className: "facet-copy" }, [
       el("span", { className: "facet-title" }, facet.title),
-      el("span", { className: "facet-subtitle" }, facet.subtitle),
+      el("span", { className: "facet-subtitle" }, facetSubtitle(facet)),
     ]),
     el("span", { className: "facet-chevron" }, badge
       ? el("span", { className: `pill ${badge.ok ? "ok" : "pending"}` }, badge.text)
@@ -4436,6 +4557,10 @@ async function bootstrap() {
         ensureChatPushEnabled().catch(() => {});
         return;
       }
+      if (event.data?.type === "ubetra-reload") {
+        reloadAppShell();
+        return;
+      }
       if (event.data?.type === "ubetra-navigate" && event.data.url) {
         let path = event.data.url;
         if (path.startsWith("/#")) path = path.slice(2);
@@ -4465,7 +4590,10 @@ async function bootstrap() {
     });
   }
 
-  window.addEventListener("hashchange", renderRoute);
+  window.addEventListener("hashchange", () => {
+    renderRoute();
+    queueMicrotask(() => window.UbetraAssistantDomme?.sync?.());
+  });
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !state.token) return;
@@ -4483,6 +4611,7 @@ async function bootstrap() {
     try {
       state.user = await api("/auth/me");
       applyAiMode();
+      window.UbetraAssistantDomme?.start?.();
       syncUserTimezone().catch(() => {});
       state.dynamics = await api("/dynamics");
       navigateAfterAuth();
@@ -4568,13 +4697,19 @@ function renderForgotPassword() {
   setAuthVisible(false);
   const error = el("div", { className: "error hidden" });
   const ok = el("div", { className: "muted hidden" });
+  let smtpConfigured = true;
+  const blurb = el(
+    "p",
+    { className: "muted" },
+    "We’ll send a one-time code by email when mail is configured, and also push it to phones that already have UBETRA notifications enabled."
+  );
   const form = el("form", { className: "stack auth-card" }, [
     el("h1", {}, "Forgot password"),
-    el("p", { className: "muted" }, "We’ll email a one-time code and a reset link when mail is configured on the server."),
+    blurb,
     el("label", {}, ["Email", el("input", { name: "email", type: "email", required: "true", autocomplete: "email" })]),
     error,
     ok,
-    el("button", { className: "primary-btn", type: "submit" }, "Send reset email"),
+    el("button", { className: "primary-btn", type: "submit" }, "Send reset"),
     el("button", {
       className: "ghost-btn",
       type: "button",
@@ -4583,8 +4718,11 @@ function renderForgotPassword() {
     el("button", { className: "ghost-btn", type: "button", onClick: () => navigate("/login") }, "Back to sign in"),
   ]);
   api("/auth/config").then((cfg) => {
-    if (cfg.smtp_configured === false) {
-      ok.textContent = "This server is not sending email. Use a reset code from the host, then tap “I already have a code”.";
+    smtpConfigured = cfg.smtp_configured !== false;
+    if (!smtpConfigured) {
+      blurb.textContent =
+        "Email isn’t configured on this server. If this account has push enabled, we’ll send a reset notification to those devices. You can also use a code from the host.";
+      ok.textContent = "No email on this install — reset codes go by push when available.";
       ok.classList.remove("hidden");
     }
   }).catch(() => {});
@@ -4598,7 +4736,9 @@ function renderForgotPassword() {
         method: "POST",
         body: JSON.stringify({ email: data.get("email") }),
       });
-      ok.textContent = result.detail || "If that email is registered, a reset message was sent.";
+      ok.textContent = smtpConfigured
+        ? (result.detail || "If that email is registered, a reset message was sent.")
+        : "If that account exists and has a phone with push, a reset notification was sent. Otherwise ask the host for a code.";
       ok.classList.remove("hidden");
       const email = String(data.get("email") || "").trim();
       setTimeout(() => navigate(`/reset-password?email=${encodeURIComponent(email)}`), 800);
@@ -6810,6 +6950,8 @@ function renderTrackingHub(dynamicId) {
         }),
       ]);
       const list = el("div", { className: "facet-list" });
+      const assistantRow = assistantChatEntry(dynamicId, { variant: "facet" });
+      if (assistantRow) list.appendChild(assistantRow);
       TRACKING_FACETS.forEach((facet) => {
         if (!isFacetEnabled(facet, enabledFeatures)) return;
         const rowFacet = { ...facet };
@@ -7046,7 +7188,8 @@ function renderTasksActsSwitcher(dynamicId, active) {
       "button",
       {
         type: "button",
-        className: active === "regimen" ? "primary-btn" : "ghost-btn",
+        className: `ai-only ${active === "regimen" ? "primary-btn" : "ghost-btn"}`,
+        "data-ai-label": "Training regimen drafts task lists with your shared AI context.",
         onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=regimen`),
       },
       "Build training regimen"
@@ -7071,6 +7214,7 @@ function renderTaskGoals(dynamicId) {
       const confession = punishData?.report || null;
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Tasks & acts"),
+        assistantChatEntry(dynamicId),
         renderTasksActsSwitcher(dynamicId, "goals"),
         el("p", { className: "muted" }, "Keyholder goals for grants and gifts. Progress also shows in the header."),
       ]);
@@ -7114,6 +7258,13 @@ function renderTaskGoals(dynamicId) {
           },
         }));
       }
+      const balanceHost = el("div");
+      stack.appendChild(balanceHost);
+      api(`/dynamics/${dynamicId}/standing-targets`).then((data) => {
+        if (data?.you_are_dominant) balanceHost.appendChild(renderStandingTargetsCard(dynamicId, data, {
+          onSaved: () => renderTaskGoals(dynamicId),
+        }));
+      }).catch(() => {});
       stack.appendChild(el("button", {
         className: "ghost-btn",
         type: "button",
@@ -7648,6 +7799,7 @@ function renderTasks(dynamicId) {
       const error = el("div", { className: "error hidden" });
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Tasks & acts"),
+        assistantChatEntry(dynamicId),
         renderTasksActsSwitcher(dynamicId, "tasks"),
         el("p", { className: "muted" }, confession
           ? "Assign a punishment task for this confession."
@@ -9062,7 +9214,9 @@ function renderKnowledgeHub(dynamicId) {
           : "Not completed yet";
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Knowledge & profile"),
-        el("p", { className: "muted" }, "Private context for the assistant. Your partner never sees these answers."),
+        el("p", { className: "muted" }, isAiEnabled()
+          ? "Private context for the assistant. Your partner never sees these answers."
+          : "Private notes for this dynamic. Your partner never sees these answers."),
       ]);
       stack.appendChild(
         el("button", {
@@ -9168,7 +9322,9 @@ function renderSptiProfile(dynamicId) {
 
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "SPTI profile"),
-        el("p", { className: "muted" }, "Results are private — only you and the AI see them. They help tailor scene ideas, kink examples, and tone. Your partner only sees whether you've completed SPTI."),
+        el("p", { className: "muted" }, isAiEnabled()
+          ? "Results are private — only you and the AI see them. They help tailor scene ideas, kink examples, and tone. Your partner only sees whether you've completed SPTI."
+          : "Results are private. Your partner only sees whether you've completed SPTI."),
         status,
         el("a", {
           className: "primary-btn inline-link",
@@ -9240,7 +9396,9 @@ function renderCoreKnowledge(dynamicId) {
       const error = el("div", { className: "error hidden" });
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Core knowledge"),
-        el("p", { className: "muted" }, "Private — only you and the AI see your answers. Your partner never sees your core knowledge."),
+        el("p", { className: "muted" }, isAiEnabled()
+          ? "Private — only you and the AI see your answers. Your partner never sees your core knowledge."
+          : "Private — your partner never sees your core knowledge. Keep this as a reference for yourself."),
         el("span", { className: `pill ${knowledge.submitted ? "ok" : "pending"}` }, knowledge.submitted ? "Submitted" : "Draft"),
       ]);
 
@@ -9248,7 +9406,9 @@ function renderCoreKnowledge(dynamicId) {
       if (knowledge.interview_completed) {
         stack.appendChild(
           el("div", { className: "card stack" }, [
-            el("p", { className: "muted" }, "Your dynamic interview can pre-fill these fields. Review and edit before submitting to the AI."),
+            el("p", { className: "muted" }, isAiEnabled()
+              ? "Your dynamic interview can pre-fill these fields. Review and edit before submitting."
+              : "Your dynamic interview can pre-fill these fields. Review and edit before submitting."),
             populateStatus,
             el("button", {
               className: "ghost-btn",
@@ -9410,6 +9570,8 @@ function renderAssistant(dynamicId) {
       }
 
       const playtimeList = el("div", { className: "facet-list" });
+      const assistantChoice = assistantChatEntry(dynamicId, { variant: "choice" });
+      if (assistantChoice) stack.appendChild(assistantChoice);
       PLAYTIME_FACETS.forEach((facet) => {
         if (!isFacetEnabled(facet, enabledFeatures)) return;
         const rowFacet = { ...facet };
@@ -9435,12 +9597,22 @@ function renderAssistant(dynamicId) {
       } else if (!status.llm_configured) {
         stack.appendChild(
           el("div", { className: "card stack" }, [
-            el("p", {}, "AI is not configured yet."),
+            el("p", { className: "muted" }, "Scene builder needs AI. Tasks, Instructor, and games still work."),
             el("button", {
-              className: "primary-btn",
+              className: "ghost-btn",
               type: "button",
               onClick: () => navigate("/settings"),
-            }, "Open settings"),
+            }, "Open AI settings"),
+          ])
+        );
+        stack.appendChild(
+          el("button", {
+            className: "choice-btn playtime-option",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
+          }, [
+            el("strong", {}, "Games"),
+            el("span", { className: "muted" }, "Spin the wheel and other release games"),
           ])
         );
       } else {
@@ -11600,10 +11772,84 @@ function renderPlaytimeScene(dynamicId) {
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
 }
 
+function renderInterviewForm(dynamicId, interview) {
+  const error = el("div", { className: "error hidden" });
+  const answers = { ...(interview.answers || {}) };
+  const rows = el("div", { className: "interview-table" });
+  (interview.prompts || []).forEach((prompt) => {
+    const area = el("textarea", {
+      rows: "3",
+      placeholder: prompt.hint || "",
+    });
+    area.value = answers[prompt.id] || "";
+    area.addEventListener("input", () => { answers[prompt.id] = area.value; });
+    rows.appendChild(el("div", { className: "interview-table-row card stack" }, [
+      el("strong", {}, prompt.title),
+      el("p", { className: "muted" }, prompt.hint || ""),
+      area,
+    ]));
+  });
+  const stack = el("div", { className: "stack" }, [
+    el("h1", {}, "Dynamic interview"),
+    el("p", { className: "muted" }, "AI is off, so this is a simple table to fill out and refer back to. Two rows is enough to mark it complete."),
+    interview.completed ? el("div", { className: "card stack" }, [
+      el("p", { className: "pill ok" }, "Interview complete"),
+      el("p", {}, interview.summary || "Saved."),
+    ]) : null,
+    rows,
+    error,
+    el("div", { className: "row wrap" }, [
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          error.classList.add("hidden");
+          try {
+            await api(`/dynamics/${dynamicId}/interview/answers`, {
+              method: "PUT",
+              body: JSON.stringify({ answers, complete: false }),
+            });
+            showToast("Interview notes saved.");
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+          }
+        },
+      }, "Save"),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: async () => {
+          error.classList.add("hidden");
+          try {
+            await api(`/dynamics/${dynamicId}/interview/answers`, {
+              method: "PUT",
+              body: JSON.stringify({ answers, complete: true }),
+            });
+            renderInterview(dynamicId);
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+          }
+        },
+      }, interview.completed ? "Update and mark complete" : "Mark interview complete"),
+    ]),
+    el("button", {
+      className: "ghost-btn",
+      onClick: () => navigate(`/dynamic/${dynamicId}`),
+    }, "Back to dynamic"),
+  ]);
+  setViewContent(stack);
+}
+
 function renderInterview(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading interview..."));
   Promise.all([api(`/dynamics/${dynamicId}/interview`), loadDynamic(dynamicId)])
     .then(([interview]) => {
+      if (interview.mode === "form") {
+        renderInterviewForm(dynamicId, interview);
+        return;
+      }
       const chatLog = el("div", { className: "chat-log" });
       const error = el("div", { className: "error hidden" });
       const input = el("textarea", {
@@ -11631,7 +11877,7 @@ function renderInterview(dynamicId) {
 
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Dynamic interview"),
-        el("p", { className: "muted" }, "Private Q&A so the AI learns what you want — and what to avoid — in this dynamic. You can always come back and add more."),
+        el("p", { className: "muted" }, "Private Q&A so suggestions match what you want — and what to avoid — in this dynamic. You can always come back and add more."),
       ]);
 
       if (interview.completed) {
@@ -12335,6 +12581,27 @@ function renderJournal(dynamicId) {
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
+function punishmentRowTone(report) {
+  if (report.status === "covered") return "punish-covered";
+  if (report.status === "remind") return "punish-remind";
+  if (report.status === "assigned" || (report.applied || []).length) return "punish-assigned";
+  return "punish-pending";
+}
+
+function punishmentFacetRow(dynamicId, report) {
+  return el("button", {
+    className: `facet-row ${punishmentRowTone(report)}`,
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/punishment/${report.id}`),
+  }, [
+    el("span", { className: "facet-icon" }, "⚖"),
+    el("span", { className: "facet-text" }, [
+      el("span", { className: "facet-title" }, report.reporter_name || "Partner"),
+      el("span", { className: "facet-subtitle" }, `${report.status} · ${(report.action_text || "").slice(0, 80)}`),
+    ]),
+  ]);
+}
+
 function renderPunishment(dynamicId, reportId = null) {
   const id = dynamicId || getActiveDynamicId();
   if (!id) {
@@ -12427,34 +12694,17 @@ function renderPunishment(dynamicId, reportId = null) {
       if (!open.length) {
         list.appendChild(el("p", { className: "muted" }, "No open confessions."));
       } else {
-        open.forEach((r) => {
-          list.appendChild(el("button", {
-            className: "facet-row",
-            type: "button",
-            onClick: () => navigate(`/dynamic/${id}/punishment/${r.id}`),
-          }, [
-            el("span", { className: "facet-icon" }, "⚖"),
-            el("span", { className: "facet-text" }, [
-              el("span", { className: "facet-title" }, r.reporter_name || "Partner"),
-              el("span", { className: "facet-subtitle" }, `${r.status} · ${(r.action_text || "").slice(0, 80)}`),
-            ]),
-          ]));
-        });
+        open.forEach((r) => list.appendChild(punishmentFacetRow(id, r)));
       }
-      const recent = el("div", { className: "stack" }, [el("h2", {}, "Recent")]);
-      (data.reports || []).slice(0, 10).forEach((r) => {
-        recent.appendChild(el("button", {
-          className: "facet-row",
-          type: "button",
-          onClick: () => navigate(`/dynamic/${id}/punishment/${r.id}`),
-        }, [
-          el("span", { className: "facet-icon" }, "·"),
-          el("span", { className: "facet-text" }, [
-            el("span", { className: "facet-title" }, `${r.reporter_name} · ${r.status}`),
-            el("span", { className: "facet-subtitle" }, (r.action_text || "").slice(0, 100)),
-          ]),
-        ]));
-      });
+      const recents = data.reports || [];
+      const recent = el("details", { className: "punishment-recent" }, [
+        el("summary", {}, `Recent (${recents.length})`),
+      ]);
+      if (!recents.length) {
+        recent.appendChild(el("p", { className: "muted" }, "No confessions yet."));
+      } else {
+        recents.slice(0, 20).forEach((r) => recent.appendChild(punishmentFacetRow(id, r)));
+      }
       setViewContent(el("div", { className: "stack" }, [
         list,
         recent,
@@ -13324,9 +13574,15 @@ function renderTracking(dynamicId) {
 
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Sex & orgasm tracking"),
+        assistantChatEntry(dynamicId),
         el("p", { className: "muted" }, stats.recent_orgasm_label || "No orgasms in the last 7 days"),
         el("p", { className: "muted" }, "Select who climaxed. Session times are shared; satisfaction, edging, and orgasm tags are per partner."),
       ]);
+      const orgasmBalanceHost = el("div");
+      stack.appendChild(orgasmBalanceHost);
+      api(`/dynamics/${dynamicId}/standing-targets`).then((data) => {
+        if (data?.you_are_dominant) orgasmBalanceHost.appendChild(renderStandingTargetsCard(dynamicId, data));
+      }).catch(() => {});
 
       if (metric("partner_chart_90d")) {
         stack.appendChild(el("div", { className: "card stack" }, [
@@ -13843,6 +14099,109 @@ function formatGoalStamp(iso) {
   }
 }
 
+function renderStandingTargetsCard(dynamicId, data, { onSaved } = {}) {
+  if (!data?.you_are_dominant) return el("div");
+  const catalog = data.catalog || [];
+  const directions = data.directions || [];
+  let rows = (data.targets || []).map((t) => ({ ...t }));
+  const error = el("p", { className: "error hidden" });
+  const list = el("div", { className: "stack" });
+
+  function paint() {
+    list.replaceChildren();
+    if (!rows.length) {
+      list.appendChild(el("p", { className: "muted" }, "No standing targets yet. Add one to watch orgasm split, lockup time, or open tasks."));
+    }
+    rows.forEach((row, idx) => {
+      const metricSel = el("select");
+      catalog.forEach((m) => {
+        const opt = el("option", { value: m.id }, m.title);
+        if (m.id === row.metric) opt.selected = true;
+        metricSel.appendChild(opt);
+      });
+      const dirSel = el("select");
+      directions.forEach((d) => {
+        const opt = el("option", { value: d.id }, d.title);
+        if (d.id === row.direction) opt.selected = true;
+        dirSel.appendChild(opt);
+      });
+      const weight = el("input", { type: "number", min: "1", max: "5", value: String(row.weight || 3) });
+      const target = el("input", { type: "number", step: "0.1", value: String(row.target ?? 0) });
+      const windowDays = el("input", { type: "number", min: "3", max: "90", value: String(row.window_days || 14) });
+      metricSel.addEventListener("change", () => { row.metric = metricSel.value; });
+      dirSel.addEventListener("change", () => { row.direction = dirSel.value; });
+      weight.addEventListener("change", () => { row.weight = Number(weight.value); });
+      target.addEventListener("change", () => { row.target = Number(target.value); });
+      windowDays.addEventListener("change", () => { row.window_days = Number(windowDays.value); });
+      const trend = row.trend
+        ? `${row.current} now / ${row.previous} last window · ${row.trend}${row.met === false ? " · off target" : ""}`
+        : "";
+      list.appendChild(el("div", { className: "card stack" }, [
+        el("div", { className: "standing-target-row" }, [
+          el("label", {}, ["Metric", metricSel]),
+          el("label", {}, ["Direction", dirSel]),
+          el("label", {}, ["Weight", weight]),
+          el("label", {}, ["Target", target]),
+          el("label", {}, ["Days", windowDays]),
+        ]),
+        trend ? el("p", { className: `standing-trend${row.met === false ? " off" : ""}` }, trend) : null,
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => { rows.splice(idx, 1); paint(); },
+        }, "Remove"),
+      ]));
+    });
+  }
+  paint();
+
+  const card = el("div", { className: "card stack" }, [
+    el("h2", {}, "Goals & balance"),
+    el("p", { className: "muted" }, "Weighted standing targets. Assistant Domme asks if drift is intentional. Gift/unlock goals stay under Tasks → Goals."),
+    list,
+    error,
+    el("div", { className: "row wrap" }, [
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          const first = catalog[0];
+          rows.push({
+            metric: first?.id || "orgasms_to_dominant",
+            title: first?.title || "Target",
+            weight: 3,
+            target: first?.default_target ?? 2,
+            window_days: first?.default_window_days || 14,
+            direction: first?.default_direction || "at_least",
+          });
+          paint();
+        },
+      }, "Add target"),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: async () => {
+          error.classList.add("hidden");
+          try {
+            const saved = await api(`/dynamics/${dynamicId}/standing-targets`, {
+              method: "PUT",
+              body: JSON.stringify({ targets: rows }),
+            });
+            rows = (saved.targets || []).map((t) => ({ ...t }));
+            paint();
+            showToast("Balance targets saved.");
+            if (typeof onSaved === "function") onSaved(saved);
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+          }
+        },
+      }, "Save balance targets"),
+    ]),
+  ]);
+  return card;
+}
+
 function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved }) {
   const catalog = goalsData.requirement_catalog || [];
   const kinds = goalsData.goal_kinds || [];
@@ -14217,6 +14576,7 @@ function renderChastity(dynamicId) {
       const chastityTagPresets = tagData.presets || [];
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Chastity tracking"),
+        assistantChatEntry(dynamicId),
         el("p", { className: "muted" }, "Lockups are tracked for submissives with chastity available. Orgasm and lockup data can be shared with the assistant domme in Settings."),
         error,
         flowHost,
@@ -14234,6 +14594,11 @@ function renderChastity(dynamicId) {
           }, "Open goals"),
         ]));
       }
+      const chastityBalanceHost = el("div");
+      stack.appendChild(chastityBalanceHost);
+      api(`/dynamics/${dynamicId}/standing-targets`).then((data) => {
+        if (data?.you_are_dominant) chastityBalanceHost.appendChild(renderStandingTargetsCard(dynamicId, data));
+      }).catch(() => {});
 
       const subs = settings.submissives || [];
       const enrolled = overview.partners.filter((p) => p.chastity_enabled);
@@ -15255,7 +15620,9 @@ function renderActs(dynamicId) {
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Tasks & acts"),
         renderTasksActsSwitcher(dynamicId, "acts"),
-        el("p", { className: "muted" }, "AI-generated acts based on your interviews. Pick a category that fits what you're willing to do."),
+        el("p", { className: "muted" }, isAiEnabled()
+          ? "Acts based on your interviews. Pick a category that fits what you're willing to do."
+          : "Acts of submission. The keyholder can add act types by hand when AI is off."),
       ]);
 
       const error = el("div", { className: "error hidden" });
@@ -15400,7 +15767,51 @@ function renderActs(dynamicId) {
       }
 
       if (!status.llm_configured) {
-        stack.appendChild(el("div", { className: "card" }, "Configure your AI provider in Settings to enable acts."));
+        stack.appendChild(el("div", { className: "card" }, "Generate needs an AI key. You can still add act types by hand below."));
+      }
+
+      if (you?.role === "dominant") {
+        const titleIn = el("input", { placeholder: "Category title, e.g. Domestic service" });
+        const descIn = el("textarea", { rows: "2", placeholder: "Short description" });
+        const examplesIn = el("input", { placeholder: "Example acts, comma-separated" });
+        stack.appendChild(el("div", { className: "card stack act-manual-form" }, [
+          el("h2", {}, "Add act type"),
+          titleIn,
+          descIn,
+          examplesIn,
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: async () => {
+              error.classList.add("hidden");
+              const title = titleIn.value.trim();
+              if (!title) {
+                error.textContent = "Give the category a title.";
+                error.classList.remove("hidden");
+                return;
+              }
+              const next = [
+                ...(catalog || []),
+                {
+                  id: title.toLowerCase().replace(/\s+/g, "_").slice(0, 40),
+                  title,
+                  description: descIn.value.trim(),
+                  example_acts: examplesIn.value.split(",").map((s) => s.trim()).filter(Boolean),
+                },
+              ];
+              try {
+                await api(`/dynamics/${dynamicId}/acts/catalog`, {
+                  method: "PUT",
+                  body: JSON.stringify(next),
+                });
+                renderActs(dynamicId);
+              } catch (err) {
+                error.textContent = err.message;
+                error.classList.remove("hidden");
+              }
+            },
+          }, "Save act type"),
+        ]));
       }
 
       if (active) {
@@ -19509,38 +19920,69 @@ function renderChat(dynamicId) {
         "chat.clear_dom_only",
         "Only keyholder can clear chat"
       );
-      const canClearChat = isDom || !settings.clear_dom_only;
+      const canClearChat = true;
       settingsPanel.append(
         el("button", {
           className: "ghost-btn",
           type: "button",
-          title: "Delete all chat messages for this dynamic",
+          title: "Move all chat messages to trash for 7 days",
           onClick: async () => {
-            if (settings.clear_dom_only && !settings.you_are_dominant) {
-              panelError.textContent = "Only the keyholder can clear chat for this dynamic.";
-              panelError.classList.remove("hidden");
-              return;
-            }
-            if (!confirm("Clear all chat messages for this dynamic? This cannot be undone.")) return;
+            if (!confirm("Move all chat messages to trash? You can recover them from this menu for 7 days, then they are permanently deleted.")) return;
             panelError.classList.add("hidden");
             try {
               await api(`/dynamics/${id}/chat/clear`, { method: "POST", body: "{}" });
               settingsPanel.classList.add("hidden");
               await refresh({ forceScroll: true });
-              panelStatus.textContent = "Chat cleared.";
+              panelStatus.textContent = "Chat moved to trash (recoverable for 7 days).";
             } catch (err) {
               panelError.textContent = err.message;
               panelError.classList.remove("hidden");
             }
           },
-        }, "Clear chat…"),
+        }, "Clear all messages…"),
+        el("button", {
+          className: "ghost-btn",
+          type: "button",
+          title: "Restore messages cleared in the last 7 days",
+          onClick: async () => {
+            panelError.classList.add("hidden");
+            try {
+              const info = await api(`/dynamics/${id}/chat/trashed`);
+              if (!info.count) {
+                panelStatus.textContent = "Nothing in trash.";
+                return;
+              }
+              if (!confirm(`Restore ${info.count} message(s) cleared in the last 7 days?`)) return;
+              await api(`/dynamics/${id}/chat/recover`, { method: "POST", body: "{}" });
+              settingsPanel.classList.add("hidden");
+              await refresh({ forceScroll: true });
+              panelStatus.textContent = "Chat restored.";
+            } catch (err) {
+              panelError.textContent = err.message;
+              panelError.classList.remove("hidden");
+            }
+          },
+        }, "Recover cleared chat…"),
         el(
           "p",
           { className: "muted" },
-          canClearChat
-            ? "Anyone in this dynamic can clear chat (change below / in Settings)."
-            : "Clear chat is limited to the keyholder."
+          "Anyone in this dynamic can clear-all. Messages stay in trash for 7 days, then they are permanently deleted."
         ),
+      );
+      if (isDom && window.UbetraAssistantDomme) {
+        settingsPanel.append(
+          el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: () => {
+              const hidden = UbetraAssistantDomme.isFabHidden();
+              UbetraAssistantDomme.setFabHidden(!hidden);
+              panelStatus.textContent = hidden ? "Assistant bubble shown." : "Assistant bubble hidden.";
+            },
+          }, UbetraAssistantDomme.isFabHidden() ? "Show Assistant bubble" : "Hide Assistant bubble")
+        );
+      }
+      settingsPanel.append(
         panelStatus,
         panelError,
         el("button", {
@@ -21143,7 +21585,7 @@ function renderSettings() {
       });
       stack.appendChild(el("div", { className: "card stack" }, [
           el("h2", {}, "Assistant domme"),
-          el("p", { className: "muted" }, "The assistant helps plan scenes, tasks, and acts inside your dynamic. It cannot enforce rules, control devices, or act outside this app."),
+          el("p", { className: "muted" }, "The assistant helps plan scenes, tasks, and acts inside your dynamic. It cannot enforce rules, control devices, or act outside this app. Agent permissions (ask / session / always) live on Chat with Assistant."),
           assistantDomOnly
             ? el("p", { className: "muted" }, "Tone and extra instructions are set by the keyholder. Change them below, then Submit settings change to request approval.")
             : el("p", { className: "muted" }, "As keyholder you set the assistant voice for this dynamic. Your partner can request changes."),
@@ -21164,6 +21606,15 @@ function renderSettings() {
             agreements: "Ground rules & agreements",
             tracking: "Orgasm & chastity tracking",
           }).map(([key, label]) => el("label", { className: "checkbox-label" }, [shareChecks[key], ` ${label}`])),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              if (!window.UbetraAssistantDomme) return;
+              UbetraAssistantDomme.setFabHidden(false);
+              showToast("Assistant bubble will show on Tracking, Playtime, and Chat.");
+            },
+          }, "Show Assistant bubble"),
       ]));
       stack.appendChild(assistantError);
       function snapshotShare() {
@@ -21616,9 +22067,58 @@ function renderSettings() {
           }),
           lockedSettingsWrap({
             locked: !!(policy && !policy.you_are_dominant),
-            children: el("label", { className: "checkbox-label" }, [clearDomOnly, " Only keyholder can clear chat"]),
+            children: el("label", { className: "checkbox-label" }, [clearDomOnly, " Only keyholder can clear chat (legacy)"]),
           }),
-          el("p", { className: "muted" }, "By default anyone in the dynamic can clear chat. Turn this on to restrict clearing to the keyholder."),
+          el("p", { className: "muted" }, "Clear-all is available to both partners. Messages stay in trash for 7 days (Chat ⋯ → Recover), then they are permanently deleted. This checkbox no longer blocks clear-all."),
+          el("div", { className: "row wrap" }, [
+            el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: async () => {
+                const dynamicId = privacyDynamic.value;
+                if (!dynamicId) {
+                  privacyError.textContent = "Select a dynamic first.";
+                  privacyError.classList.remove("hidden");
+                  return;
+                }
+                if (!confirm("Move all chat messages to trash? Recover from this page or Chat ⋯ for 7 days.")) return;
+                privacyError.classList.add("hidden");
+                try {
+                  await api(`/dynamics/${dynamicId}/chat/clear`, { method: "POST", body: "{}" });
+                  privacyStatus.textContent = "Chat moved to trash (recoverable for 7 days).";
+                } catch (err) {
+                  privacyError.textContent = err.message;
+                  privacyError.classList.remove("hidden");
+                }
+              },
+            }, "Clear all messages…"),
+            el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: async () => {
+                const dynamicId = privacyDynamic.value;
+                if (!dynamicId) {
+                  privacyError.textContent = "Select a dynamic first.";
+                  privacyError.classList.remove("hidden");
+                  return;
+                }
+                privacyError.classList.add("hidden");
+                try {
+                  const info = await api(`/dynamics/${dynamicId}/chat/trashed`);
+                  if (!info.count) {
+                    privacyStatus.textContent = "Nothing in trash.";
+                    return;
+                  }
+                  if (!confirm(`Restore ${info.count} message(s) cleared in the last 7 days?`)) return;
+                  await api(`/dynamics/${dynamicId}/chat/recover`, { method: "POST", body: "{}" });
+                  privacyStatus.textContent = "Chat restored.";
+                } catch (err) {
+                  privacyError.textContent = err.message;
+                  privacyError.classList.remove("hidden");
+                }
+              },
+            }, "Recover cleared chat…"),
+          ]),
           el("label", { className: "checkbox-label" }, [blurByDefault, " Blur shared images"]),
           el("label", {}, ["When blurred", blurModeSelect]),
           el(
@@ -22216,6 +22716,7 @@ async function renderRoute() {
       return renderKnowledgeHub(dynamicId);
     }
     if (parts[2] === "assistant") {
+      if (parts[3] === "chat") return renderAssistantChatPage(dynamicId);
       if (parts[3] === "scene") return renderPlaytimeScene(dynamicId);
       if (parts[3] === "games" && parts[4] === "spin") return renderSpinTheWheel(dynamicId);
       if (parts[3] === "games") return renderPlaytimeGames(dynamicId);

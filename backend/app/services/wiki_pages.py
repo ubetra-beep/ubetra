@@ -17,6 +17,8 @@ DEFAULT_PAGES = [
     ("Workflows", "Workflows"),
     ("Feature-map", "Feature map"),
     ("AI-context", "AI context"),
+    ("Context-maps", "Context maps"),
+    ("Assistant-Domme", "Assistant Domme"),
     ("Dynamics", "Dynamics"),
     ("Tracking", "Tracking"),
     ("Chat", "Chat"),

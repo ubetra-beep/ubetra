@@ -18,6 +18,8 @@ Screenshots on these pages come from a local **WikiDom** (Dominant) / **WikiSub*
 | [Workflows](Workflows) | Flowcharts of how processes run (troubleshooting) |
 | [Feature map](Feature-map) | How features interact; known workflow risks |
 | [AI context](AI-context) | What the assistant can see and how to grant or block it |
+| [Context maps](Context-maps) | Per-screen flow maps and which live packs load |
+| [Assistant Domme](Assistant-Domme) | Keyholder chat, Apply cards, permissions, change log |
 | [Dynamics](Dynamics) | Ground rules, interview, knowledge, gear |
 | [Tracking](Tracking) | History, chastity, orgasm log, feelings, punishment, journal, vault |
 | [Chat](Chat) | Messaging, encryption, push, images, clear chat |

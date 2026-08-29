@@ -28,6 +28,8 @@ After onboarding, configure modules and privacy using **[Features & Settings](Fe
 
 Paste a Gemini or OpenAI key for the **dynamic**. Both partners use it (same pattern as the shared chat encryption key). You can **Fill out later** and add a key in Settings anytime.
 
+If you skip the key (or later turn AI off), the **dynamic interview** is a table of prompts to fill out — not a chat. Tracking, tasks, and Chat still work.
+
 ---
 
 ## 3. SPTI

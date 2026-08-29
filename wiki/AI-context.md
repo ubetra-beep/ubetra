@@ -2,7 +2,9 @@
 
 What the language model is given, which tool uses it, and how to block or grant each piece. Pair with [Feature map](Feature-map) and [Workflows](Workflows).
 
-UBETRA builds a text blob (`build_dynamic_context`) and prepends it to almost every AI call, plus a system prompt ( Domme tone + extra instructions). **Chat messages are never in that blob.**
+UBETRA builds a text blob and prepends it to almost every AI call, plus a system prompt (Domme tone + extra instructions). **Chat messages are never in that blob.**
+
+**Assistant Domme chat** uses indexed [context maps](Context-maps) instead of a full `build_dynamic_context` dump on every message: compact catalog of all areas, live packs for the current route key, and a refresh of stale metrics on follow-up turns.
 
 ---
 
@@ -77,7 +79,7 @@ Routing: Settings → Advanced AI routing. Capability probes (text / NSFW text /
 
 | Tool id | Used by | Context notes |
 |---------|---------|----------------|
-| `assistant` / `playtime` | Scene builder, playtime ideas | Share flags; tracking follows user flag |
+| `assistant` / `playtime` | Scene builder, playtime ideas, **Assistant Domme chat** | Share flags; tracking follows user flag. **Assistant chat** injects the [context map](Context-maps) catalog plus live packs for the current screen (not a full dump every turn). **Partner Chat still excluded.** |
 | `spin_wheel` | Spin the wheel | Same context builder |
 | `tasks` | Task assist, make-up note, **training regimen** | Makeup assist **forces tracking off**; regimen uses user tracking flag. Prompt also lists **existing tasks** (not via share flags) |
 | `journals` | Journal assist | Honors flags if the client sent them; defaults to share list when omitted. Domme review uses tracking **off** |

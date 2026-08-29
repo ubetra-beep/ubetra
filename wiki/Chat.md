@@ -22,11 +22,15 @@ Partner messaging for the active dynamic. Demo screenshots show a seeded WikiDom
 
 Task requests for Subs live under [Playtime](Playtime), not Chat.
 
+Keyholders use the **Assistant** bubble for coaching. Partner messages are never sent to the model. See [Assistant Domme](Assistant-Domme).
+
 ---
 
 ## Clear chat
 
-Anyone in the dynamic can **Clear chat…** by default. Dom can set **Only keyholder can clear chat** in Chat ⋯ or Settings → Privacy. Clearing posts a system log line.
+Anyone in the dynamic can **Clear all messages…** from Chat **⋯** or Settings → Privacy. That moves messages to trash for **7 days**. **Recover cleared chat…** in the same menus restores them. After 7 days they are permanently deleted.
+
+The old **Only keyholder can clear chat** checkbox is leftover and no longer blocks clear-all.
 
 ---
 

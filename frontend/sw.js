@@ -1,9 +1,10 @@
-const CACHE = "ubetra-v136";
+const CACHE = "ubetra-v141";
 const ASSETS = [
   "/",
   "/assets/styles.css",
   "/assets/app.js",
   "/assets/instructor.js",
+  "/assets/assistant-domme.js",
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
@@ -75,10 +76,33 @@ self.addEventListener("push", (event) => {
     (async () => {
       const list = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
 
+      if (kind === "reload") {
+        await caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).catch(() => {});
+        list.forEach((client) => {
+          try {
+            client.postMessage({ type: "ubetra-reload", url });
+          } catch {
+            /* ignore */
+          }
+        });
+        if (!list.length) {
+          await self.registration.showNotification(title, {
+            body,
+            tag,
+            data: { url, dynamicId, kind },
+            renotify: true,
+            requireInteraction: true,
+            icon: "/icons/icon-192.png",
+            badge: "/icons/icon-192.png",
+          });
+        }
+        return;
+      }
+
       // Ask open tabs whether this chat is already on-screen (skip OS banner if so).
       // Never suppress call rings — those must always surface.
       let suppressBanner = false;
-      if (kind !== "call" && dynamicId && String(tag).startsWith("ubetra-chat")) {
+      if (kind !== "call" && kind !== "password_reset" && dynamicId && String(tag).startsWith("ubetra-chat")) {
         const checks = await Promise.all(
           list.map(
             (client) =>
@@ -136,10 +160,23 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const kind = event.notification.data?.kind || "";
   const target = event.notification.data?.url || "/#/home";
   const href = new URL(target, self.location.origin).href;
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (list) => {
+      if (kind === "reload") {
+        await caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).catch(() => {});
+        for (const client of list) {
+          try {
+            client.postMessage({ type: "ubetra-reload", url: target });
+          } catch {
+            /* ignore */
+          }
+          if ("focus" in client) return client.focus();
+        }
+        return self.clients.openWindow(href);
+      }
       for (const client of list) {
         if ("focus" in client) {
           client.postMessage({ type: "ubetra-navigate", url: target });

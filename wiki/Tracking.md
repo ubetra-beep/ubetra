@@ -38,7 +38,7 @@ Calendar of full / partial / free lock days. When a night of sleep is tied to th
 
 Route: `/#/dynamic/{id}/chastity`
 
-Lock/unlock, temporary breaks (Hygiene, Sleep, …), timers, goals, **Eventual Release**. Import prior lock/unlock CSV from Prior lockup history. Unlock reasons are tags on the timeline.
+Lock/unlock, temporary breaks (Hygiene, Sleep, …), timers, gift goals, **Eventual Release**. Keyholders also set **Goals & balance** standing targets (lockup hours / percent locked) that Assistant Domme can watch. Import prior lock/unlock CSV from Prior lockup history. Unlock reasons are tags on the timeline.
 
 ![Chastity](images/13-chastity.png)
 
@@ -48,7 +48,7 @@ Lock/unlock, temporary breaks (Hygiene, Sleep, …), timers, goals, **Eventual R
 
 Route: `/#/dynamic/{id}/tracking`
 
-Counts, tags, calendars. Dom configures fields/metrics. **Prior orgasm / play history** supports CSV import with a **preview before confirm** and a success message after import.
+Counts, tags, calendars. Dom configures fields/metrics. **Goals & balance** standing targets (orgasms to keyholder vs sub) live here for the keyholder. **Prior orgasm / play history** supports CSV import with a **preview before confirm** and a success message after import.
 
 ![Orgasm tracking](images/14-orgasm-tracking.png)
 

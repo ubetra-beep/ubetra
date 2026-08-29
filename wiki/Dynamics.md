@@ -15,7 +15,7 @@ Agreements, interviews, kink lists, and knowledge the AI can use. These items li
 | Item | Route | Purpose |
 |------|-------|---------|
 | **Ground rules** | `/#/dynamic/{id}/ground-rules` | Agreements & boundaries; proposals need keyholder approval |
-| **Dynamic interview** | `/#/dynamic/{id}/interview` | Tell the AI what you want for scenes/acts |
+| **Dynamic interview** | `/#/dynamic/{id}/interview` | Chat when AI is on; a fill-in table when AI is off |
 | **Kink list** | `/#/dynamic/{id}/survey` | Want / if partner / not into |
 
 ![Ground rules](images/12-ground-rules.png)
@@ -32,9 +32,9 @@ Yellow **Needed** badges mean that partner hasn’t finished interview or kink s
 
 | Item | Route | Purpose |
 |------|-------|---------|
-| **Core knowledge** | `/#/dynamic/{id}/knowledge` | Relationship context for AI |
-| **SPTI profile** | `/#/dynamic/{id}/knowledge/spti` | Personality inventory for AI |
-| **Context library** | `/#/dynamic/{id}/context` | Server file library for AI (subject tags) |
+| **Core knowledge** | `/#/dynamic/{id}/knowledge` | Relationship context (feeds AI when enabled) |
+| **SPTI profile** | `/#/dynamic/{id}/knowledge/spti` | Optional personality notes |
+| **Context library** | `/#/dynamic/{id}/context` | Server file library (subject tags; used by AI when enabled) |
 | **Journal** | `/#/dynamic/{id}/journal` | Private writing (see [Tracking](Tracking)) |
 | **Gear** | `/#/dynamic/{id}/gear` | Toys, kink gear, outfits |
 

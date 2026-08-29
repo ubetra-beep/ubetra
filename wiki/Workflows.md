@@ -1,6 +1,6 @@
 # Workflows
 
-Troubleshooting maps of how UBETRA actually runs. Open Settings → Help → Wiki → **Workflows**. Related: [Feature map](Feature-map) (how modules talk) and [AI context](AI-context) (what the model is allowed to see).
+Troubleshooting maps of how UBETRA actually runs. Open Settings → Help → Wiki → **Workflows**. Related: [Feature map](Feature-map) (how modules talk), [AI context](AI-context) (what the model is allowed to see), and [Context maps](Context-maps) (which live packs load per screen).
 
 If a screen “does nothing,” start at the **spine**, then jump to the module flowchart.
 
@@ -13,6 +13,7 @@ flowchart TD
   A[Create account] --> B[Create or join a dynamic]
   B --> C{Interview plus LLM key?}
   C -->|needed for Playtime AI| D[Complete interview]
+  C -->|no AI: interview table| D
   C -->|optional| E[Three hubs]
   D --> E
   E --> T[Tracking]
@@ -173,12 +174,12 @@ flowchart TD
   Event[Lockup, tracking, task, settings] --> Sys{Show activity log in chat?}
   Sys -->|on| Feed[System line in Chat]
   Sys -->|off| Silent[Not posted]
-  Clear[Clear chat] --> Who{Only keyholder can clear?}
-  Who -->|yes| DomOnly[Dom only]
-  Who -->|no| Anyone[Either partner]
+  Clear[Clear all] --> Trash[Trash for 7 days]
+  Trash --> Recover[Recover from Chat ⋯ or Privacy]
+  Trash --> Purge[Permanent delete after 7 days]
 ```
 
-Chat **messages are not sent to the AI**. Turning logs on does not add chat to model context.
+Chat **messages are not sent to the AI**. Turning logs on does not add chat to model context. Anyone in the dynamic can clear-all and recover within 7 days.
 
 ---
 
@@ -210,6 +211,33 @@ flowchart LR
 ```
 
 Partner Core knowledge is **not** injected as readable text for the other person’s AI calls (only “submitted”).
+
+---
+
+## Assistant agent
+
+```mermaid
+flowchart TD
+  Entry[Chat with Assistant on Tracking Playtime Chat chastity orgasm tasks]
+  Fab[Labeled Assistant bubble]
+  Entry --> Page[Full-page assistant chat]
+  Fab --> Sheet[Bottom sheet]
+  Page --> Subject[Subject including What can assistant do]
+  Sheet --> Subject
+  Subject --> LLM[tool_id assistant]
+  Subject --> Demo[Seeded Apply cards]
+  LLM --> Cards[Suggestion cards]
+  Demo --> Cards
+  Cards --> Perm{Grant}
+  Perm -->|deny| Block[Blocked]
+  Perm -->|ask| Confirm[Allow once session or always]
+  Perm -->|session or always| Apply[Apply]
+  Confirm --> Apply
+  Apply --> Log[assistant_change_log plus Chat system event]
+  Apply --> App[Tasks goals features punishments]
+```
+
+Partner Chat is never in the model. The assistant does not lock, unlock, or complete tasks.
 
 ---
 

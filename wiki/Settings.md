@@ -16,7 +16,7 @@ For the full module map and “how to use it,” see **[Features & Settings](Fea
 
 ## Account
 
-Username, biological sex, email, password, and **Log out**. Dom may rename a Sub’s username for the dynamic. Password reset uses email code **and** link when SMTP is configured.
+Username, biological sex, email, password, and **Log out**. Dom may rename a Sub’s username for the dynamic. Password reset uses email (when SMTP is configured) and also pushes a code/link to phones that already have UBETRA notifications.
 
 ## Appearance
 

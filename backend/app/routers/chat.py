@@ -73,12 +73,29 @@ def _purge_expired(db: Session, dynamic_id: str) -> None:
         ChatMessage.dynamic_id == dynamic_id,
         ChatMessage.expires_at.isnot(None),
         ChatMessage.expires_at < now,
+        ChatMessage.cleared_at.is_(None),
     ).delete(synchronize_session=False)
     db.query(ChatKeyTransfer).filter(
         ChatKeyTransfer.dynamic_id == dynamic_id,
         ChatKeyTransfer.redeemed_at.is_(None),
         ChatKeyTransfer.expires_at < now,
     ).delete(synchronize_session=False)
+
+
+CHAT_TRASH_DAYS = 7
+
+
+def _purge_trashed_chat(db: Session, dynamic_id: str) -> int:
+    cutoff = datetime.utcnow() - timedelta(days=CHAT_TRASH_DAYS)
+    return (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.dynamic_id == dynamic_id,
+            ChatMessage.cleared_at.isnot(None),
+            ChatMessage.cleared_at < cutoff,
+        )
+        .delete(synchronize_session=False)
+    )
 
 
 def _message_out(message: ChatMessage, viewer: Membership) -> ChatMessageOut:
@@ -221,25 +238,60 @@ def clear_chat_history(
     dynamic = db.get(Dynamic, dynamic_id)
     if dynamic is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
-    if bool(getattr(dynamic, "chat_clear_dom_only", False)) and not is_dominant(membership):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the keyholder can clear chat for this dynamic.",
-        )
-    deleted = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.dynamic_id == dynamic_id)
-        .delete(synchronize_session=False)
+    _purge_trashed_chat(db, dynamic_id)
+    now = datetime.utcnow()
+    live = db.query(ChatMessage).filter(
+        ChatMessage.dynamic_id == dynamic_id,
+        ChatMessage.cleared_at.is_(None),
     )
+    deleted = live.count()
+    if deleted:
+        live.update({ChatMessage.cleared_at: now}, synchronize_session=False)
     post_system_event(
         db,
         dynamic_id,
         membership,
-        f"cleared chat history ({deleted} message(s))",
+        f"moved chat to trash ({deleted} message(s); recoverable for {CHAT_TRASH_DAYS} days)",
         force=True,
     )
     db.commit()
-    return {"ok": True, "deleted": deleted}
+    return {"ok": True, "deleted": deleted, "recover_days": CHAT_TRASH_DAYS}
+
+
+@router.get("/dynamics/{dynamic_id}/chat/trashed")
+def chat_trashed(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    get_membership(dynamic_id, user, db)
+    _purge_trashed_chat(db, dynamic_id)
+    db.commit()
+    count = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.dynamic_id == dynamic_id, ChatMessage.cleared_at.isnot(None))
+        .count()
+    )
+    return {"count": count, "recover_days": CHAT_TRASH_DAYS}
+
+
+@router.post("/dynamics/{dynamic_id}/chat/recover")
+def recover_chat_history(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    get_membership(dynamic_id, user, db)
+    _purge_trashed_chat(db, dynamic_id)
+    q = db.query(ChatMessage).filter(
+        ChatMessage.dynamic_id == dynamic_id,
+        ChatMessage.cleared_at.isnot(None),
+    )
+    restored = q.count()
+    if restored:
+        q.update({ChatMessage.cleared_at: None}, synchronize_session=False)
+    db.commit()
+    return {"ok": True, "restored": restored}
 
 
 @router.get("/dynamics/{dynamic_id}/chat/key", response_model=ChatSharedKeyOut)
@@ -395,12 +447,13 @@ def list_messages(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
 
     _purge_expired(db, dynamic_id)
+    _purge_trashed_chat(db, dynamic_id)
     db.commit()
 
     messages = (
         db.query(ChatMessage)
         .options(joinedload(ChatMessage.sender))
-        .filter(ChatMessage.dynamic_id == dynamic_id)
+        .filter(ChatMessage.dynamic_id == dynamic_id, ChatMessage.cleared_at.is_(None))
         .order_by(ChatMessage.created_at.asc())
         .limit(200)
         .all()

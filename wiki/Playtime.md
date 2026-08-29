@@ -4,9 +4,11 @@ Route: `/#/dynamic/{id}/assistant`
 
 AI-assisted scene tools, games, and tasks. Framed primarily for the Dom/keyholder; Subs see shared flows where allowed.
 
+The keyholder also has **Chat with Assistant** at the top of this hub (and a labeled **Assistant** bubble on other dynamic pages). Full page: `/#/dynamic/{id}/assistant/chat`. See [Assistant Domme](Assistant-Domme).
+
 ![Playtime hub](images/18-playtime.png)
 
-Needs a completed **dynamic interview** and a configured **LLM key** for full assistant features. See [Features & Settings](Features-and-Settings).
+Needs a completed **dynamic interview** for personalized Playtime AI. Scene builder needs an LLM key. Tasks, Instructor, and spin still work without AI. See [Features & Settings](Features-and-Settings).
 
 ---
 

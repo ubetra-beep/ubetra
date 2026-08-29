@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session, joinedload
 from ..auth import get_current_user, get_membership
 from ..database import get_db
 from ..models import ActOfSubmission, ActStatus, Dynamic, Membership, PartnerRole, Task, TaskApprovalStatus, TaskList, TaskRecurrence, TaskSource, TaskVisibility, User
-from ..schemas import ActCategoryOut, ActOfSubmissionOut, ActRequestIn, ActRespondRequest, ActToTaskCreate, ActVerifyRequest, TaskListOut
-from ..services.act_catalog import find_act_category, generate_act_catalog, maybe_generate_act_catalog, parse_act_catalog
+from ..schemas import ActCategoryIn, ActCategoryOut, ActOfSubmissionOut, ActRequestIn, ActRespondRequest, ActToTaskCreate, ActVerifyRequest, TaskListOut
+from ..services.act_catalog import find_act_category, generate_act_catalog, maybe_generate_act_catalog, parse_act_catalog, serialize_act_catalog
 from ..services.tags import tags_to_string
 from ..services.tasks_service import task_list_out
 from ..services.chat_events import post_system_event, task_snippet
@@ -66,6 +66,39 @@ def regenerate_act_catalog(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return [ActCategoryOut(**cat) for cat in categories]
+
+
+@router.put("/dynamics/{dynamic_id}/acts/catalog", response_model=list[ActCategoryOut])
+def put_act_catalog(
+    dynamic_id: str,
+    payload: list[ActCategoryIn],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ActCategoryOut]:
+    membership = get_membership(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can edit act types")
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    rows = []
+    for item in payload or []:
+        title = (item.title or "").strip()
+        if not title:
+            continue
+        cat_id = (item.id or "").strip() or title.lower().replace(" ", "_")[:40]
+        examples = [str(x).strip() for x in (item.example_acts or []) if str(x).strip()][:8]
+        rows.append(
+            {
+                "id": cat_id,
+                "title": title[:120],
+                "description": (item.description or "").strip()[:500],
+                "example_acts": examples,
+            }
+        )
+    dynamic.act_categories = serialize_act_catalog(rows)
+    db.commit()
+    return [ActCategoryOut(**cat) for cat in parse_act_catalog(dynamic.act_categories)]
 
 
 @router.get("/dynamics/{dynamic_id}/acts", response_model=list[ActOfSubmissionOut])

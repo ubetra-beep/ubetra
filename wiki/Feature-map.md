@@ -25,6 +25,7 @@ flowchart TB
   HelpMenu --> Wiki[Wiki markdown]
 
   Track --> Hist[History]
+  Track --> AsstFromTrack[Chat with Assistant]
   Track --> Org[Sex / orgasm log]
   Track --> Ch[Chastity]
   Track --> Feel[Feelings]
@@ -38,6 +39,7 @@ flowchart TB
   Track --> SPTI[SPTI]
 
   Play --> Tasks[Tasks and acts]
+  Play --> AsstChat[Chat with Assistant]
   Play --> Scene[Scene builder]
   Play --> Spin[Spin wheel]
   Play --> Manga[Monthly manga]
@@ -66,7 +68,8 @@ flowchart TB
 | Overdue task | Inbox, Goals, make-up | Late complete, auto-punish rules, make-up request |
 | Chat images | Image vault | Private copies; activity log if chat logs on |
 | Settings (sub) | Chat | Settings request for Dom approve/deny |
-| Chat **system events** | Chat feed | Mirrors lockups, tracking, tasks, settings |
+| Chat **system events** | Chat feed | Mirrors lockups, tracking, tasks, settings, Assistant applies |
+| Assistant Apply cards | Tasks, standing targets, gift goals, features, punishments | Confirm-to-apply; grants ask/session/always/deny; change log |
 | Encrypted chat | Chat only | Does **not** encrypt vault/tracking DB rows |
 | Tasks due + push settings | Device notifications | Dom-controlled lead time |
 | Video / Instructor | Smart censor | Dom-controlled `video.ml_censor_mode` |
@@ -140,7 +143,7 @@ flowchart TD
   Tone --> LLM[Every generate_text call]
 ```
 
-`ai_enabled` (per user) + tool routing (per dynamic) decide whether a given Playtime/task/journal button can call a model.
+`ai_enabled` (per user) + tool routing (per dynamic) decide whether a given Playtime/task/journal button can call a model. The keyholder **Assistant Domme** bubble and **Chat with Assistant** entries use the same `assistant` tool and show when AI is on (a key is needed to send chat, not to open the page). See [Assistant Domme](Assistant-Domme).
 
 ---
 

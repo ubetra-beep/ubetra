@@ -885,6 +885,13 @@ class ActCategoryOut(BaseModel):
     example_acts: list[str] = Field(default_factory=list)
 
 
+class ActCategoryIn(BaseModel):
+    id: str = ""
+    title: str = Field(min_length=1, max_length=120)
+    description: str = ""
+    example_acts: list[str] = Field(default_factory=list)
+
+
 class MenuSummariesOut(BaseModel):
     org_tracking: str = ""
     chastity: str = ""
@@ -1240,10 +1247,54 @@ class InterviewOut(BaseModel):
     message_count: int
     can_mark_complete: bool = False
     messages: list[InterviewMessageOut]
+    mode: str = "chat"  # chat | form
+    prompts: list[dict] = Field(default_factory=list)
+    answers: dict[str, str] = Field(default_factory=dict)
 
 
 class InterviewReplyIn(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
+
+
+class InterviewAnswersIn(BaseModel):
+    answers: dict[str, str] = Field(default_factory=dict)
+    complete: bool = False
+
+
+class AssistantChatMessageOut(BaseModel):
+    id: str
+    role: str
+    content: str
+    suggestions: list[dict] = Field(default_factory=list)
+    created_at: datetime
+
+
+class AssistantThreadOut(BaseModel):
+    id: str
+    subject_id: str
+    related_entity_id: str = ""
+    unread: bool = False
+    messages: list[AssistantChatMessageOut] = Field(default_factory=list)
+
+
+class AssistantChatReplyIn(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+    subject_id: str = "open_chat"
+    related_entity_id: str = ""
+    route: str = ""
+    feature_id: str = ""
+
+
+class AssistantSuggestionApplyIn(BaseModel):
+    type: str
+    content: str = ""
+    tags: list[str] = Field(default_factory=list)
+    target_id: str = ""
+    weight: int | None = None
+    target: float | None = None
+    direction: str | None = None
+    path: str = ""
+    label: str = ""
 
 
 class ContextLinkCreate(BaseModel):

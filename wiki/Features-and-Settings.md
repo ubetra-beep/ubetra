@@ -13,7 +13,7 @@ This page is the map of **what UBETRA can do** and **where you configure it**. S
 | Hub | Purpose | Typical use |
 |-----|---------|-------------|
 | **Tracking** | Day-to-day logs and status | History, chastity, orgasm/play log, feelings, sleep, cycle, punishment, journal, vault; Setup / Dynamic at the bottom |
-| **Playtime** | Games, AI scenes, tasks | Scene builder, spin the wheel, Instructor, tasks & acts, monthly manga (opt-in) |
+| **Playtime** | Games, AI scenes, tasks | Scene builder, spin the wheel, Instructor, tasks & acts, monthly manga (opt-in). Keyholder **Assistant Domme** bubble is on every dynamic page when AI is on — [Assistant Domme](Assistant-Domme) |
 | **Chat** | Conversation + activity feed | Messages, photos, system logs (lockups, tracking, settings approvals) |
 
 Each hub’s **☰** opens **Application features** for that area (same toggles as Settings → Features).
@@ -33,7 +33,7 @@ Each hub’s **☰** opens **Application features** for that area (same toggles 
 | Tasks & acts | On | Dom creates tasks; Sub requests tasks; make-up flow; acts after interview |
 | Image vault | On | Private copies of chat photos; anyone can delete (logged); images-off chat still links here |
 | Journal | On | Private writing; **Use for AI** + **Visible to partner** per entry |
-| Playtime / scene workshop | On | AI scenes and spin game (needs LLM key + interview) |
+| Playtime / scene workshop | On | AI scenes and spin game (scene builder needs LLM key + interview; tasks and Instructor work without AI) |
 | SPTI profile | On | Paste personality results for AI context |
 | Context library | On | Files/links tagged for AI |
 | Gear | On | Toys / outfits inventory |
@@ -61,8 +61,9 @@ Pick the active dynamic, create another, or copy invite context.
 - **Batch test** probes text / NSFW text / image / NSFW image.
 - **Advanced AI routing** assigns a connection per tool; red labels mean “needs a service.”
 - Dom sets assistant **tone** and extra instructions (Sub requests changes).
+- Uncheck **AI enabled** to hide assist buttons and use the interview as a fill-in table. The keyholder **Assistant Domme** bubble and Chat with Assistant hide when AI is off; they stay if AI is on even without a key.
 
-Use this when Playtime scenes, journal assist, Domme review, or acts need a model that allows adult content.
+Use this when Playtime scenes, journal assist, Domme review, Assistant Domme chat, or acts need a model that allows adult content.
 
 ### Chat & privacy
 | Setting | Default idea | Utilize when… |
@@ -108,4 +109,4 @@ When a Sub changes a Dom-controlled setting, Chat shows a **settings request** f
 5. Chat privacy (encryption / logs / clear policy) and push on each phone.
 6. Add an AI connection if you want Playtime / journal assist.
 
-See also [Roles & Permissions](Roles-and-Permissions), [Workflows](Workflows), [Feature map](Feature-map), [AI context](AI-context), and [Self-Hosting](Self-Hosting).
+See also [Roles & Permissions](Roles-and-Permissions), [Workflows](Workflows), [Feature map](Feature-map), [AI context](AI-context), [Context maps](Context-maps), and [Self-Hosting](Self-Hosting).
