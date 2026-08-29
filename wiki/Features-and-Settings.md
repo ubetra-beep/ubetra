@@ -56,6 +56,7 @@ Change username, email, password; appearance (theme + PWA icon); backup; log out
 Pick the active dynamic, then the **feature index** (same as [Onboarding](Onboarding)). Cards for chastity policy, feelings, orgasm-log fields, auto punish, and task push only show when that module is on.
 
 ### AI & assistant
+Open **LLM API Configuration** (collapsed) for keys and named connections.
 - Add **named AI connections** (Gemini, OpenAI, OpenRouter, LM Studio, OpenAI-compatible).
 - **Batch test** probes text / NSFW text / image / NSFW image.
 - **Advanced AI routing** assigns a connection per tool; red labels mean “needs a service.”

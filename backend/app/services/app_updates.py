@@ -34,6 +34,16 @@ def parse_version(raw: str) -> tuple[int, ...]:
     return tuple(int(p) for p in parts[:4])
 
 
+def read_asset_version() -> str:
+    path = ROOT_DIR / "frontend" / "sw.js"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    match = re.search(r'const CACHE\s*=\s*"([^"]+)"', text)
+    return match.group(1) if match else ""
+
+
 def fetch_github_version() -> str:
     now = time.time()
     with _LOCK:
@@ -60,6 +70,7 @@ def updates_payload() -> dict:
         "local_version": local,
         "github_version": remote,
         "github_newer": newer,
+        "asset_version": read_asset_version(),
         "github_repo": GITHUB_REPO,
         "github_url": GITHUB_REPO_URL,
         "changelog_url": GITHUB_CHANGELOG_URL,

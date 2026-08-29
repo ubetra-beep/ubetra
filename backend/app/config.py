@@ -54,6 +54,6 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Allow the public HTTPS origin when configured (Caddy / DuckDNS).
+# Allow the public HTTPS origin when configured (reverse proxy).
 if settings.public_app_url and settings.public_app_url not in settings.cors_origins:
     settings.cors_origins = [*settings.cors_origins, settings.public_app_url]

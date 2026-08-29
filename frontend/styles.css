@@ -138,25 +138,35 @@ textarea {
 
 .top-update-btn {
   flex-shrink: 0;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: #111;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--accent);
   border-radius: 999px;
-  width: 2.15rem;
-  height: 2.15rem;
-  font-size: 1.05rem;
+  width: auto;
+  min-width: 2.5rem;
+  height: 2.5rem;
+  padding: 0 0.7rem;
+  font-size: 0.72rem;
   font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
   line-height: 1;
   cursor: pointer;
-  padding: 0;
+}
+
+.top-update-btn.needs-update {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #111;
 }
 
 .top-update-btn.hidden {
   display: none;
 }
 
-.update-popover {
-  width: min(420px, 100%);
+.llm-api-config > summary {
+  cursor: pointer;
+  font-weight: 600;
 }
 
 .kiosk-overlay {

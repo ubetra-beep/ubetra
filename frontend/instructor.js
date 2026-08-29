@@ -1749,7 +1749,7 @@
       ]);
       if (!catalog.ok || catalog.empty) {
         stack.appendChild(el("div", { className: "card stack" }, [
-          el("p", { className: "muted" }, "No playlists yet. Drop video/image files into subdirectories of the shared redgifs folder on docker-svr."),
+          el("p", { className: "muted" }, "No playlists yet. Drop video/image files into subdirectories of the Instructor media folder on the host (UBETRA_REDGIFS_HOST)."),
         ]));
       }
       stack.appendChild(el("button", {

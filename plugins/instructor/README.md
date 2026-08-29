@@ -9,7 +9,4 @@ the hosted legacy client at fapinstructor.com (local files only; no Scrolller).
 
 License: [LICENSE.txt](LICENSE.txt)
 
-Media is **not** fetched from RedGIFs in this process. A separate Gluetun stack
-on docker-svr writes files into subdirectories of the shared drop folder
-(default host `/home/james/vault/redgifs`). UBETRA bind-mounts that tree
-read-only.
+Media is **not** fetched from RedGIFs in this process. Point `UBETRA_REDGIFS_HOST` at a local folder of playlists (subdirectories). UBETRA bind-mounts that tree read-only.

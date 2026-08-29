@@ -1,6 +1,6 @@
 # UBETRA Android APK (Capacitor)
 
-Native shell that loads **https://ubeneeko.duckdns.org** inside a WebView, with **Firebase Cloud Messaging** for reliable background push. Call ringing / DND bypass is prepared via a dedicated `ubetra_calls` notification channel.
+Native shell that loads your public HTTPS URL (see `capacitor.config.json` → `server.url`) inside a WebView, with **Firebase Cloud Messaging** for reliable background push. Call ringing / DND bypass is prepared via a dedicated `ubetra_calls` notification channel.
 
 PWAs (Chrome/Edge) cannot reliably ignore Do Not Disturb or show full-screen incoming-call UI. This APK is the path for that.
 
@@ -15,10 +15,10 @@ On a machine with **Android Studio** (Java + Android SDK):
 
 ## One-time Firebase setup
 
-1. Create Firebase Android app with package id: `org.duckdns.ubeneeko.app`
+1. Create a Firebase Android app whose package id matches `appId` in `capacitor.config.json`
 2. Download `google-services.json` → place at `mobile/android/app/google-services.json` (after `cap add android`)
 3. Project settings → Service accounts → Generate new private key → save as e.g. `~/secrets/ubetra-fcm.json`
-4. On Docker-SVR `.env` (never commit):
+4. On the host `.env` (never commit):
 
 ```env
 UBETRA_FCM_SERVICE_ACCOUNT_FILE=/app/backend/data/fcm-service-account.json
@@ -27,7 +27,7 @@ UBETRA_FCM_PROJECT_ID=your-firebase-project-id
 
 Copy the JSON into the container data volume (same place as `ubetra.db` / `vapid.json`).
 
-## Build on Docker-SVR (recommended)
+## Build on the host (recommended)
 
 Full Android Studio GUI is not needed — the server uses Docker images:
 
@@ -35,24 +35,18 @@ Full Android Studio GUI is not needed — the server uses Docker images:
 - `mobiledevops/android-sdk-image:34.0.0` for Gradle / SDK  
 
 ```bash
-cd ~/docker/ubetra
+cd /path/to/ubetra
 bash mobile/scripts/build-apk.sh
 # → mobile/dist/ubetra.apk  (also copied as ubetra-debug.apk)
 ```
 
-The web app serves that file at **`https://ubeneeko.duckdns.org/apk/ubetra.apk`**. In the Android app, **Settings → Update app** downloads it with the system download manager.
+The web app serves that file at **`/apk/ubetra.apk`** on your public URL. In the Android app, **Settings → This device → Update app** downloads it with the system download manager.
 
 **Installing:** close UBETRA completely, then tap the download. Play Protect may warn (sideload) — tap **Install anyway**.
 
 **“App not installed”:** the previous APKs were signed with a throwaway debug key. Uninstall the old UBETRA **once**, then install 0.82+. Later updates use a persistent keystore on the server and can install over the current app.
 
-Copy to your PC:
-
-```powershell
-tsh scp james@docker-svr:docker/ubetra/mobile/dist/ubetra-debug.apk .
-```
-
-Install on a phone (allow unknown sources). Native FCM still needs a real Firebase `google-services.json` + server service account (placeholder ships for compile only).
+Copy the APK off the host with your usual file transfer. Do not commit `mobile/android/app/google-services.json` or the FCM service-account JSON.
 
 ## App behavior
 

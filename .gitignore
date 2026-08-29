@@ -30,6 +30,7 @@ Thumbs.db
 
 # Local deploy overrides & personal home-lab notes (not for public)
 docker-compose.override.yml
+instructor-media/
 deploy/adguard/
 deploy/DUCKDNS_HOME_WIFI.md
 deploy/fix_duckdns_ip.py

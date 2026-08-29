@@ -2,6 +2,8 @@
 
 Route: `/#/settings` (optional `?dynamic={id}`)
 
+The top bar **Update** button (left of ☰) reloads this PWA or Android WebView after a server deploy. You stay signed in; granted camera / mic / notification permission is not reset.
+
 One sticky **Save** appears when something changed. Subs see **Submit settings change** for Dom-controlled fields.
 
 Six groups (not a long list of accordions):
@@ -11,7 +13,7 @@ Six groups (not a long list of accordions):
 | **You** | Username, appearance, email, password, backup, log out |
 | **This dynamic** | Same **feature index** as onboarding, plus settings for modules that are on |
 | **Chat & privacy** | Retention, encryption, push |
-| **AI & assistant** | Keys, routing, Assistant Domme |
+| **AI & assistant** | Collapsed **LLM API Configuration** (keys + named connections), routing, Assistant Domme |
 | **This device** | Permissions, Android, Google Tasks (hidden until ready) |
 | **Help** | Wiki, About |
 
@@ -43,9 +45,8 @@ Feature toggles are Dom-controlled except partner-enableable sleep / cycle / man
 
 ## AI & assistant
 
-- Multiple named connections (text / adult / images) with Batch test probes  
-- Advanced AI routing per tool (red = needs assignment)  
-- Shared dynamic key vs personal Advanced key  
+**LLM API Configuration** is collapsed by default. Open it for the shared/personal key, named connections (text / adult / images), Batch test, and **Advanced AI routing**.
+
 - Dom: assistant tone and extra instructions  
 - **What to share with AI** (journals, stories, scenes, agreements, tracking) — full map: [AI context](AI-context)  
 

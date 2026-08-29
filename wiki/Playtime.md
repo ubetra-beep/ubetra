@@ -62,7 +62,7 @@ Self-hosted stroke-to-the-beat game (adapted from [rororosi/fapinstructor-client
 - Beat meter stays at the bottom when zooming, stays synced to the metronome, pulses on the hit, and fades on the left. Pitch rises as stroke speed rises
 - https links open in the phone browser. In-app help is **Settings → Help → Wiki**.
 
-Media is bind-mounted from docker-svr. See [Self-Hosting](Self-Hosting).
+Media is bind-mounted from the host path you set. See [Self-Hosting](Self-Hosting).
 
 ---
 

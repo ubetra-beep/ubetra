@@ -1,4 +1,4 @@
-const CACHE = "ubetra-v142";
+const CACHE = "ubetra-v143";
 const ASSETS = [
   "/",
   "/assets/styles.css",
@@ -11,6 +11,10 @@ const ASSETS = [
   "/icons/violet/icon-192.png",
   "/icons/violet/icon-512.png",
 ];
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "ubetra-skip-waiting") self.skipWaiting();
+});
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));

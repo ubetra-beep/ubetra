@@ -15,12 +15,15 @@ Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be 
 - Per-screen [context maps](wiki/Context-maps.md): catalog of all areas, live packs only for the current key
 - Partner Chat and Assistant **clear-all → 7-day trash**, then permanent delete; Recover in Chat ⋯ / Privacy / Assistant Chat tools
 - Feature **index** on onboarding (after create/join): grouped modules with blurbs and Typical / Tracking / Playtime / Minimal presets
+- Header **Update** (left of ☰): reload this PWA/Android WebView for a newly deployed UI. Stays signed in; camera / mic / notification grants are kept
 ### Changed
 - Settings collapsed from ~13 groups into **You**, **This dynamic**, **Chat & privacy**, **AI & assistant**, **This device**, and **Help**. Module detail cards hide when that feature is off
 - Hub ☰ and `/dynamic/{id}/features` reuse the same feature index as onboarding
+- Named AI connections live under **AI & assistant → LLM API Configuration** (collapsed)
+- Compose / `.env.example` defaults no longer include a specific public hostname or host media path
 - Assistant bubble is labeled, **draggable**, and hide/show from the bubble ×, edge tab, hub ☰, Chat ⋯, or Settings
 - Assistant chat sends indexed packs instead of a full context dump on every follow-up turn
-- Service worker cache `ubetra-v142`
+- Service worker cache `ubetra-v143`
 - Chat hub uses the Assistant bubble only (no large banner); composer sits flush above the nav
 - Punishment Recent is collapsed; rows are yellow (pending), blue (task/goal assigned), pink (remind tomorrow), pale grey (covered)
 - Assistant bubble turns teal on screens it can coach; tap opens a page-context chat instead of the full subject list
@@ -49,7 +52,7 @@ Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be 
 ### Added
 - Playtime **Instructor**: local-files Fap Instructor (HUD controls, task mode, warmup / I'm ready) using redgifs playlists
 - Keyholder-locked Instructor config, assign-as-task, live pause / red light / lock
-- Shared media tree bind-mount (`UBETRA_REDGIFS_HOST`, default `/home/james/vault/redgifs`); each subdirectory is a playlist
+- Shared media tree bind-mount (`UBETRA_REDGIFS_HOST`); each subdirectory is a playlist
 - Instructor: Domme can view the sub's camera split above the media, stream their own camera to the sub, switch cameras, and record sub / domme / both (off by default)
 ### Changed
 - Web play / server Chromium is gone. https links open in the phone browser

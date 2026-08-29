@@ -1,5 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
+/** Keep in sync with frontend/sw.js CACHE when shipping UI. */
+const CLIENT_SW_CACHE = "ubetra-v143";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -284,7 +286,10 @@ function doLogout() {
 
 function setAuthVisible(visible) {
   settingsBtn.classList.toggle("hidden", !visible);
-  if (updateBadgeBtn && !visible) updateBadgeBtn.classList.add("hidden");
+  if (updateBadgeBtn) {
+    updateBadgeBtn.classList.toggle("hidden", !visible);
+    if (!visible) updateBadgeBtn.classList.remove("needs-update");
+  }
   if (topBarEl) topBarEl.classList.toggle("hidden", !visible);
   document.body.classList.toggle("auth-screen", !visible);
   updateInstallPwaButton();
@@ -312,6 +317,8 @@ function setAuthVisible(visible) {
 function reloadAppShell() {
   if (appBrandEl) appBrandEl.setAttribute("aria-busy", "true");
   const finish = () => {
+    // Same origin + same path so PWA/Android WebView keep site permissions
+    // (camera, mic, notifications) and localStorage (sign-in, theme).
     location.reload();
   };
   const tasks = [];
@@ -323,7 +330,15 @@ function reloadAppShell() {
   if ("serviceWorker" in navigator) {
     tasks.push(
       navigator.serviceWorker.getRegistrations()
-        .then((regs) => Promise.all(regs.map((r) => r.update().catch(() => {}))))
+        .then((regs) => Promise.all(regs.map((r) => {
+          try {
+            r.active?.postMessage({ type: "ubetra-skip-waiting" });
+            r.waiting?.postMessage({ type: "ubetra-skip-waiting" });
+          } catch {
+            /* ignore */
+          }
+          return r.update().catch(() => {});
+        })))
         .catch(() => {})
     );
   }
@@ -3295,7 +3310,7 @@ function isAndroidBrowser() {
 }
 
 const APK_UPDATE_SEEN_PREFIX = "ubetra_apk_update_seen_";
-let appUpdateState = { github: null, android: null, apkNewer: false };
+let appUpdateState = { github: null, android: null, apkNewer: false, clientStale: false };
 
 function apkUpdateSeenKey(code) {
   return APK_UPDATE_SEEN_PREFIX + String(code || 0);
@@ -3309,27 +3324,29 @@ function showUpdatePopover() {
   hideUpdatePopover();
   const github = appUpdateState.github;
   const android = appUpdateState.android;
-  const kids = [el("h3", {}, "Updates")];
-  if (github?.github_newer) {
-    kids.push(
-      el("p", {}, `GitHub has ${github.github_version || "a newer version"} (this server is ${github.local_version || "unknown"}).`),
-      el("a", {
-        className: "primary-btn",
-        href: github.github_url || "https://github.com/ubetra-beep/ubetra",
-        target: "_blank",
-        rel: "noopener noreferrer",
-      }, "Open GitHub repo"),
-      el("a", {
-        className: "ghost-btn",
-        href: github.changelog_url || "https://github.com/ubetra-beep/ubetra/blob/main/CHANGELOG.md",
-        target: "_blank",
-        rel: "noopener noreferrer",
-      }, "Changelog")
-    );
+  const stale = !!appUpdateState.clientStale;
+  const kids = [
+    el("h3", {}, "Update app"),
+    el("p", { className: "muted" },
+      "Reload this device to fetch the latest UI. You stay signed in. Camera, microphone, and notification permission are unchanged — this is the same site, not a reinstall."
+    ),
+  ];
+  if (stale) {
+    kids.push(el("p", {}, "A newer version is on the server. Reload to pick it up."));
+  } else {
+    kids.push(el("p", { className: "muted" }, "This device already matches the server. You can still reload."));
   }
+  kids.push(el("button", {
+    type: "button",
+    className: "primary-btn",
+    onClick: () => {
+      hideUpdatePopover();
+      reloadAppShell();
+    },
+  }, "Reload now"));
   if (appUpdateState.apkNewer && android?.available) {
     kids.push(
-      el("p", {}, `A newer Android APK (${android.version || android.version_code}) is on this server.`),
+      el("p", {}, `A newer Android APK (${android.version || android.version_code}) is on this server. That is a package install, not a WebView reload.`),
       el("button", {
         type: "button",
         className: "primary-btn",
@@ -3339,6 +3356,14 @@ function showUpdatePopover() {
         },
       }, "Download APK")
     );
+  }
+  if (github?.changelog_url) {
+    kids.push(el("a", {
+      className: "ghost-btn",
+      href: github.changelog_url,
+      target: "_blank",
+      rel: "noopener noreferrer",
+    }, "Changelog"));
   }
   kids.push(el("button", {
     type: "button",
@@ -3419,6 +3444,8 @@ async function refreshAppUpdates() {
   }
   appUpdateState.github = info;
   appUpdateState.android = info.android || null;
+  const serverAsset = String(info.asset_version || "");
+  appUpdateState.clientStale = !!(serverAsset && serverAsset !== CLIENT_SW_CACHE);
   let apkNewer = false;
   if (isNativeApp() && info.android?.available) {
     const installed = await getInstalledApkInfo();
@@ -3428,14 +3455,15 @@ async function refreshAppUpdates() {
     if (apkNewer) showApkUpdatePopup(info.android);
   }
   appUpdateState.apkNewer = apkNewer;
-  const show = !!(info.github_newer || apkNewer);
-  if (updateBadgeBtn) {
-    updateBadgeBtn.classList.toggle("hidden", !show);
-    updateBadgeBtn.title = info.github_newer && apkNewer
-      ? "App and APK updates available"
-      : info.github_newer
-        ? "Newer version on GitHub"
-        : "Android APK update available";
+  if (updateBadgeBtn && state.token) {
+    updateBadgeBtn.classList.remove("hidden");
+    const highlight = !!(appUpdateState.clientStale || apkNewer);
+    updateBadgeBtn.classList.toggle("needs-update", highlight);
+    updateBadgeBtn.title = apkNewer
+      ? "Android APK update available"
+      : appUpdateState.clientStale
+        ? "Update available — reload this app"
+        : "Reload this app";
   }
 }
 
@@ -4563,6 +4591,7 @@ async function bootstrap() {
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !state.token) return;
+    refreshAppUpdates().catch(() => {});
     maybeShowPunishmentReminders();
   });
 
@@ -21382,7 +21411,14 @@ function renderSettings() {
         el("label", {}, ["API key", apiKeyInput]),
         el("p", { className: "muted" }, "Keys are never shown again after saving. Prefer gemini-3.5-flash (Gemini 2.0/2.5 IDs are retired). Use a dedicated key you can revoke."),
       ]);
-      const llmCard = el("div", { className: "card stack" });
+      const llmBody = el("details", { className: "stack llm-api-config" }, [
+        el("summary", {}, "Show keys and connections"),
+      ]);
+      const llmCard = el("div", { className: "card stack" }, [
+        el("h2", {}, "LLM API Configuration"),
+        el("p", { className: "muted" }, "Providers, API keys, and named connections. Collapsed so this page stays short."),
+        llmBody,
+      ]);
       const activeDyn =
         dynamics.find((d) => d.id === (initialDynamicId || settings.active_dynamic_id))
         || dynamics.find((d) => d.shared_llm_configured)
@@ -21397,10 +21433,10 @@ function renderSettings() {
         const prov = settings.shared_provider || activeDyn?.shared_llm_provider || "";
         const model = settings.shared_model || "";
         const detail = [prov, model].filter(Boolean).join(" / ");
-        llmCard.appendChild(el("p", { className: "ok-banner e2e-key-banner" },
+        llmBody.appendChild(el("p", { className: "ok-banner e2e-key-banner" },
           `Shared AI key is active${detail ? ` · ${detail}` : ""}${hint ? ` · ${hint}` : ""}`.trim()
         ));
-        llmCard.appendChild(el("p", { className: "muted" },
+        llmBody.appendChild(el("p", { className: "muted" },
           "Both partners use this key for the assistant in this dynamic. Your personal provider below is only for an override."
         ));
         const advanced = el("details", { className: "stack llm-advanced" }, [
@@ -21408,11 +21444,10 @@ function renderSettings() {
           el("p", { className: "muted" }, "Saving a personal key here can sync to the shared dynamic key. Only use this if you intentionally want to change what both of you use."),
           llmFields,
         ]);
-        llmCard.appendChild(advanced);
+        llmBody.appendChild(advanced);
       } else {
-        llmCard.appendChild(llmFields);
+        llmBody.appendChild(llmFields);
       }
-      stack.appendChild(llmCard);
       stack.appendChild(error);
       let llmBaseline = {
         provider: providerSelect.value,
@@ -21459,7 +21494,7 @@ function renderSettings() {
           return "AI settings saved";
         },
       });
-      stack.appendChild(el("div", { className: "row wrap" }, [
+      llmBody.appendChild(el("div", { className: "row wrap" }, [
         el("button", {
           className: "ghost-btn",
           type: "button",
@@ -21501,8 +21536,8 @@ function renderSettings() {
       ]));
 
       // Multi AI connections + adult/image + advanced routing
-      const aiConnCard = el("div", { className: "card stack" }, [
-        el("h2", {}, "AI connections"),
+      const aiConnCard = el("div", { className: "stack" }, [
+        el("h3", {}, "Named connections"),
         el("p", { className: "muted" },
           "Add multiple providers (text, adult, images). Use Batch test to see what each connection allows. Assign tools under Advanced AI routing."
         ),
@@ -21682,7 +21717,8 @@ function renderSettings() {
           ),
         }, "Advanced AI routing →"),
       );
-      stack.appendChild(aiConnCard);
+      llmBody.appendChild(aiConnCard);
+      stack.appendChild(llmCard);
 
       const assistantDomOnly = !!(assistantSettings.dynamic_id && assistantSettings.you_are_dominant === false);
       const assistantToneBlock = lockedSettingsWrap({
@@ -22692,6 +22728,7 @@ function renderSettings() {
         "Sex & orgasm tracking details": "This dynamic",
         "Privacy & security": "Chat & privacy",
         "Assistant domme": "AI & assistant",
+        "LLM API Configuration": "AI & assistant",
         "Google Tasks": "This device",
         "Android app": "This device",
         "Update app": "This device",

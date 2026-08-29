@@ -26,13 +26,7 @@ Data persists in the `ubetra-data` volume. Optional: `UBETRA_HOST_PORT=18000` if
 
 `mobile/dist` is bind-mounted read-only so a built APK is downloadable from Settings.
 
-Instructor media is a **separate** bind-mount of the Gluetun drop folder (read-only inside UBETRA):
-
-```
-/home/james/vault/redgifs   →  /app/backend/data/redgifs
-```
-
-Each subdirectory is a playlist. Override the host path with `UBETRA_REDGIFS_HOST` (for example `/homes/james/vault/redgifs` if that is where files land). Gluetun is **not** in this compose file.
+Instructor media is a **separate** bind-mount of your playlist folder (read-only inside UBETRA). Set `UBETRA_REDGIFS_HOST` on the host (compose default is `./instructor-media`). Each subdirectory is a playlist.
 
 ## Important env vars
 
@@ -47,7 +41,7 @@ Each subdirectory is a playlist. Override the host path with `UBETRA_REDGIFS_HOS
 | `UBETRA_GOOGLE_*` | Google OAuth (Tasks; Fitness sleep is unused if you use Health Connect) |
 | `UBETRA_GARMIN_*` | Optional Garmin Wellness sleep OAuth |
 | `UBETRA_VAPID_CONTACT` | Web Push contact (`mailto:…`) |
-| `UBETRA_REDGIFS_HOST` | Host path bind-mounted as Instructor playlists (default `/home/james/vault/redgifs`) |
+| `UBETRA_REDGIFS_HOST` | Host path bind-mounted as Instructor playlists (default `./instructor-media`) |
 | `UBETRA_REDGIFS_DIR` | Path **inside** the container (default `/app/backend/data/redgifs`) |
 
 Health Connect sleep/cycle sync is **on the phone**, not a Google cloud login.
