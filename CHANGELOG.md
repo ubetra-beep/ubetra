@@ -21,6 +21,7 @@ Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be 
 - Hub ☰ and `/dynamic/{id}/features` reuse the same feature index as onboarding
 - Named AI connections live under **AI & assistant → LLM API Configuration** (collapsed)
 - Compose / `.env.example` defaults no longer include a specific public hostname or host media path
+- GitHub Actions **CI** smoke (native Python + Docker) on push, PR, and workflow_dispatch
 - Assistant bubble is labeled, **draggable**, and hide/show from the bubble ×, edge tab, hub ☰, Chat ⋯, or Settings
 - Assistant chat sends indexed packs instead of a full context dump on every follow-up turn
 - Service worker cache `ubetra-v143`

@@ -1,6 +1,6 @@
 # UBETRA
 
-**Version:** `1.05` (beta)
+**Version:** `1.09` (beta)
 
 Self-hosted private planner for consensual adult relationship dynamics. Runs as a Progressive Web App (PWA) on your own hardware — **not** a hosted SaaS.
 
@@ -120,14 +120,31 @@ ubetra/
   backend/seed/    Catalog seed data
   frontend/        Static PWA (HTML/CSS/JS — no build step)
   deploy/caddy/    Example reverse-proxy snippet
-  VERSION          Current semver (0.x while beta)
+  VERSION          Current semver
 ```
+
+---
+
+## GitHub Actions (smoke test)
+
+A workflow at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on push, pull request, and **Actions → CI → Run workflow**.
+
+**Compatible on GitHub-hosted `ubuntu-latest`:**
+
+- Native Python 3.12 boot (SQLite, no extra services)
+- Docker Compose build + start
+- Health check, PWA shell (`/`, `/assets/app.js`)
+- Register two users, create/join a dynamic, load the kink catalog
+
+**Not something Actions can provide:** a public URL you open in a browser. Runners are ephemeral and do not expose port 8000 to the internet. Also not covered: HTTPS / PWA install, Web Push, FCM, the Android APK, camera/mic, LLM calls, Instructor media, or SMTP/MFA.
+
+To try it on a fork: enable Actions, then **Run workflow**. Green means this revision boots.
 
 ---
 
 ## Status
 
-This is a **beta (`0.x`)**. Features and APIs may change before `1.0.0`.
+This is a **beta**. The current `VERSION` is `1.09`. APIs may still change before a declared `1.0.0`.
 
 ---
 

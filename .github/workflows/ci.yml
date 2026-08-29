@@ -1,0 +1,82 @@
+# Smoke-test UBETRA on GitHub-hosted runners.
+#
+# Compatible: FastAPI + SQLite boot, public register (MFA off), create/join a
+# dynamic, serve the PWA shell, Docker image build.
+#
+# Not covered here: a live public UI, HTTPS/PWA install, Web Push, FCM,
+# Android APK, camera/mic, LLM calls, Instructor media, SMTP/MFA.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UBETRA_SECRET_KEY: ci-test-key-not-for-production
+  UBETRA_MFA_REQUIRED: "false"
+  UBETRA_ALLOW_PUBLIC_REGISTER: "true"
+  UBETRA_PUBLIC_APP_URL: http://127.0.0.1:8000
+  UBETRA_HOST_PORT: "8000"
+
+jobs:
+  smoke-native:
+    name: Native smoke (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Start app
+        run: |
+          python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 &
+          echo $! > /tmp/ubetra.pid
+
+      - name: Smoke
+        run: python scripts/ci_smoke.py
+
+      - name: Stop app
+        if: always()
+        run: kill "$(cat /tmp/ubetra.pid)" 2>/dev/null || true
+
+  smoke-docker:
+    name: Docker smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: |
+          cp .env.example .env
+          printf '\nUBETRA_SECRET_KEY=%s\nUBETRA_MFA_REQUIRED=false\nUBETRA_ALLOW_PUBLIC_REGISTER=true\nUBETRA_PUBLIC_APP_URL=http://127.0.0.1:8000\nUBETRA_HOST_PORT=8000\n' \
+            "$UBETRA_SECRET_KEY" >> .env
+          mkdir -p instructor-media
+
+      - name: Build and start
+        run: docker compose up -d --build
+
+      - name: Smoke
+        run: python3 scripts/ci_smoke.py
+
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop
+        if: always()
+        run: docker compose down -v
