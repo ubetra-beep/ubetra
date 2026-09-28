@@ -8,15 +8,19 @@ import android.os.Build
 import android.os.Bundle
 import androidx.core.app.NotificationManagerCompat
 import com.getcapacitor.BridgeActivity
+import org.duckdns.ubeneeko.edgeguard.UbetraEdgeGuardPlugin
 
 /**
  * Creates high-importance channels used by FCM:
  * - ubetra_chat: normal chat / activity alerts
  * - ubetra_calls: future incoming calls — can bypass DND once the user grants
  *   Notification Policy Access (Do Not Disturb access) for this app.
+ *
+ * Also registers Edge Guard (local DNS VPN website blocker).
  */
 class MainActivity : BridgeActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
+    registerPlugin(UbetraEdgeGuardPlugin::class.java)
     super.onCreate(savedInstanceState)
     createChannels()
   }

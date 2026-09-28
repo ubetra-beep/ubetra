@@ -49,6 +49,7 @@ import android.webkit.CookieManager;
 import android.webkit.URLUtil;
 import android.widget.Toast;
 import com.getcapacitor.BridgeActivity;
+import org.duckdns.ubeneeko.edgeguard.UbetraEdgeGuardPlugin;
 import org.duckdns.ubeneeko.healthconnect.UbetraHealthConnectPlugin;
 
 public class MainActivity extends BridgeActivity {
@@ -56,6 +57,7 @@ public class MainActivity extends BridgeActivity {
   public void onCreate(Bundle savedInstanceState) {
     registerPlugin(UbetraHealthConnectPlugin.class);
     registerPlugin(UbetraMediaPlugin.class);
+    registerPlugin(UbetraEdgeGuardPlugin.class);
     super.onCreate(savedInstanceState);
     createChannels();
     attachDownloadListener();
@@ -169,6 +171,9 @@ if [[ -f "$MANIFEST" ]]; then
     'android.permission.RECORD_AUDIO' \
     'android.permission.MODIFY_AUDIO_SETTINGS' \
     'android.permission.FLASHLIGHT' \
+    'android.permission.FOREGROUND_SERVICE' \
+    'android.permission.FOREGROUND_SERVICE_SPECIAL_USE' \
+    'android.permission.RECEIVE_BOOT_COMPLETED' \
     'android.permission.health.READ_SLEEP' \
     'android.permission.health.READ_MENSTRUATION' \
     'android.permission.health.READ_HEALTH_DATA_HISTORY'

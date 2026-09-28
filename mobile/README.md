@@ -54,6 +54,7 @@ Copy the APK off the host with your usual file transfer. Do not commit `mobile/a
 - `frontend/app.js` detects Capacitor and registers FCM via `POST /api/push/native` instead of Web Push.
 - Server sends native tokens with FCM HTTP v1 **HIGH** priority on channel `ubetra_chat` (or `ubetra_calls` when `kind=call`).
 - **Calls / DND:** after install, open Android Settings → Apps → UBETRA → **Do Not Disturb access** (Notification policy) → Allow. The `ubetra_calls` channel is created with `setBypassDnd(true)`.
+- **Edge Guard:** Settings → This device → Edge Guard. Add domains, enable the toggle, and Allow the Android VPN prompt. This is a **local DNS sinkhole** (not a remote VPN). It blocks sites for all apps on the phone, including Edge’s long-press Preview, by also NXDOMAIN-ing common Secure DNS / DoH hosts while filtering is on.
 
 ## Change server URL
 
@@ -66,6 +67,7 @@ Edit `capacitor.config.json` → `server.url`, then `npx cap sync android`.
 | Install | Install app from browser | Sideload / Play internal |
 | Background chat push | Best-effort (OEM battery) | Native FCM, much better |
 | Bypass DND for calls | No | Yes (with policy access) |
+| Edge Guard website DNS block | No | Yes (local VPN) |
 | Full-screen incoming call | No | Planned on `ubetra_calls` |
 
 Keep the PWA for desktop; use the APK on Android phones once Firebase is wired.

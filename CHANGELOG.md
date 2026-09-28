@@ -3,6 +3,17 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.10] — 2026-09-28
+
+### Added
+- **Edge Guard** in the Android app: local DNS VPN that blocks chosen websites system-wide, including Microsoft Edge long-press Preview (DoH endpoints are blocked when filtering is on)
+- Settings → **This device → Edge Guard** blocklist UI (native APK only)
+- Capacitor plugin `@ubetra/edge-guard` with boot/restore when left enabled
+
+### Changed
+- Android APK version **0.87.0** / versionCode **87**
+- Service worker cache `ubetra-v144`
+
 ## [1.09] — 2026-08-29
 
 ### Added

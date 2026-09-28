@@ -1,0 +1,16 @@
+{
+  "name": "@ubetra/edge-guard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local DNS VPN that blocks websites system-wide, including Edge Android Preview",
+  "main": "src/index.js",
+  "files": ["android", "src"],
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=7.0.0"
+  }
+}
