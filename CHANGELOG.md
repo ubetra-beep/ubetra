@@ -3,6 +3,23 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.11] — 2026-10-05
+
+### Added
+- **Task completed** push to the keyholder whenever the sub checks off a task on time (late completions keep the existing "completed late" push). Toggle: Settings → Tasks & notifications
+- **Multiple due reminders**: pick any of 5m, 10m, 15m, 30m, 1h, 2h, 1d before due as the dynamic default; each task can override the list (or turn reminders off) when created or edited. Each reminder fires once per due occurrence
+- **Overdue** push 2 minutes after the due time, once per occurrence: "Task overdue" to the sub and "{sub} is late" to the keyholder
+- Keyholder **overdue sheet** (from the push or **Extend / cancel** on a past-due task): extend by 30m / 1h / 1d or to a picked time, cancel the task (recurring tasks skip just this occurrence), or leave it open. The sub gets a push and the action is logged to the inbox
+- `POST /api/tasks/{list}/items/{id}/overdue-action` (keyholder only)
+
+### Fixed
+- Signing in after a password reset no longer returns to the reset form; reset and forgot-password routes are never remembered, and signed-in users are sent past auth pages
+- Password reset codes are also delivered by device push, and SMTP handles port 465 / missing passwords more safely (September server hotfix)
+
+### Changed
+- `task_due_lead_minutes` (user and dynamic) and per-task `due_notify_lead_minutes` are replaced by `task_reminder_offsets` / `reminder_offsets` lists; existing values migrate to one-item lists
+- Service worker cache `ubetra-v146`
+
 ## [1.10] — 2026-09-28
 
 ### Added
