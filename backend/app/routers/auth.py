@@ -36,6 +36,7 @@ from ..services.mfa import (
     smtp_configured,
     verify_challenge,
 )
+from ..services.tasks_service import default_reminder_offsets, serialize_reminder_offsets
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -108,7 +109,7 @@ def _user_out(user: User) -> UserOut:
         biological_sex=getattr(user, "biological_sex", None) or "",
         ai_enabled=bool(getattr(user, "ai_enabled", True)),
         timezone=(getattr(user, "timezone", None) or ""),
-        task_due_lead_minutes=int(getattr(user, "task_due_lead_minutes", None) or 15),
+        task_reminder_offsets=default_reminder_offsets(user),
     )
 
 
@@ -316,8 +317,8 @@ def update_notify_prefs(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UserOut:
-    if payload.task_due_lead_minutes is not None:
-        user.task_due_lead_minutes = payload.task_due_lead_minutes
+    if payload.task_reminder_offsets is not None:
+        user.task_reminder_offsets = serialize_reminder_offsets(payload.task_reminder_offsets)
     db.commit()
     db.refresh(user)
     return _user_out(user)

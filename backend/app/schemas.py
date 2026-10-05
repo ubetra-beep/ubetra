@@ -40,6 +40,7 @@ UtcDateTimeOptional = Annotated[
     datetime | None,
     PlainSerializer(utc_iso, return_type=str | None, when_used="json"),
 ]
+ReminderOffset = Annotated[int, Field(ge=0, le=7 * 24 * 60)]
 
 
 class TokenResponse(BaseModel):
@@ -133,7 +134,7 @@ class UserOut(BaseModel):
     biological_sex: str = ""
     ai_enabled: bool = True
     timezone: str = ""
-    task_due_lead_minutes: int = 15
+    task_reminder_offsets: list[int] = Field(default_factory=lambda: [15])
 
     class Config:
         from_attributes = True
@@ -144,7 +145,7 @@ class UserTimezoneUpdate(BaseModel):
 
 
 class UserNotifyPrefsUpdate(BaseModel):
-    task_due_lead_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
+    task_reminder_offsets: list[ReminderOffset] | None = Field(default=None, max_length=8)
 
 
 class UserSexUpdate(BaseModel):
@@ -340,7 +341,7 @@ class TaskCreate(BaseModel):
     # Relative due: amount + unit → due_at if due_at not set
     due_in_amount: int | None = Field(default=None, ge=1, le=10000)
     due_in_unit: Literal["minutes", "hours", "days", "weeks"] | None = None
-    due_notify_lead_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
+    reminder_offsets: list[ReminderOffset] | None = Field(default=None, max_length=8)
     assigned_to_membership_id: str | None = None
     is_private: bool = False
     web_url: str = ""
@@ -355,7 +356,7 @@ class TaskItemCreate(BaseModel):
     due_at: datetime | None = None
     due_in_amount: int | None = Field(default=None, ge=1, le=10000)
     due_in_unit: Literal["minutes", "hours", "days", "weeks"] | None = None
-    due_notify_lead_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
+    reminder_offsets: list[ReminderOffset] | None = Field(default=None, max_length=8)
     assigned_to_membership_id: str | None = None
     is_private: bool = False
     task_list_id: str | None = None
@@ -429,7 +430,8 @@ class TaskOut(BaseModel):
     late_ack_action: str = ""
     remind_at: UtcDateTimeOptional = None
     remind_every_minutes: int | None = None
-    due_notify_lead_minutes: int | None = None
+    reminder_offsets: list[int] | None = None
+    overdue_notified_at: UtcDateTimeOptional = None
 
     class Config:
         from_attributes = True
@@ -447,11 +449,17 @@ class TaskItemUpdate(BaseModel):
     due_at: datetime | None = None
     due_in_amount: int | None = Field(default=None, ge=1, le=10000)
     due_in_unit: Literal["minutes", "hours", "days", "weeks"] | None = None
-    due_notify_lead_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
+    reminder_offsets: list[ReminderOffset] | None = Field(default=None, max_length=8)
 
 
 class TaskLateAckIn(BaseModel):
     action: Literal["punish", "goals", "ack"]
+
+
+class TaskOverdueActionIn(BaseModel):
+    action: Literal["extend", "cancel"]
+    minutes: int | None = Field(default=None, ge=1, le=60 * 24 * 60)
+    due_at: datetime | None = None
 
 
 class TaskRemindIn(BaseModel):
@@ -682,13 +690,15 @@ class DynamicPolicyOut(BaseModel):
     enabled_features: list[str]
     locked_setting_keys: list[str]
     task_push_enabled: bool = True
-    task_due_lead_minutes: int = 15
+    task_reminder_offsets: list[int] = Field(default_factory=lambda: [15])
+    task_complete_notify: bool = True
     ml_censor_mode: str = "off"
 
 
 class DynamicPolicyUpdate(BaseModel):
     task_push_enabled: bool | None = None
-    task_due_lead_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
+    task_reminder_offsets: list[ReminderOffset] | None = Field(default=None, max_length=8)
+    task_complete_notify: bool | None = None
     ml_censor_mode: str | None = None
 
 

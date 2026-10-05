@@ -178,7 +178,8 @@ class User(Base):
     push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # IANA zone from the last signed-in device, e.g. America/Los_Angeles
     timezone: Mapped[str] = mapped_column(String(64), default="")
-    task_due_lead_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    # JSON list of minutes before due, e.g. [30, 10]
+    task_reminder_offsets: Mapped[str] = mapped_column(Text, default="[15]")
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     google_refresh_token: Mapped[str] = mapped_column(Text, default="")
     google_tasks_list_id: Mapped[str] = mapped_column(String(128), default="@default")
@@ -285,7 +286,9 @@ class Dynamic(Base):
     chat_system_events: Mapped[bool] = mapped_column(Boolean, default=True)
     chat_push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     task_push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    task_due_lead_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    # JSON list of minutes before due, e.g. [30, 10]
+    task_reminder_offsets: Mapped[str] = mapped_column(Text, default="[15]")
+    task_complete_notify: Mapped[bool] = mapped_column(Boolean, default=True)
     # off | auto | client | cuda — smart censor on the sub's display only
     ml_censor_mode: Mapped[str] = mapped_column(String(16), default="off")
     # When True, only the keyholder can clear chat history
@@ -584,7 +587,11 @@ class Task(Base):
     remind_every_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     due_soon_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     available_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    due_notify_lead_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # JSON list overriding the dynamic default; NULL = use the default
+    reminder_offsets: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON {"due": iso, "sent": [offsets]} for the current due occurrence
+    due_reminders_sent: Mapped[str] = mapped_column(Text, default="")
+    overdue_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     task_list: Mapped[TaskList] = relationship(back_populates="tasks")
     assigned_to: Mapped["Membership | None"] = relationship(

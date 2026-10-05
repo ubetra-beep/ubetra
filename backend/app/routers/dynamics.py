@@ -374,7 +374,8 @@ def get_dynamic_policy(
         enabled_features=snap["enabled_features"],
         locked_setting_keys=locked,
         task_push_enabled=snap.get("task_push_enabled", True),
-        task_due_lead_minutes=snap.get("task_due_lead_minutes", 15),
+        task_reminder_offsets=snap.get("task_reminder_offsets", [15]),
+        task_complete_notify=snap.get("task_complete_notify", True),
         ml_censor_mode=snap.get("ml_censor_mode", "off"),
     )
 
@@ -397,8 +398,10 @@ def update_dynamic_policy(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
     if payload.task_push_enabled is not None:
         apply_setting(db, dynamic, setting_key="tasks.push_enabled", value=payload.task_push_enabled)
-    if payload.task_due_lead_minutes is not None:
-        apply_setting(db, dynamic, setting_key="tasks.due_lead_minutes", value=payload.task_due_lead_minutes)
+    if payload.task_reminder_offsets is not None:
+        apply_setting(db, dynamic, setting_key="tasks.reminder_offsets", value=payload.task_reminder_offsets)
+    if payload.task_complete_notify is not None:
+        apply_setting(db, dynamic, setting_key="tasks.complete_notify", value=payload.task_complete_notify)
     if payload.ml_censor_mode is not None:
         apply_setting(db, dynamic, setting_key="video.ml_censor_mode", value=payload.ml_censor_mode)
     db.commit()

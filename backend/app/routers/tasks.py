@@ -47,6 +47,7 @@ from ..schemas import (
     TaskMakeupAssistOut,
     TaskMakeupRequestIn,
     TaskMakeupReviewIn,
+    TaskOverdueActionIn,
     TaskRemindIn,
 )
 from ..services.tags import tags_to_list, tags_to_string
@@ -57,19 +58,25 @@ from ..services.tasks_service import (
     can_complete_task,
     clear_makeup,
     parse_auto_punish_rules,
+    reset_due_reminders,
     resolve_due_at,
     schedule_next_occurrence,
     serialize_auto_punish_rules,
+    serialize_reminder_offsets,
     task_list_out,
     task_needs_makeup,
     task_visible,
 )
 from ..timeutil import as_naive_utc
 from ..services.chat_events import post_system_event, task_snippet
+from ..services.push import notify_task_push
 from ..services.task_notify import (
+    assignee_user_ids,
+    duration_label,
     notify_late_complete,
     notify_task_assigned,
     notify_task_available,
+    notify_task_completed,
     set_task_remind,
 )
 from ..services.google_tasks import (
@@ -405,7 +412,11 @@ def create_task_list(
             is_private=is_private,
             web_url=(task_payload.web_url or "").strip()[:500],
             web_minutes=task_payload.web_minutes,
-            due_notify_lead_minutes=task_payload.due_notify_lead_minutes,
+            reminder_offsets=(
+                serialize_reminder_offsets(task_payload.reminder_offsets)
+                if task_payload.reminder_offsets is not None
+                else None
+            ),
         )
         db.add(task)
         created_tasks.append(task)
@@ -497,7 +508,11 @@ def add_task_item(
             is_private=is_private,
             web_url=(payload.web_url or "").strip()[:500],
             web_minutes=payload.web_minutes,
-            due_notify_lead_minutes=payload.due_notify_lead_minutes,
+            reminder_offsets=(
+                serialize_reminder_offsets(payload.reminder_offsets)
+                if payload.reminder_offsets is not None
+                else None
+            ),
         )
     db.add(task)
     post_system_event(db, dynamic_id, membership, event_text)
@@ -580,7 +595,6 @@ def complete_task(
             schedule_next_occurrence(task, from_time=task.next_due_at or task.due_at or completed_at)
             clear_makeup(task)
             task.completed_late = False
-            task.due_soon_notified_at = None
             _maybe_push_task(db, task_list.dynamic_id, user, task)
         else:
             task.completed_at = completed_at
@@ -596,6 +610,8 @@ def complete_task(
         )
         if late and membership.role == PartnerRole.submissive:
             notify_late_complete(db, dynamic_id=task_list.dynamic_id, task=task)
+        elif membership.role == PartnerRole.submissive:
+            notify_task_completed(db, dynamic_id=task_list.dynamic_id, task=task, actor=membership)
         db.flush()
         for nxt in tasks:
             if nxt.id == task.id:
@@ -729,7 +745,7 @@ def update_task_item(
             task.next_due_at = task.due_at or datetime.utcnow()
     if payload.due_at is not None:
         task.due_at = resolve_due_at(due_at=payload.due_at, due_in_amount=None, due_in_unit=None)
-        task.due_soon_notified_at = None
+        reset_due_reminders(task)
         if task.recurrence != TaskRecurrence.none:
             task.next_due_at = task.due_at
     elif payload.due_in_amount and payload.due_in_unit:
@@ -738,11 +754,16 @@ def update_task_item(
             due_in_amount=payload.due_in_amount,
             due_in_unit=payload.due_in_unit,
         )
-        task.due_soon_notified_at = None
+        reset_due_reminders(task)
         if task.recurrence != TaskRecurrence.none:
             task.next_due_at = task.due_at
-    if payload.due_notify_lead_minutes is not None:
-        task.due_notify_lead_minutes = payload.due_notify_lead_minutes
+    if "reminder_offsets" in payload.model_fields_set:
+        task.reminder_offsets = (
+            serialize_reminder_offsets(payload.reminder_offsets)
+            if payload.reminder_offsets is not None
+            else None
+        )
+        task.due_reminders_sent = ""
     post_system_event(
         db,
         task_list.dynamic_id,
@@ -782,6 +803,95 @@ def ack_late_task(
         action="task_late_acked",
         payload={"path": f"/dynamic/{task_list.dynamic_id}/tasks?task={task.id}", "task_id": task.id},
     )
+    db.commit()
+    task_list = _task_list_query(db, task_list_id)
+    return task_list_out(task_list, membership)
+
+
+@router.post("/tasks/{task_list_id}/items/{task_id}/overdue-action", response_model=TaskListOut)
+def overdue_task_action(
+    task_list_id: str,
+    task_id: str,
+    payload: TaskOverdueActionIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskListOut:
+    task_list = _task_list_query(db, task_list_id)
+    if task_list is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task list not found")
+    membership = get_membership(task_list.dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the keyholder can extend or cancel an overdue task",
+        )
+    task = _get_task_or_404(task_list, task_id)
+    if task.completed_at:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Task already completed")
+    dynamic_id = task_list.dynamic_id
+    snippet = task_snippet(task.content)
+    path = f"/dynamic/{dynamic_id}/tasks?task={task.id}"
+    notify_ids = assignee_user_ids(db, task, dynamic_id) - {user.id}
+    now = datetime.utcnow()
+
+    if payload.action == "extend":
+        if payload.due_at is not None:
+            new_due = as_naive_utc(payload.due_at)
+        elif payload.minutes:
+            new_due = max(_effective_due(task) or now, now) + timedelta(minutes=payload.minutes)
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose how long to extend")
+        if new_due is None or new_due <= now:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New due time must be in the future")
+        if task.recurrence != TaskRecurrence.none:
+            task.next_due_at = new_due
+        else:
+            task.due_at = new_due
+        reset_due_reminders(task)
+        clear_makeup(task)
+        remaining = duration_label(int((new_due - now).total_seconds() + 59) // 60)
+        push_title = "Task extended"
+        push_body = f"Now due in {remaining}: {snippet}"
+        event_text = f"extended overdue task by {remaining}: {snippet}"
+        action = "task_overdue_extended"
+    else:
+        push_title = "Task cancelled"
+        action = "task_overdue_cancelled"
+        if task.recurrence != TaskRecurrence.none:
+            base = _effective_due(task) or now
+            schedule_next_occurrence(task, from_time=base)
+            for _ in range(400):
+                if task.next_due_at is None or task.next_due_at > now:
+                    break
+                schedule_next_occurrence(task, from_time=task.next_due_at)
+            clear_makeup(task)
+            push_body = f"This occurrence was cancelled: {snippet}"
+            event_text = f"cancelled overdue occurrence of task: {snippet}"
+        else:
+            db.delete(task)
+            push_body = f"Cancelled: {snippet}"
+            event_text = f"cancelled overdue task: {snippet}"
+            path = f"/dynamic/{dynamic_id}/tasks"
+
+    post_system_event(
+        db,
+        dynamic_id,
+        membership,
+        event_text,
+        action=action,
+        payload={"path": path, "task_id": task_id},
+    )
+    db.flush()
+    if notify_ids:
+        notify_task_push(
+            db,
+            dynamic_id=dynamic_id,
+            user_ids=notify_ids,
+            title=push_title,
+            body=push_body,
+            url=f"/#{path}",
+            tag=f"ubetra-overdue-{task_id}",
+        )
     db.commit()
     task_list = _task_list_query(db, task_list_id)
     return task_list_out(task_list, membership)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from datetime import datetime, timedelta
@@ -10,15 +11,23 @@ from ..database import SessionLocal
 from ..models import Dynamic, Membership, PartnerRole, Task, TaskApprovalStatus, TaskList
 from ..timeutil import as_naive_utc
 from .push import notify_task_push
-from .tasks_service import relative_delta, task_visible
+from .tasks_service import (
+    default_reminder_offsets,
+    parse_reminder_offsets,
+    relative_delta,
+    reset_due_reminders,
+    task_visible,
+)
 
 logger = logging.getLogger(__name__)
+
+OVERDUE_GRACE = timedelta(minutes=2)
 
 _stop = threading.Event()
 _thread: threading.Thread | None = None
 
 
-def _assignee_user_ids(db: Session, task: Task, dynamic_id: str) -> set[str]:
+def assignee_user_ids(db: Session, task: Task, dynamic_id: str) -> set[str]:
     members = db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
     assigned = getattr(task, "assigned_to_membership_id", None)
     if assigned:
@@ -26,6 +35,47 @@ def _assignee_user_ids(db: Session, task: Task, dynamic_id: str) -> set[str]:
     if getattr(task, "is_private", False):
         return {m.user_id for m in members if m.id == task.created_by_membership_id}
     return {m.user_id for m in members if m.role == PartnerRole.submissive}
+
+
+def _snippet(task: Task) -> str:
+    return (task.content or "Task").strip().replace("\n", " ")[:80]
+
+
+def _assignee_name(members: list[Membership], task: Task) -> str:
+    assigned = getattr(task, "assigned_to_membership_id", None)
+    member = next((m for m in members if m.id == assigned), None) if assigned else None
+    if member is None:
+        member = next((m for m in members if m.role == PartnerRole.submissive), None)
+    return (getattr(member, "display_name", None) or "Your sub").strip() or "Your sub"
+
+
+def duration_label(minutes: int) -> str:
+    minutes = max(0, int(minutes))
+    if minutes >= 1440 and minutes % 1440 == 0:
+        n = minutes // 1440
+        return f"{n} day" if n == 1 else f"{n} days"
+    if minutes >= 60 and minutes % 60 == 0:
+        n = minutes // 60
+        return f"{n} hour" if n == 1 else f"{n} hours"
+    return f"{minutes} minute" if minutes == 1 else f"{minutes} minutes"
+
+
+def task_reminder_offsets(task: Task, dynamic: Dynamic) -> list[int]:
+    own = parse_reminder_offsets(getattr(task, "reminder_offsets", None))
+    if own is not None:
+        return own
+    return default_reminder_offsets(dynamic)
+
+
+def _sent_offsets(task: Task, due: datetime) -> list[int] | None:
+    raw = getattr(task, "due_reminders_sent", None) or ""
+    try:
+        data = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        data = {}
+    if not isinstance(data, dict) or data.get("due") != due.isoformat():
+        return None
+    return [int(x) for x in (data.get("sent") or []) if isinstance(x, (int, float))]
 
 
 def _task_url(dynamic_id: str, task: Task) -> str:
@@ -39,7 +89,7 @@ def notify_task_assigned(db: Session, *, dynamic_id: str, task: Task) -> None:
         return
     if getattr(task, "available_notified_at", None):
         return
-    user_ids = _assignee_user_ids(db, task, dynamic_id)
+    user_ids = assignee_user_ids(db, task, dynamic_id)
     if not user_ids:
         return
     snippet = (task.content or "New task").strip().replace("\n", " ")[:80]
@@ -60,7 +110,7 @@ def notify_task_available(db: Session, *, dynamic_id: str, task: Task) -> None:
 
 
 def notify_late_complete(db: Session, *, dynamic_id: str, task: Task) -> None:
-    snippet = (task.content or "Task").strip().replace("\n", " ")[:80]
+    snippet = _snippet(task)
     notify_task_push(
         db,
         dynamic_id=dynamic_id,
@@ -71,6 +121,108 @@ def notify_late_complete(db: Session, *, dynamic_id: str, task: Task) -> None:
         url=_task_url(dynamic_id, task),
         tag=f"ubetra-task-late-{task.id}",
     )
+
+
+def notify_task_completed(db: Session, *, dynamic_id: str, task: Task, actor: Membership) -> None:
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None or not bool(getattr(dynamic, "task_complete_notify", True)):
+        return
+    if getattr(task, "is_private", False):
+        return
+    members = db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
+    keyholder_ids = {
+        m.user_id for m in members if m.role == PartnerRole.dominant and m.id != actor.id
+    }
+    if not keyholder_ids:
+        return
+    name = (getattr(actor, "display_name", None) or "Your sub").strip() or "Your sub"
+    notify_task_push(
+        db,
+        dynamic_id=dynamic_id,
+        user_ids=keyholder_ids,
+        title="Task completed",
+        body=f"{name}: {_snippet(task)}",
+        url=_task_url(dynamic_id, task),
+        tag=f"ubetra-done-{task.id}",
+    )
+
+
+def notify_task_overdue(
+    db: Session,
+    *,
+    dynamic_id: str,
+    task: Task,
+    members: list[Membership],
+    user_ids: set[str],
+) -> None:
+    snippet = _snippet(task)
+    if user_ids:
+        notify_task_push(
+            db,
+            dynamic_id=dynamic_id,
+            user_ids=user_ids,
+            title="Task overdue",
+            body=snippet,
+            url=_task_url(dynamic_id, task),
+            tag=f"ubetra-overdue-{task.id}",
+        )
+    if getattr(task, "is_private", False):
+        return
+    keyholder_ids = {
+        m.user_id for m in members if m.role == PartnerRole.dominant
+    } - user_ids
+    if not keyholder_ids:
+        return
+    notify_task_push(
+        db,
+        dynamic_id=dynamic_id,
+        user_ids=keyholder_ids,
+        title=f"{_assignee_name(members, task)} is late",
+        body=snippet,
+        url=f"/#/dynamic/{dynamic_id}/tasks?task={task.id}&overdue=1",
+        tag=f"ubetra-overdue-kh-{task.id}",
+    )
+
+
+def _process_due_reminders(
+    db: Session,
+    *,
+    dynamic_id: str,
+    task: Task,
+    due: datetime,
+    offsets: list[int],
+    user_ids: set[str],
+    now: datetime,
+) -> bool:
+    sent = _sent_offsets(task, due)
+    if sent is None:
+        legacy = None if getattr(task, "due_reminders_sent", None) else getattr(task, "due_soon_notified_at", None)
+        sent = [o for o in offsets if legacy is not None and due - timedelta(minutes=o) <= legacy]
+    crossed = [
+        o for o in offsets
+        if o not in sent and due - timedelta(minutes=o) <= now <= due + OVERDUE_GRACE
+    ]
+    if not crossed:
+        return False
+    if due <= now:
+        title = "Task due now"
+    else:
+        remaining = int((due - now).total_seconds() + 59) // 60
+        title = f"Task due in {duration_label(remaining)}"
+    notify_task_push(
+        db,
+        dynamic_id=dynamic_id,
+        user_ids=user_ids,
+        title=title,
+        body=_snippet(task),
+        url=_task_url(dynamic_id, task),
+        tag=f"ubetra-task-due-{task.id}",
+    )
+    task.due_reminders_sent = json.dumps(
+        {"due": due.isoformat(), "sent": sorted(set(sent) | set(crossed), reverse=True)}
+    )
+    task.due_soon_notified_at = now
+    return True
 
 
 def process_task_notifications(db: Session) -> None:
@@ -87,38 +239,41 @@ def process_task_notifications(db: Session) -> None:
             continue
         ordered = sorted(task_list.tasks, key=lambda t: t.position)
         members = list(dynamic.memberships or [])
-        default_lead = int(getattr(dynamic, "task_due_lead_minutes", None) or 15)
+        viewer = next((m for m in members if m.role == PartnerRole.submissive), None)
         for task in ordered:
             if task.completed_at or getattr(task, "paused", False):
                 continue
             if task.approval_status != TaskApprovalStatus.approved:
                 continue
-            viewer = next((m for m in members if m.role == PartnerRole.submissive), None)
-            if viewer and not task_visible(task, ordered, viewer):
+            if viewer and not getattr(task, "is_private", False) and not task_visible(task, ordered, viewer):
                 continue
             due = task.next_due_at or task.due_at
-            lead = task.due_notify_lead_minutes
-            if lead is None:
-                lead = default_lead
-            lead = max(0, int(lead))
-            user_ids = _assignee_user_ids(db, task, task_list.dynamic_id)
-            snippet = (task.content or "Task").strip().replace("\n", " ")[:80]
+            user_ids = assignee_user_ids(db, task, task_list.dynamic_id)
+            snippet = _snippet(task)
             url = _task_url(task_list.dynamic_id, task)
 
-            if due is not None and not getattr(task, "due_soon_notified_at", None):
-                window_start = due - timedelta(minutes=lead or 0)
-                if window_start <= now <= due + timedelta(minutes=2):
-                    title = "Task due now" if due <= now else "Task due soon"
-                    notify_task_push(
+            if due is not None:
+                offsets = task_reminder_offsets(task, dynamic)
+                if offsets and _process_due_reminders(
+                    db,
+                    dynamic_id=task_list.dynamic_id,
+                    task=task,
+                    due=due,
+                    offsets=offsets,
+                    user_ids=user_ids,
+                    now=now,
+                ):
+                    dirty = True
+                notified = getattr(task, "overdue_notified_at", None)
+                if now >= due + OVERDUE_GRACE and (notified is None or notified < due):
+                    notify_task_overdue(
                         db,
                         dynamic_id=task_list.dynamic_id,
+                        task=task,
+                        members=members,
                         user_ids=user_ids,
-                        title=title,
-                        body=snippet,
-                        url=url,
-                        tag=f"ubetra-task-due-{task.id}",
                     )
-                    task.due_soon_notified_at = now
+                    task.overdue_notified_at = now
                     dirty = True
 
             remind_at = getattr(task, "remind_at", None)
@@ -189,4 +344,4 @@ def set_task_remind(
 
 def reset_due_notice(task: Task, *, due_at: datetime | None) -> None:
     task.due_at = as_naive_utc(due_at) if due_at is not None else due_at
-    task.due_soon_notified_at = None
+    reset_due_reminders(task)

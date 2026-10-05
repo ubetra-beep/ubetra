@@ -909,6 +909,83 @@ function buildDueByControls({ dueValue = "" } = {}) {
   };
 }
 
+const REMINDER_OFFSET_CHOICES = [
+  [5, "5m"],
+  [10, "10m"],
+  [15, "15m"],
+  [30, "30m"],
+  [60, "1h"],
+  [120, "2h"],
+  [1440, "1d"],
+];
+
+function formatReminderOffset(minutes) {
+  const n = Number(minutes) || 0;
+  const preset = REMINDER_OFFSET_CHOICES.find(([v]) => v === n);
+  if (preset) return preset[1];
+  if (n >= 1440 && n % 1440 === 0) return `${n / 1440}d`;
+  if (n >= 60 && n % 60 === 0) return `${n / 60}h`;
+  return `${n}m`;
+}
+
+function formatReminderOffsets(offsets) {
+  const list = Array.isArray(offsets) ? offsets : [];
+  if (!list.length) return "No reminders";
+  return `${list.map(formatReminderOffset).join(", ")} before`;
+}
+
+function buildReminderOffsetChips(selected = []) {
+  const chosen = new Set((selected || []).map(Number));
+  const row = el("div", { className: "tag-filter-row tag-picker" });
+  const values = [...new Set([...REMINDER_OFFSET_CHOICES.map(([v]) => v), ...chosen])].sort((a, b) => a - b);
+  values.forEach((value) => {
+    const btn = el("button", {
+      type: "button",
+      className: `tag-chip ${chosen.has(value) ? "active" : ""}`,
+    }, formatReminderOffset(value));
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (chosen.has(value)) chosen.delete(value);
+      else chosen.add(value);
+      btn.classList.toggle("active", chosen.has(value));
+      row.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    row.appendChild(btn);
+  });
+  return {
+    row,
+    getOffsets: () => [...chosen].sort((a, b) => b - a),
+  };
+}
+
+function buildTaskReminderControls({ offsets = null, defaults = null } = {}) {
+  const useDefault = el("input", { type: "checkbox" });
+  useDefault.checked = !Array.isArray(offsets);
+  const chips = buildReminderOffsetChips(Array.isArray(offsets) ? offsets : (defaults || []));
+  const hint = el("p", { className: "muted" });
+  const sync = () => {
+    chips.row.classList.toggle("hidden", useDefault.checked);
+    if (useDefault.checked) {
+      hint.textContent = Array.isArray(defaults) ? `Default: ${formatReminderOffsets(defaults)}` : "Uses the default from Settings.";
+    } else {
+      const picked = chips.getOffsets();
+      hint.textContent = picked.length ? formatReminderOffsets(picked) : "No due reminders for this task.";
+    }
+  };
+  useDefault.addEventListener("change", sync);
+  chips.row.addEventListener("change", sync);
+  sync();
+  return {
+    node: el("div", { className: "stack" }, [
+      el("p", { className: "muted" }, "Due reminders"),
+      el("label", { className: "checkbox-label" }, [useDefault, " Use default reminders"]),
+      chips.row,
+      hint,
+    ]),
+    getOffsets: () => (useDefault.checked ? null : chips.getOffsets()),
+  };
+}
+
 function buildDueInControls() {
   const amount = el("input", {
     type: "number",
@@ -7181,6 +7258,7 @@ function appendCreateTaskForm(stack, {
   presets,
   preselectedTags = [],
   confession = null,
+  reminderDefaults = null,
 }) {
   const you = dynamic?.partners?.find((p) => p.is_you);
   if (you?.role !== "dominant") return;
@@ -7205,6 +7283,7 @@ function appendCreateTaskForm(stack, {
     || "";
   if (defaultAssignee) assignee.value = defaultAssignee;
   const dueBy = buildDueByControls();
+  const reminders = buildTaskReminderControls({ defaults: reminderDefaults });
   const tagPresets = [...(presets || DEFAULT_TASK_CATEGORY_TAGS)];
   const punishSelected = (preselectedTags || []).some((t) => String(t).toLowerCase() === "punishment");
   if (punishSelected && !tagPresets.some((t) => String(t).toLowerCase() === "punishment")) {
@@ -7222,6 +7301,7 @@ function appendCreateTaskForm(stack, {
     el("label", { className: "stack" }, ["Recurrence", recurrence]),
     el("label", { className: "stack" }, ["Assign to", assignee]),
     dueBy.node,
+    reminders.node,
     el("p", { className: "muted" }, "Category tags (pick at least one)"),
     categoryPicker.row,
     categoryPicker.custom,
@@ -7293,6 +7373,7 @@ function appendCreateTaskForm(stack, {
         error.classList.remove("hidden");
         return;
       }
+      const reminderOffsets = reminders.getOffsets();
       const payload = {
         title: title.value.trim(),
         assigned_to_membership_id: assignee.value,
@@ -7304,6 +7385,7 @@ function appendCreateTaskForm(stack, {
             tags,
           };
           dueBy.applyTo(row);
+          if (reminderOffsets) row.reminder_offsets = reminderOffsets;
           return row;
         }),
       };
@@ -7967,11 +8049,13 @@ function renderTasks(dynamicId) {
     punishId
       ? api(`/dynamics/${dynamicId}/punishments/${punishId}`).catch(() => null)
       : Promise.resolve(null),
+    api(`/dynamics/${dynamicId}/policy`).catch(() => null),
   ])
-    .then(([, tagData, punishData]) => {
+    .then(([, tagData, punishData, policy]) => {
       const dynamic = state.currentDynamic;
       const you = dynamic.partners.find((p) => p.is_you);
       const isDom = you?.role === "dominant";
+      const reminderDefaults = Array.isArray(policy?.task_reminder_offsets) ? policy.task_reminder_offsets : null;
       const taskCategoryPresets = (tagData.task_presets && tagData.task_presets.length)
         ? tagData.task_presets
         : DEFAULT_TASK_CATEGORY_TAGS;
@@ -7992,6 +8076,7 @@ function renderTasks(dynamicId) {
         presets: taskCategoryPresets,
         preselectedTags: (confession || query.get("punish") === "1") ? ["Punishment"] : [],
         confession,
+        reminderDefaults,
       });
 
       const now = Date.now();
@@ -8187,12 +8272,14 @@ function renderTasks(dynamicId) {
         const pausedBox = el("input", { type: "checkbox" });
         pausedBox.checked = !!task.paused;
         const dueBy = buildDueByControls({ dueValue: taskEffectiveDue(task) });
+        const reminders = buildTaskReminderControls({ offsets: task.reminder_offsets, defaults: reminderDefaults });
         openSheet({
           title: "Edit task",
           bodyNodes: [
             el("label", { className: "stack" }, ["Content", content]),
             buildTaskAssistRow(content, { dynamicId, listId: list.id, taskId: task.id }),
             dueBy.node,
+            reminders.node,
             el("p", { className: "muted" }, "Category tags"),
             tagPicker.row,
             tagPicker.custom,
@@ -8207,6 +8294,10 @@ function renderTasks(dynamicId) {
               tags,
               paused: pausedBox.checked,
             };
+            const reminderOffsets = reminders.getOffsets();
+            if (JSON.stringify(reminderOffsets) !== JSON.stringify(task.reminder_offsets ?? null)) {
+              body.reminder_offsets = reminderOffsets;
+            }
             dueBy.applyTo(body);
             await api(`/tasks/${list.id}/items/${task.id}`, {
               method: "PATCH",
@@ -8309,6 +8400,77 @@ function renderTasks(dynamicId) {
         renderTasks(dynamicId);
       }
 
+      function openOverdueActionSheet(list, task) {
+        document.querySelector(".modal-backdrop")?.remove();
+        const backdrop = el("div", { className: "modal-backdrop" });
+        const err = el("p", { className: "error hidden" });
+        const close = (refresh) => {
+          backdrop.remove();
+          if (refresh || location.hash.includes("overdue=1")) navigate(`/dynamic/${dynamicId}/tasks`);
+        };
+        async function act(body, message) {
+          err.classList.add("hidden");
+          try {
+            await api(`/tasks/${list.id}/items/${task.id}/overdue-action`, {
+              method: "POST",
+              body: JSON.stringify(body),
+            });
+            showToast(message);
+            close(true);
+          } catch (ex) {
+            err.textContent = ex.message;
+            err.classList.remove("hidden");
+          }
+        }
+        const customAt = el("input", { type: "datetime-local" });
+        customAt.value = toLocalDatetimeValue(new Date(Date.now() + 2 * 60 * 60 * 1000));
+        const recurring = task.recurrence && task.recurrence !== "none";
+        const card = el("div", { className: "card stack modal-card" }, [
+          el("h3", {}, `${task.assigned_to_display_name || "Your sub"} is late`),
+          el("p", {}, task.content),
+          el("p", { className: "muted" }, formatTaskDue(task) || "Overdue"),
+          el("p", { className: "muted" }, "Extend the deadline"),
+          el("div", { className: "row wrap" }, [[30, "+30m"], [60, "+1h"], [1440, "+1d"]].map(([minutes, label]) => el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => act({ action: "extend", minutes }, `Extended ${label.slice(1)}.`),
+          }, label))),
+          el("div", { className: "row wrap" }, [
+            customAt,
+            el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: () => {
+                if (!customAt.value) {
+                  err.textContent = "Pick a new due time.";
+                  err.classList.remove("hidden");
+                  return;
+                }
+                act({ action: "extend", due_at: datetimeLocalToIso(customAt.value) }, "New due time set.");
+              },
+            }, "Set due time"),
+          ]),
+          err,
+          el("div", { className: "row wrap" }, [
+            el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: () => {
+                const prompt = recurring ? "Skip this occurrence? The next one stays scheduled." : "Cancel and remove this task?";
+                if (!confirm(prompt)) return;
+                act({ action: "cancel" }, recurring ? "Occurrence skipped." : "Task cancelled.");
+              },
+            }, recurring ? "Skip this occurrence" : "Cancel task"),
+            el("button", { type: "button", className: "primary-btn", onClick: () => close(false) }, "Leave open"),
+          ]),
+        ]);
+        backdrop.appendChild(card);
+        backdrop.addEventListener("click", (ev) => {
+          if (ev.target === backdrop) close(false);
+        });
+        document.body.appendChild(backdrop);
+      }
+
       function openTaskDetail(list, task) {
         if (!canSubOpenTask(task, you)) {
           showToast("This task is past due. Request make-up from Missed / Overdue.");
@@ -8352,6 +8514,13 @@ function renderTasks(dynamicId) {
               openEditTaskSheet(list, task);
             },
           }, "Edit"));
+          if (taskIsPastDue(task)) {
+            actions.push(el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: () => openOverdueActionSheet(list, task),
+            }, "Extend / cancel"));
+          }
           actions.push(el("button", {
             type: "button",
             className: "ghost-btn",
@@ -8843,7 +9012,11 @@ function renderTasks(dynamicId) {
           }
           return false;
         });
-        if (found) openTaskDetail(found.list, found.task);
+        if (found && isDom && query.get("overdue") === "1" && !found.task.completed_at && taskIsPastDue(found.task)) {
+          openOverdueActionSheet(found.list, found.task);
+        } else if (found) {
+          openTaskDetail(found.list, found.task);
+        }
       }
     })
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
@@ -22102,12 +22275,12 @@ function renderSettings() {
       if (initialDynamicId && policy) {
         const taskPush = el("input", { type: "checkbox" });
         taskPush.checked = policy.task_push_enabled !== false;
-        const dueLead = el("select");
-        [5, 10, 15, 30, 60].forEach((n) => {
-          const o = el("option", { value: String(n) }, `${n} minutes before`);
-          if (Number(policy.task_due_lead_minutes || 15) === n) o.selected = true;
-          dueLead.appendChild(o);
-        });
+        const reminderChips = buildReminderOffsetChips(
+          Array.isArray(policy.task_reminder_offsets) ? policy.task_reminder_offsets : [15]
+        );
+        const reminderValue = () => JSON.stringify(reminderChips.getOffsets());
+        const completeNotify = el("input", { type: "checkbox" });
+        completeNotify.checked = policy.task_complete_notify !== false;
         const censorMode = el("select");
         [
           ["off", "Off"],
@@ -22131,8 +22304,10 @@ function renderSettings() {
           lockedSettingsWrap({
             locked: playLocked,
             children: el("div", { className: "stack" }, [
-              el("label", { className: "checkbox-label" }, [taskPush, " Push when tasks are added, available, or due soon"]),
-              el("label", {}, ["Warn before due", dueLead]),
+              el("label", { className: "checkbox-label" }, [taskPush, " Push when tasks are added, available, due soon, or overdue"]),
+              el("p", { className: "muted" }, "Remind the sub before tasks are due (pick any; none turns due reminders off). Tasks can override this."),
+              reminderChips.row,
+              el("label", { className: "checkbox-label" }, [completeNotify, " Push the keyholder whenever a task is completed"]),
               el("p", { className: "muted" }, "Android uses a separate Tasks notification channel (you can pick a different sound in system settings)."),
             ]),
           }),
@@ -22151,20 +22326,19 @@ function renderSettings() {
         if (optionalFeatureEnabled(featuresBundle, "scene_workshop")) stack.appendChild(censorCard);
         let playBaseline = {
           push: taskPush.checked,
-          lead: dueLead.value,
+          reminders: reminderValue(),
+          complete: completeNotify.checked,
           censor: censorMode.value,
         };
+        const playChanged = () => (
+          taskPush.checked !== playBaseline.push
+          || reminderValue() !== playBaseline.reminders
+          || completeNotify.checked !== playBaseline.complete
+          || censorMode.value !== playBaseline.censor
+        );
         draft.register({
-          isDirty: () => (
-            taskPush.checked !== playBaseline.push
-            || dueLead.value !== playBaseline.lead
-            || censorMode.value !== playBaseline.censor
-          ),
-          needsApproval: () => playLocked && (
-            taskPush.checked !== playBaseline.push
-            || dueLead.value !== playBaseline.lead
-            || censorMode.value !== playBaseline.censor
-          ),
+          isDirty: playChanged,
+          needsApproval: () => playLocked && playChanged(),
           save: async () => {
             playError.classList.add("hidden");
             if (playLocked) {
@@ -22177,12 +22351,20 @@ function renderSettings() {
                   requestedValue: taskPush.checked,
                 }));
               }
-              if (dueLead.value !== playBaseline.lead) {
+              if (reminderValue() !== playBaseline.reminders) {
                 requests.push(postSettingsChangeRequest({
                   dynamicId: initialDynamicId,
-                  settingKey: "tasks.due_lead_minutes",
-                  settingLabel: "Minutes before due to notify",
-                  requestedValue: Number(dueLead.value),
+                  settingKey: "tasks.reminder_offsets",
+                  settingLabel: "Task due reminders",
+                  requestedValue: reminderChips.getOffsets(),
+                }));
+              }
+              if (completeNotify.checked !== playBaseline.complete) {
+                requests.push(postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "tasks.complete_notify",
+                  settingLabel: "Notify keyholder when tasks are completed",
+                  requestedValue: completeNotify.checked,
                 }));
               }
               if (censorMode.value !== playBaseline.censor) {
@@ -22201,11 +22383,17 @@ function renderSettings() {
               method: "PATCH",
               body: JSON.stringify({
                 task_push_enabled: taskPush.checked,
-                task_due_lead_minutes: Number(dueLead.value),
+                task_reminder_offsets: reminderChips.getOffsets(),
+                task_complete_notify: completeNotify.checked,
                 ml_censor_mode: censorMode.value,
               }),
             });
-            playBaseline = { push: taskPush.checked, lead: dueLead.value, censor: censorMode.value };
+            playBaseline = {
+              push: taskPush.checked,
+              reminders: reminderValue(),
+              complete: completeNotify.checked,
+              censor: censorMode.value,
+            };
             playStatus.textContent = "Task notifications saved.";
             return "Task notifications saved";
           },

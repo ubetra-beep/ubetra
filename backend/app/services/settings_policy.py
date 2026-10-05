@@ -12,6 +12,11 @@ from .features import (
     parse_enabled_features,
     serialize_enabled_features,
 )
+from .tasks_service import (
+    default_reminder_offsets,
+    normalize_reminder_offsets,
+    serialize_reminder_offsets,
+)
 
 # Keys a submissive cannot change directly — they may request a change via chat.
 DOM_CONTROLLED_SETTING_KEYS = frozenset(
@@ -29,7 +34,8 @@ DOM_CONTROLLED_SETTING_KEYS = frozenset(
         "assistant.extra_instructions",
         "assistant.permissions",
         "tasks.push_enabled",
-        "tasks.due_lead_minutes",
+        "tasks.reminder_offsets",
+        "tasks.complete_notify",
         "video.ml_censor_mode",
     }
 )
@@ -51,6 +57,8 @@ def setting_label(key: str) -> str:
         "assistant.permissions": "Assistant Domme agent permissions",
         "tasks.push_enabled": "Task push notifications",
         "tasks.due_lead_minutes": "Minutes before due to notify",
+        "tasks.reminder_offsets": "Task due reminders",
+        "tasks.complete_notify": "Notify keyholder when tasks are completed",
         "video.ml_censor_mode": "Smart censor on sub display",
     }
     if key.startswith("features."):
@@ -158,8 +166,25 @@ def apply_setting(
             minutes = max(0, min(24 * 60, int(value)))
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid lead time") from exc
-        dynamic.task_due_lead_minutes = minutes
+        dynamic.task_reminder_offsets = serialize_reminder_offsets([minutes])
         return f"set task due reminders to {minutes} minutes before"
+
+    if setting_key == "tasks.reminder_offsets":
+        if not isinstance(value, list):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid reminder list")
+        offsets = normalize_reminder_offsets(value)
+        dynamic.task_reminder_offsets = serialize_reminder_offsets(offsets)
+        if not offsets:
+            return "turned off task due reminders"
+        return "set task due reminders to " + ", ".join(f"{m} min" for m in offsets) + " before"
+
+    if setting_key == "tasks.complete_notify":
+        dynamic.task_complete_notify = bool(value)
+        return (
+            "turned on task completion notifications"
+            if dynamic.task_complete_notify
+            else "turned off task completion notifications"
+        )
 
     if setting_key == "video.ml_censor_mode":
         mode = str(value or "off").strip().lower()
@@ -243,6 +268,7 @@ def policy_snapshot(dynamic: Dynamic) -> dict:
         "assistant_extra_instructions": getattr(dynamic, "assistant_extra_instructions", None) or "",
         "enabled_features": sorted(parse_enabled_features(dynamic.enabled_features)),
         "task_push_enabled": bool(getattr(dynamic, "task_push_enabled", True)),
-        "task_due_lead_minutes": int(getattr(dynamic, "task_due_lead_minutes", None) or 15),
+        "task_reminder_offsets": default_reminder_offsets(dynamic),
+        "task_complete_notify": bool(getattr(dynamic, "task_complete_notify", True)),
         "ml_censor_mode": (getattr(dynamic, "ml_censor_mode", None) or "off"),
     }

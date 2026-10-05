@@ -1374,6 +1374,26 @@ def run_migrations() -> None:
         conn.execute(text("ALTER TABLE tasks ADD COLUMN available_notified_at DATETIME"))
       if "due_notify_lead_minutes" not in task_cols:
         conn.execute(text("ALTER TABLE tasks ADD COLUMN due_notify_lead_minutes INTEGER"))
+      if "reminder_offsets" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN reminder_offsets TEXT"))
+        conn.execute(
+          text(
+            "UPDATE tasks SET reminder_offsets = '[' || due_notify_lead_minutes || ']' "
+            "WHERE due_notify_lead_minutes IS NOT NULL"
+          )
+        )
+      if "due_reminders_sent" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN due_reminders_sent TEXT DEFAULT ''"))
+      if "overdue_notified_at" not in task_cols:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN overdue_notified_at DATETIME"))
+        conn.execute(
+          text(
+            "UPDATE tasks SET overdue_notified_at = CURRENT_TIMESTAMP "
+            "WHERE completed_at IS NULL "
+            "AND COALESCE(next_due_at, due_at) IS NOT NULL "
+            "AND COALESCE(next_due_at, due_at) < CURRENT_TIMESTAMP"
+          )
+        )
 
     user_cols = {
       row[1]
@@ -1381,8 +1401,15 @@ def run_migrations() -> None:
     }
     if "timezone" not in user_cols:
       conn.execute(text("ALTER TABLE users ADD COLUMN timezone VARCHAR(64) DEFAULT ''"))
-    if "task_due_lead_minutes" not in user_cols:
-      conn.execute(text("ALTER TABLE users ADD COLUMN task_due_lead_minutes INTEGER DEFAULT 15"))
+    if "task_reminder_offsets" not in user_cols:
+      conn.execute(text("ALTER TABLE users ADD COLUMN task_reminder_offsets TEXT DEFAULT '[15]'"))
+      if "task_due_lead_minutes" in user_cols:
+        conn.execute(
+          text(
+            "UPDATE users SET task_reminder_offsets = "
+            "'[' || COALESCE(task_due_lead_minutes, 15) || ']'"
+          )
+        )
 
     dynamic_cols = {
       row[1]
@@ -1390,8 +1417,17 @@ def run_migrations() -> None:
     }
     if "task_push_enabled" not in dynamic_cols:
       conn.execute(text("ALTER TABLE dynamics ADD COLUMN task_push_enabled BOOLEAN DEFAULT 1"))
-    if "task_due_lead_minutes" not in dynamic_cols:
-      conn.execute(text("ALTER TABLE dynamics ADD COLUMN task_due_lead_minutes INTEGER DEFAULT 15"))
+    if "task_reminder_offsets" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN task_reminder_offsets TEXT DEFAULT '[15]'"))
+      if "task_due_lead_minutes" in dynamic_cols:
+        conn.execute(
+          text(
+            "UPDATE dynamics SET task_reminder_offsets = "
+            "'[' || COALESCE(task_due_lead_minutes, 15) || ']'"
+          )
+        )
+    if "task_complete_notify" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN task_complete_notify BOOLEAN DEFAULT 1"))
     if "ml_censor_mode" not in dynamic_cols:
       conn.execute(text("ALTER TABLE dynamics ADD COLUMN ml_censor_mode VARCHAR(16) DEFAULT 'off'"))
     if "training_regimen_state" not in dynamic_cols:

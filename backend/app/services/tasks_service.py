@@ -54,6 +54,49 @@ def resolve_due_at(
     return datetime.utcnow() + delta
 
 
+DEFAULT_REMINDER_OFFSETS = [15]
+MAX_REMINDER_OFFSET_MINUTES = 7 * 24 * 60
+
+
+def normalize_reminder_offsets(values) -> list[int]:
+    out: set[int] = set()
+    for value in values or []:
+        try:
+            minutes = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= minutes <= MAX_REMINDER_OFFSET_MINUTES:
+            out.add(minutes)
+    return sorted(out, reverse=True)[:8]
+
+
+def parse_reminder_offsets(raw: str | None) -> list[int] | None:
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, list):
+        return None
+    return normalize_reminder_offsets(data)
+
+
+def serialize_reminder_offsets(values) -> str:
+    return json.dumps(normalize_reminder_offsets(values))
+
+
+def default_reminder_offsets(owner) -> list[int]:
+    parsed = parse_reminder_offsets(getattr(owner, "task_reminder_offsets", None))
+    return list(DEFAULT_REMINDER_OFFSETS) if parsed is None else parsed
+
+
+def reset_due_reminders(task: Task) -> None:
+    task.due_soon_notified_at = None
+    task.due_reminders_sent = ""
+    task.overdue_notified_at = None
+
+
 def advance_due_date(current: datetime, recurrence: TaskRecurrence) -> datetime:
     if recurrence == TaskRecurrence.daily:
         return current + timedelta(days=1)
@@ -72,6 +115,7 @@ def schedule_next_occurrence(task: Task, *, from_time: datetime | None = None) -
     task.completed_at = None
     task.next_due_at = advance_due_date(base, task.recurrence)
     task.auto_punish_applied_at = None
+    reset_due_reminders(task)
 
 
 def task_visible(task: Task, tasks: list[Task], viewer: Membership) -> bool:
@@ -153,7 +197,8 @@ def task_out(
         late_ack_action=(getattr(task, "late_ack_action", None) or ""),
         remind_at=getattr(task, "remind_at", None),
         remind_every_minutes=getattr(task, "remind_every_minutes", None),
-        due_notify_lead_minutes=getattr(task, "due_notify_lead_minutes", None),
+        reminder_offsets=parse_reminder_offsets(getattr(task, "reminder_offsets", None)),
+        overdue_notified_at=getattr(task, "overdue_notified_at", None),
     )
 
 
@@ -567,6 +612,8 @@ def _event_title(action: str, body: str) -> str:
         "play_logged": "Play logged",
         "feelings_logged": "Feelings logged",
         "task_completed_late": "Task completed late",
+        "task_overdue_extended": "Overdue task extended",
+        "task_overdue_cancelled": "Overdue task cancelled",
         "punishment_pending": "Punishment needed",
         "punishment_assigned": "Punishment assigned",
         "punishment_covered": "Punishment covered",
