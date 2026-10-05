@@ -465,7 +465,7 @@ function shouldRememberRoute(path) {
   const clean = String(path || "").split("?")[0];
   const parts = clean.replace(/^#/, "").split("/").filter(Boolean);
   if (!parts.length) return false;
-  if (["settings", "login", "register", "onboarding"].includes(parts[0])) return false;
+  if (["settings", "login", "register", "onboarding", "forgot-password", "reset-password"].includes(parts[0])) return false;
   return true;
 }
 
@@ -4940,6 +4940,7 @@ function renderResetPassword() {
         method: "POST",
         body: JSON.stringify(body),
       });
+      localStorage.removeItem(LAST_ROUTE_KEY);
       showToast("Password updated — sign in with your new password.");
       navigate("/login");
     } catch (err) {
@@ -22951,6 +22952,10 @@ async function renderRoute() {
   if (!state.token && parts[0] !== "login" && parts[0] !== "register"
       && parts[0] !== "forgot-password" && parts[0] !== "reset-password") {
     renderLogin();
+    return;
+  }
+  if (state.token && state.user && ["login", "forgot-password", "reset-password"].includes(parts[0])) {
+    navigateAfterAuth();
     return;
   }
 
