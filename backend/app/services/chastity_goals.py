@@ -124,7 +124,11 @@ def parse_goals(raw: str | None) -> dict:
                     continue
                 if value <= 0:
                     continue
-                reqs.append({"type": rtype, "value": value})
+                item = {"type": rtype, "value": value}
+                tag = str(r.get("tag") or "").strip()
+                if tag:
+                    item["tag"] = tag[:80]
+                reqs.append(item)
             start_mode = g.get("start_mode") if g.get("start_mode") in START_MODES else "rolling"
             archive_reason = g.get("archive_reason")
             if archive_reason not in ARCHIVE_REASONS:
@@ -438,6 +442,7 @@ def evaluate_requirement(
         "title": meta["title"],
         "kind": meta["kind"],
         "hint": meta["hint"],
+        "tag": (req.get("tag") or "").strip(),
         "target": target,
         "current": round(current, 2) if unit == "days" else int(current),
         "remaining": round(remaining, 2) if unit == "days" else int(remaining),

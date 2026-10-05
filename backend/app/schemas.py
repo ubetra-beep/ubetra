@@ -597,6 +597,26 @@ class TaskBulkActionIn(BaseModel):
     tag: str | None = Field(default=None, max_length=80)
 
 
+class TaskBulkUpdateItem(BaseModel):
+    id: str
+    content: str | None = Field(default=None, min_length=1, max_length=4000)
+    tags: list[str] | None = None
+    paused: bool | None = None
+    recurrence: TaskRecurrence | None = None
+    due_at: datetime | None = None
+    due_shift_minutes: int | None = Field(default=None, ge=-(60 * 24 * 365), le=60 * 24 * 365)
+    reminder_offsets: list[ReminderOffset] | None = Field(default=None, max_length=8)
+    assigned_to_membership_id: str | None = None
+    clear_assignee: bool = False
+    mark_complete: bool = False
+    completed_at: datetime | None = None
+
+
+class TaskBulkUpdateIn(BaseModel):
+    updates: list[TaskBulkUpdateItem] = Field(default_factory=list)
+    deletes: list[str] = Field(default_factory=list)
+
+
 class GoogleTasksStatusOut(BaseModel):
     configured: bool
     connected: bool
@@ -1461,6 +1481,21 @@ class OrgTrackingEntryUpdate(BaseModel):
     notes_private: bool | None = None
 
 
+class OrgTrackingBulkUpdate(OrgTrackingEntryUpdate):
+    id: str
+    for_membership_id: str | None = None
+
+
+class OrgTrackingBulkIn(BaseModel):
+    updates: list[OrgTrackingBulkUpdate] = Field(default_factory=list)
+    deletes: list[str] = Field(default_factory=list)
+
+
+class OrgTrackingBulkOut(BaseModel):
+    updated: int = 0
+    deleted: int = 0
+
+
 class OrgTrackingEntryOut(BaseModel):
     id: str
     for_membership_id: str
@@ -1736,6 +1771,36 @@ class ChastityBreakUpdate(BaseModel):
     break_type: str | None = None
     tags: list[str] | None = None
     clear_ended_at: bool = False
+
+
+class ChastityBreakBulkUpdate(ChastityBreakUpdate):
+    id: str
+
+
+class ChastityLockupBulkUpdate(BaseModel):
+    id: str
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    planned_end_at: datetime | None = None
+    show_planned_end: bool | None = None
+    device_notes: str | None = None
+    release_notes: str | None = None
+    tags: list[str] | None = None
+    ended_kind: Literal["unlocked", "released_orgasm", "released_timer", "historical", ""] | None = None
+    clear_ended_at: bool = False
+    for_membership_id: str | None = None
+    breaks: list[ChastityBreakBulkUpdate] = Field(default_factory=list)
+    delete_breaks: list[str] = Field(default_factory=list)
+
+
+class ChastityBulkIn(BaseModel):
+    updates: list[ChastityLockupBulkUpdate] = Field(default_factory=list)
+    deletes: list[str] = Field(default_factory=list)
+
+
+class ChastityBulkOut(BaseModel):
+    updated: int = 0
+    deleted: int = 0
 
 
 class ChastityBreakOut(BaseModel):

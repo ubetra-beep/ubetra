@@ -1,8 +1,9 @@
-const CACHE = "ubetra-v146";
+const CACHE = "ubetra-v147";
 const ASSETS = [
   "/",
   "/assets/styles.css",
   "/assets/app.js",
+  "/assets/desktop.js",
   "/assets/instructor.js",
   "/assets/assistant-domme.js",
   "/manifest.webmanifest",

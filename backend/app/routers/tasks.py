@@ -34,6 +34,7 @@ from ..schemas import (
     TrainingRegimenReplyIn,
     TrainingRegimenTagIn,
     TaskBulkActionIn,
+    TaskBulkUpdateIn,
     TaskCalendarItem,
     TaskCalendarOut,
     TaskChangeRequestIn,
@@ -557,70 +558,9 @@ def complete_task(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
-    if task.approval_status != TaskApprovalStatus.approved:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Task must be approved before completion",
-        )
-
-    if not can_complete_task(task, membership):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not assigned to complete this task",
-        )
-
-    if not task_visible(task, tasks, membership):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Task is hidden")
-
-    if task.completed_at is None:
-        completed_at = datetime.utcnow()
-        if payload and payload.completed_at is not None:
-            completed_at = as_naive_utc(payload.completed_at)
-            if completed_at and completed_at > datetime.utcnow() + timedelta(minutes=2):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Completed on cannot be in the future",
-                )
-        due = _effective_due(task)
-        late = bool(due and due < completed_at)
-        if late and membership.role == PartnerRole.dominant and task_needs_makeup(task):
-            # Dom completing overdue (actually late) counts as granting make-up.
-            task.makeup_status = "granted"
-            task.makeup_granted_at = datetime.utcnow()
-        if membership.role == PartnerRole.submissive and late:
-            task.completed_late = True
-            task.late_ack_at = None
-            task.late_ack_action = ""
-        if task.recurrence != TaskRecurrence.none:
-            schedule_next_occurrence(task, from_time=task.next_due_at or task.due_at or completed_at)
-            clear_makeup(task)
-            task.completed_late = False
-            _maybe_push_task(db, task_list.dynamic_id, user, task)
-        else:
-            task.completed_at = completed_at
-            clear_makeup(task)
-            _maybe_complete_google(db, task_list.dynamic_id, user, task)
-        post_system_event(
-            db,
-            task_list.dynamic_id,
-            membership,
-            f"completed task: {task_snippet(task.content)}" + (" (late)" if late else ""),
-            action="task_completed_late" if late and membership.role == PartnerRole.submissive else "",
-            payload={"path": f"/dynamic/{task_list.dynamic_id}/tasks?task={task.id}", "task_id": task.id},
-        )
-        if late and membership.role == PartnerRole.submissive:
-            notify_late_complete(db, dynamic_id=task_list.dynamic_id, task=task)
-        elif membership.role == PartnerRole.submissive:
-            notify_task_completed(db, dynamic_id=task_list.dynamic_id, task=task, actor=membership)
-        db.flush()
-        for nxt in tasks:
-            if nxt.id == task.id:
-                continue
-            if getattr(nxt, "available_notified_at", None):
-                continue
-            if task_visible(nxt, tasks, membership):
-                notify_task_available(db, dynamic_id=task_list.dynamic_id, task=nxt)
-        db.commit()
+    completed_at = payload.completed_at if payload and payload.completed_at is not None else None
+    _perform_task_complete(db, task_list, task, membership, user, completed_at)
+    db.commit()
 
     task_list = _task_list_query(db, task_list_id)
     return task_list_out(task_list, membership)
@@ -713,6 +653,129 @@ def _get_task_or_404(task_list: TaskList, task_id: str) -> Task:
     return task
 
 
+def _apply_task_fields(db: Session, dynamic_id: str, task: Task, payload) -> None:
+    if payload.content is not None:
+        task.content = payload.content.strip()
+    if payload.tags is not None:
+        task.tags = tags_to_string(payload.tags)
+    if payload.paused is not None:
+        task.paused = bool(payload.paused)
+    if payload.recurrence is not None:
+        task.recurrence = payload.recurrence
+        if payload.recurrence == TaskRecurrence.none:
+            task.next_due_at = None
+        elif task.next_due_at is None:
+            task.next_due_at = task.due_at or datetime.utcnow()
+    if payload.due_at is not None:
+        task.due_at = resolve_due_at(due_at=payload.due_at, due_in_amount=None, due_in_unit=None)
+        reset_due_reminders(task)
+        if task.recurrence != TaskRecurrence.none:
+            task.next_due_at = task.due_at
+    elif getattr(payload, "due_in_amount", None) and getattr(payload, "due_in_unit", None):
+        task.due_at = resolve_due_at(
+            due_at=None,
+            due_in_amount=payload.due_in_amount,
+            due_in_unit=payload.due_in_unit,
+        )
+        reset_due_reminders(task)
+        if task.recurrence != TaskRecurrence.none:
+            task.next_due_at = task.due_at
+    shift = getattr(payload, "due_shift_minutes", None)
+    if shift:
+        base = _effective_due(task)
+        if base is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Task has no due date to shift")
+        new_due = base + timedelta(minutes=int(shift))
+        if task.recurrence != TaskRecurrence.none:
+            task.next_due_at = new_due
+        else:
+            task.due_at = new_due
+        reset_due_reminders(task)
+    if "reminder_offsets" in payload.model_fields_set:
+        task.reminder_offsets = (
+            serialize_reminder_offsets(payload.reminder_offsets)
+            if payload.reminder_offsets is not None
+            else None
+        )
+        task.due_reminders_sent = ""
+    if getattr(payload, "clear_assignee", False):
+        task.assigned_to_membership_id = None
+    elif getattr(payload, "assigned_to_membership_id", None):
+        member = db.get(Membership, payload.assigned_to_membership_id)
+        if member is None or member.dynamic_id != dynamic_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid assignee")
+        task.assigned_to_membership_id = member.id
+
+
+def _perform_task_complete(
+    db: Session,
+    task_list: TaskList,
+    task: Task,
+    membership: Membership,
+    user: User,
+    completed_at: datetime | None,
+) -> None:
+    if task.approval_status != TaskApprovalStatus.approved:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Task must be approved before completion",
+        )
+    if not can_complete_task(task, membership):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not assigned to complete this task",
+        )
+    tasks = sorted(task_list.tasks, key=lambda t: t.position)
+    if not task_visible(task, tasks, membership):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Task is hidden")
+    if task.completed_at is not None:
+        return
+    when = as_naive_utc(completed_at) if completed_at is not None else datetime.utcnow()
+    if when and when > datetime.utcnow() + timedelta(minutes=2):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Completed on cannot be in the future",
+        )
+    due = _effective_due(task)
+    late = bool(due and due < when)
+    if late and membership.role == PartnerRole.dominant and task_needs_makeup(task):
+        task.makeup_status = "granted"
+        task.makeup_granted_at = datetime.utcnow()
+    if membership.role == PartnerRole.submissive and late:
+        task.completed_late = True
+        task.late_ack_at = None
+        task.late_ack_action = ""
+    if task.recurrence != TaskRecurrence.none:
+        schedule_next_occurrence(task, from_time=task.next_due_at or task.due_at or when)
+        clear_makeup(task)
+        task.completed_late = False
+        _maybe_push_task(db, task_list.dynamic_id, user, task)
+    else:
+        task.completed_at = when
+        clear_makeup(task)
+        _maybe_complete_google(db, task_list.dynamic_id, user, task)
+    post_system_event(
+        db,
+        task_list.dynamic_id,
+        membership,
+        f"completed task: {task_snippet(task.content)}" + (" (late)" if late else ""),
+        action="task_completed_late" if late and membership.role == PartnerRole.submissive else "",
+        payload={"path": f"/dynamic/{task_list.dynamic_id}/tasks?task={task.id}", "task_id": task.id},
+    )
+    if late and membership.role == PartnerRole.submissive:
+        notify_late_complete(db, dynamic_id=task_list.dynamic_id, task=task)
+    elif membership.role == PartnerRole.submissive:
+        notify_task_completed(db, dynamic_id=task_list.dynamic_id, task=task, actor=membership)
+    db.flush()
+    for nxt in tasks:
+        if nxt.id == task.id:
+            continue
+        if getattr(nxt, "available_notified_at", None):
+            continue
+        if task_visible(nxt, tasks, membership):
+            notify_task_available(db, dynamic_id=task_list.dynamic_id, task=nxt)
+
+
 @router.patch("/tasks/{task_list_id}/items/{task_id}", response_model=TaskListOut)
 def update_task_item(
     task_list_id: str,
@@ -731,39 +794,7 @@ def update_task_item(
             detail="Only the dominant partner can edit tasks",
         )
     task = _get_task_or_404(task_list, task_id)
-    if payload.content is not None:
-        task.content = payload.content.strip()
-    if payload.tags is not None:
-        task.tags = tags_to_string(payload.tags)
-    if payload.paused is not None:
-        task.paused = bool(payload.paused)
-    if payload.recurrence is not None:
-        task.recurrence = payload.recurrence
-        if payload.recurrence == TaskRecurrence.none:
-            task.next_due_at = None
-        elif task.next_due_at is None:
-            task.next_due_at = task.due_at or datetime.utcnow()
-    if payload.due_at is not None:
-        task.due_at = resolve_due_at(due_at=payload.due_at, due_in_amount=None, due_in_unit=None)
-        reset_due_reminders(task)
-        if task.recurrence != TaskRecurrence.none:
-            task.next_due_at = task.due_at
-    elif payload.due_in_amount and payload.due_in_unit:
-        task.due_at = resolve_due_at(
-            due_at=None,
-            due_in_amount=payload.due_in_amount,
-            due_in_unit=payload.due_in_unit,
-        )
-        reset_due_reminders(task)
-        if task.recurrence != TaskRecurrence.none:
-            task.next_due_at = task.due_at
-    if "reminder_offsets" in payload.model_fields_set:
-        task.reminder_offsets = (
-            serialize_reminder_offsets(payload.reminder_offsets)
-            if payload.reminder_offsets is not None
-            else None
-        )
-        task.due_reminders_sent = ""
+    _apply_task_fields(db, task_list.dynamic_id, task, payload)
     post_system_event(
         db,
         task_list.dynamic_id,
@@ -1521,6 +1552,85 @@ def bulk_task_action(
 
     out = []
     for list_id in touched_list_ids:
+        refreshed = _task_list_query(db, list_id)
+        if refreshed:
+            out.append(task_list_out(refreshed, membership))
+    return out
+
+
+@router.patch("/dynamics/{dynamic_id}/tasks/bulk-update", response_model=list[TaskListOut])
+def bulk_update_tasks(
+    dynamic_id: str,
+    payload: TaskBulkUpdateIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[TaskListOut]:
+    membership = get_membership(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can bulk-edit tasks",
+        )
+    if not payload.updates and not payload.deletes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nothing to save")
+    lists = (
+        db.query(TaskList)
+        .options(
+            joinedload(TaskList.tasks).joinedload(Task.assigned_to),
+            joinedload(TaskList.dynamic).joinedload(Dynamic.memberships),
+        )
+        .filter(TaskList.dynamic_id == dynamic_id)
+        .all()
+    )
+    by_id: dict[str, tuple[TaskList, Task]] = {}
+    for task_list in lists:
+        for task in task_list.tasks:
+            by_id[task.id] = (task_list, task)
+
+    deleted_ids = {item for item in payload.deletes if item}
+    touched: set[str] = set()
+    missing = [task_id for task_id in [*deleted_ids, *(item.id for item in payload.updates)] if task_id not in by_id]
+    if missing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    for task_id in deleted_ids:
+        task_list, task = by_id[task_id]
+        db.delete(task)
+        touched.add(task_list.id)
+    if deleted_ids:
+        post_system_event(
+            db,
+            dynamic_id,
+            membership,
+            f"deleted {len(deleted_ids)} task(s)",
+        )
+
+    for item in payload.updates:
+        if item.id in deleted_ids:
+            continue
+        task_list, task = by_id[item.id]
+        _apply_task_fields(db, dynamic_id, task, item)
+        if item.mark_complete:
+            _perform_task_complete(
+                db,
+                task_list,
+                task,
+                membership,
+                user,
+                item.completed_at,
+            )
+        touched.add(task_list.id)
+
+    if touched and not deleted_ids:
+        post_system_event(
+            db,
+            dynamic_id,
+            membership,
+            f"updated {len(payload.updates)} task(s)",
+        )
+    db.commit()
+    out = []
+    for list_id in touched:
         refreshed = _task_list_query(db, list_id)
         if refreshed:
             out.append(task_list_out(refreshed, membership))

@@ -28,6 +28,8 @@ from ..schemas import (
     OrgasmDetailCreate,
     OrgTrackingEntryCreate,
     OrgTrackingEntryOut,
+    OrgTrackingBulkIn,
+    OrgTrackingBulkOut,
     OrgTrackingEntryUpdate,
     OrgTrackingPrefsOut,
     OrgTrackingPrefsUpdate,
@@ -568,6 +570,99 @@ def log_tracking_entry(
 
     return _entry_out(entry, _membership_map(db, dynamic_id), viewer=membership)
 
+def _load_tracking_entry(db: Session, dynamic_id: str, entry_id: str) -> OrgTrackingEntry:
+    entry = (
+        db.query(OrgTrackingEntry)
+        .options(joinedload(OrgTrackingEntry.orgasms))
+        .filter(OrgTrackingEntry.id == entry_id, OrgTrackingEntry.dynamic_id == dynamic_id)
+        .first()
+    )
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
+    return entry
+
+
+def _apply_tracking_update(db: Session, dynamic_id: str, entry: OrgTrackingEntry, payload) -> None:
+    new_for = getattr(payload, "for_membership_id", None)
+    if new_for:
+        target = (
+            db.query(Membership)
+            .filter(Membership.id == new_for, Membership.dynamic_id == dynamic_id)
+            .first()
+        )
+        if target is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid partner")
+        entry.for_membership_id = target.id
+    if payload.event_type is not None:
+        entry.event_type = payload.event_type
+    if payload.notes is not None:
+        entry.notes = payload.notes.strip()
+    if payload.tags is not None:
+        entry.tags = tags_to_string(payload.tags)
+    if payload.occurred_at is not None:
+        entry.occurred_at = as_naive_utc(payload.occurred_at)
+    if "ended_at" in payload.model_fields_set:
+        entry.ended_at = as_naive_utc(payload.ended_at)
+    if payload.duration_minutes is not None:
+        entry.duration_minutes = payload.duration_minutes
+    if payload.dominant_time_at is not None:
+        entry.dominant_time_at = as_naive_utc(payload.dominant_time_at)
+    if payload.submissive_time_at is not None:
+        entry.submissive_time_at = as_naive_utc(payload.submissive_time_at)
+    if payload.location is not None:
+        entry.location = payload.location.strip()[:120]
+    if "initiated_by_membership_id" in payload.model_fields_set:
+        entry.initiated_by_membership_id = payload.initiated_by_membership_id
+    if payload.protection is not None:
+        entry.protection = payload.protection.strip()[:32]
+    if "satisfaction" in payload.model_fields_set:
+        entry.satisfaction = payload.satisfaction
+    if "edging_count" in payload.model_fields_set:
+        entry.edging_count = payload.edging_count
+    if payload.notes_private is not None:
+        entry.notes_private = bool(payload.notes_private)
+    if payload.orgasms is not None:
+        _validate_payload(entry.event_type, payload.orgasms)
+        _apply_orgasms(entry, payload.orgasms)
+    if entry.ended_at is not None and entry.occurred_at is not None and entry.ended_at < entry.occurred_at:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="End must be after start")
+
+
+def _apply_tracking_bulk(db: Session, dynamic_id: str, payload: OrgTrackingBulkIn) -> OrgTrackingBulkOut:
+    if not payload.updates and not payload.deletes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nothing to save")
+    deleted_ids = {item for item in payload.deletes if item}
+    deleted = 0
+    for entry_id in deleted_ids:
+        entry = _load_tracking_entry(db, dynamic_id, entry_id)
+        db.delete(entry)
+        deleted += 1
+    updated = 0
+    for item in payload.updates:
+        if item.id in deleted_ids:
+            continue
+        entry = _load_tracking_entry(db, dynamic_id, item.id)
+        _apply_tracking_update(db, dynamic_id, entry, item)
+        updated += 1
+    from ..services.chastity_orgasm_repair import repair_missed_orgasm_releases
+
+    db.flush()
+    repair_missed_orgasm_releases(db, dynamic_id)
+    db.commit()
+    return OrgTrackingBulkOut(updated=updated, deleted=deleted)
+
+
+@router.patch("/{dynamic_id}/tracking/bulk", response_model=OrgTrackingBulkOut)
+def bulk_update_tracking(
+    dynamic_id: str,
+    payload: OrgTrackingBulkIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OrgTrackingBulkOut:
+    get_membership(dynamic_id, user, db)
+    return _apply_tracking_bulk(db, dynamic_id, payload)
+
+
 @router.patch("/{dynamic_id}/tracking/{entry_id}", response_model=OrgTrackingEntryOut)
 
 def update_tracking_entry(
@@ -602,56 +697,7 @@ def update_tracking_entry(
 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
 
-    if payload.event_type is not None:
-
-        entry.event_type = payload.event_type
-
-    if payload.notes is not None:
-
-        entry.notes = payload.notes.strip()
-
-    if payload.tags is not None:
-
-        entry.tags = tags_to_string(payload.tags)
-
-    if payload.occurred_at is not None:
-
-        entry.occurred_at = as_naive_utc(payload.occurred_at)
-
-    if "ended_at" in payload.model_fields_set:
-
-        entry.ended_at = as_naive_utc(payload.ended_at)
-
-    if payload.duration_minutes is not None:
-
-        entry.duration_minutes = payload.duration_minutes
-
-    if payload.dominant_time_at is not None:
-
-        entry.dominant_time_at = as_naive_utc(payload.dominant_time_at)
-
-    if payload.submissive_time_at is not None:
-
-        entry.submissive_time_at = as_naive_utc(payload.submissive_time_at)
-
-    if payload.location is not None:
-        entry.location = payload.location.strip()[:120]
-    if "initiated_by_membership_id" in payload.model_fields_set:
-        entry.initiated_by_membership_id = payload.initiated_by_membership_id
-    if payload.protection is not None:
-        entry.protection = payload.protection.strip()[:32]
-    if "satisfaction" in payload.model_fields_set:
-        entry.satisfaction = payload.satisfaction
-    if "edging_count" in payload.model_fields_set:
-        entry.edging_count = payload.edging_count
-    if payload.notes_private is not None:
-        entry.notes_private = bool(payload.notes_private)
-
-    if payload.orgasms is not None:
-
-        _validate_payload(entry.event_type, payload.orgasms)
-
-        _apply_orgasms(entry, payload.orgasms)
+    _apply_tracking_update(db, dynamic_id, entry, payload)
 
     db.commit()
 
@@ -805,6 +851,47 @@ def download_tracking_historical_csv_template(
         headers={
             "Content-Disposition": 'attachment; filename="ubetra-orgasm-history-template.csv"'
         },
+    )
+
+
+@router.get("/{dynamic_id}/tracking/historical/export-csv")
+def export_tracking_history_csv(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    get_membership(dynamic_id, user, db)
+    memberships = _membership_map(db, dynamic_id)
+    entries = (
+        db.query(OrgTrackingEntry)
+        .options(joinedload(OrgTrackingEntry.orgasms))
+        .filter(OrgTrackingEntry.dynamic_id == dynamic_id)
+        .order_by(OrgTrackingEntry.occurred_at.asc())
+        .all()
+    )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(HISTORICAL_CSV_HEADERS)
+    for entry in entries:
+        partner = memberships.get(entry.for_membership_id)
+        name = partner.display_name if partner else ""
+        orgasm_groups = []
+        for row in entry.orgasms or []:
+            orgasm_groups.append(",".join(tags_to_list(row.tags or "")))
+        et = entry.event_type.value if hasattr(entry.event_type, "value") else str(entry.event_type)
+        writer.writerow([
+            name,
+            et,
+            entry.occurred_at.strftime("%Y-%m-%dT%H:%M:%S") if entry.occurred_at else "",
+            entry.ended_at.strftime("%Y-%m-%dT%H:%M:%S") if entry.ended_at else "",
+            (entry.notes or "").replace("\n", " ").strip(),
+            ",".join(tags_to_list(entry.tags or "")),
+            "|".join(g for g in orgasm_groups if g),
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="ubetra-orgasm-history.csv"'},
     )
 
 

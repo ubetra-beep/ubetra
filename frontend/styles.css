@@ -5031,3 +5031,81 @@ details[open] summary {
   padding: 0.85rem 1rem 0.9rem;
 }
 
+.task-compact {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.15rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.task-compact.done { opacity: 0.7; }
+.task-compact-title {
+  flex: 1 1 8rem;
+  min-width: 0;
+  font-weight: 600;
+}
+.task-chip,
+.task-goal-chip {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+}
+.task-chip-late { color: var(--danger); border-color: var(--danger); }
+.task-chip-pending { color: var(--accent); }
+.task-goal-chip { cursor: pointer; color: var(--text); }
+.goal-fold > summary {
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.goal-linked { margin-top: 0.35rem; }
+.sheet-wrap { overflow-x: auto; }
+.sheet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.sheet-table th,
+.sheet-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.3rem 0.4rem;
+  text-align: left;
+  vertical-align: top;
+}
+.sheet-table th { cursor: pointer; white-space: nowrap; }
+.sheet-cell-btn {
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: text;
+  width: 100%;
+}
+.sheet-table input,
+.sheet-table select {
+  width: 100%;
+  min-width: 6rem;
+}
+.sheet-pending {
+  position: sticky;
+  bottom: 0.5rem;
+  z-index: 2;
+}
+.sheet-sub td { background: var(--bg); }
+.sheet-expand {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+

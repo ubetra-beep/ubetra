@@ -29,6 +29,8 @@ from ..schemas import (
     ChastityBreakFinish,
     ChastityBreakOut,
     ChastityBreakUpdate,
+    ChastityBulkIn,
+    ChastityBulkOut,
     ChastityHistoricalCreate,
     ChastityLimitProposalCreate,
     ChastityLimitProposalOut,
@@ -855,6 +857,58 @@ def download_historical_csv_template(
     )
 
 
+def _csv_stamp(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return value.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+@router.get("/{dynamic_id}/chastity/historical/export-csv")
+def export_chastity_history_csv(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    require_chastity_feature(db, dynamic_id)
+    get_membership(dynamic_id, user, db)
+    memberships = _membership_map(db, dynamic_id)
+    lockups = (
+        db.query(ChastityLockup)
+        .options(joinedload(ChastityLockup.breaks))
+        .filter(ChastityLockup.dynamic_id == dynamic_id)
+        .order_by(ChastityLockup.started_at.asc())
+        .all()
+    )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(HISTORICAL_CSV_HEADERS)
+    for lockup in lockups:
+        sub = memberships.get(lockup.for_membership_id)
+        name = sub.display_name if sub else ""
+        writer.writerow([
+            "lock",
+            name,
+            _csv_stamp(lockup.started_at),
+            _csv_stamp(lockup.ended_at),
+            (lockup.device_notes or "").replace("\n", " ").strip(),
+            ",".join(tags_to_list(lockup.tags or "")),
+        ])
+        for brk in sorted(lockup.breaks or [], key=lambda b: b.started_at or datetime.min):
+            writer.writerow([
+                "unlock",
+                name,
+                _csv_stamp(brk.started_at),
+                _csv_stamp(brk.ended_at),
+                (brk.note or "").replace("\n", " ").strip(),
+                ",".join(tags_to_list(brk.tags or "")),
+            ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="ubetra-chastity-history.csv"'},
+    )
+
+
 @router.post("/{dynamic_id}/chastity/historical/import-csv")
 async def import_historical_csv(
     dynamic_id: str,
@@ -1132,43 +1186,7 @@ def cancel_lockup(
     require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     lockup = _load_lockup(db, dynamic_id, lockup_id)
-    is_subject = membership.id == lockup.for_membership_id
-    if not is_dominant(membership) and not is_subject:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not allowed to remove this lockup.",
-        )
-
-    from ..models import FeelingCheckIn
-    from ..services.chat_events import post_activity_event
-
-    subject_id = lockup.for_membership_id
-    sub = db.get(Membership, subject_id)
-    sub_name = sub.display_name if sub else "partner"
-    started = lockup.started_at
-    when = started.strftime("%Y-%m-%d %H:%M") if started else ""
-
-    # Clear FKs that would block delete
-    db.query(FeelingCheckIn).filter(FeelingCheckIn.chastity_lockup_id == lockup.id).update(
-        {FeelingCheckIn.chastity_lockup_id: None},
-        synchronize_session=False,
-    )
-    db.query(ChastityBreak).filter(ChastityBreak.lockup_id == lockup.id).delete(
-        synchronize_session=False
-    )
-    db.delete(lockup)
-
-    if not is_dominant(membership):
-        post_activity_event(
-            db,
-            dynamic_id=dynamic_id,
-            actor=membership,
-            action="lockup_deleted",
-            text=f"{sub_name} deleted a lockup period{f' · {when}' if when else ''}",
-            path=f"/dynamic/{dynamic_id}/chastity",
-            link_label="Open chastity",
-            subject_membership_id=subject_id,
-        )
+    _remove_lockup(db, dynamic_id, lockup, membership)
     db.commit()
 
 
@@ -1309,22 +1327,21 @@ def finish_break(
     return _lockup_out(lockup, _membership_map(db, dynamic_id))
 
 
-@router.patch("/{dynamic_id}/chastity/{lockup_id}", response_model=ChastityLockupOut)
-def update_lockup(
-    dynamic_id: str,
-    lockup_id: str,
-    payload: ChastityLockupUpdate,
-    user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> ChastityLockupOut:
-    require_chastity_feature(db, dynamic_id)
-    get_membership(dynamic_id, user, db)
-    lockup = _load_lockup(db, dynamic_id, lockup_id)
+def _apply_lockup_update(db: Session, dynamic_id: str, lockup: ChastityLockup, payload, membership: Membership) -> None:
     if lockup.status == LockupStatus.active and active_break(lockup):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Finish the active break before editing this lockup.",
         )
+
+    new_for = getattr(payload, "for_membership_id", None)
+    if new_for:
+        target = db.get(Membership, new_for)
+        if target is None or target.dynamic_id != dynamic_id or target.role != PartnerRole.submissive:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid partner")
+        if not target.chastity_enabled:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Chastity is not enabled for that partner")
+        lockup.for_membership_id = target.id
 
     if payload.started_at is not None:
         lockup.started_at = payload.started_at
@@ -1376,6 +1393,169 @@ def update_lockup(
         exclude_id=lockup.id,
     )
 
+
+def _apply_break_update(db: Session, dynamic_id: str, lockup: ChastityLockup, brk: ChastityBreak, payload, membership: Membership) -> None:
+    target = db.get(Membership, lockup.for_membership_id)
+    if not is_dominant(membership) and (target is None or membership.id != target.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to edit this unlock")
+
+    if payload.started_at is not None:
+        brk.started_at = payload.started_at
+    if payload.clear_ended_at:
+        brk.ended_at = None
+    elif payload.ended_at is not None:
+        brk.ended_at = payload.ended_at
+    if payload.note is not None:
+        brk.note = payload.note.strip()
+    if payload.break_reason is not None:
+        brk.break_reason = payload.break_reason.strip()
+    if payload.break_type is not None:
+        brk.break_type = _parse_break_type(payload.break_type)
+    if payload.tags is not None:
+        brk.tags = tags_to_string(payload.tags)
+        dynamic = db.get(Dynamic, dynamic_id)
+        if dynamic is not None:
+            merge_chastity_tag_presets(dynamic, payload.tags)
+
+    from ..services.chastity import validate_break_times
+
+    validate_break_times(lockup, started_at=brk.started_at, ended_at=brk.ended_at)
+
+
+def _remove_lockup(db: Session, dynamic_id: str, lockup: ChastityLockup, membership: Membership) -> None:
+    is_subject = membership.id == lockup.for_membership_id
+    if not is_dominant(membership) and not is_subject:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to remove this lockup.",
+        )
+
+    from ..models import FeelingCheckIn
+    from ..services.chat_events import post_activity_event
+
+    subject_id = lockup.for_membership_id
+    sub = db.get(Membership, subject_id)
+    sub_name = sub.display_name if sub else "partner"
+    started = lockup.started_at
+    when = started.strftime("%Y-%m-%d %H:%M") if started else ""
+
+    db.query(FeelingCheckIn).filter(FeelingCheckIn.chastity_lockup_id == lockup.id).update(
+        {FeelingCheckIn.chastity_lockup_id: None},
+        synchronize_session=False,
+    )
+    db.query(ChastityBreak).filter(ChastityBreak.lockup_id == lockup.id).delete(
+        synchronize_session=False
+    )
+    db.delete(lockup)
+
+    if not is_dominant(membership):
+        post_activity_event(
+            db,
+            dynamic_id=dynamic_id,
+            actor=membership,
+            action="lockup_deleted",
+            text=f"{sub_name} deleted a lockup period{f' · {when}' if when else ''}",
+            path=f"/dynamic/{dynamic_id}/chastity",
+            link_label="Open chastity",
+            subject_membership_id=subject_id,
+        )
+
+
+def _remove_break(db: Session, dynamic_id: str, lockup: ChastityLockup, brk: ChastityBreak, membership: Membership) -> None:
+    dynamic = db.get(Dynamic, dynamic_id)
+    allow_sub = bool(getattr(dynamic, "chastity_sub_can_delete_breaks", True)) if dynamic else True
+    is_subject = membership.id == lockup.for_membership_id
+    if not is_dominant(membership):
+        if not is_subject:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not allowed to delete this unlock entry.",
+            )
+        if not allow_sub:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Keyholder has disallowed deleting temporary unlock logs.",
+            )
+
+    reason = (brk.break_reason or "temporary unlock").strip()
+    started = brk.started_at
+    db.delete(brk)
+    if not is_dominant(membership):
+        from ..services.chat_events import post_activity_event
+
+        sub = db.get(Membership, lockup.for_membership_id)
+        sub_name = sub.display_name if sub else "partner"
+        when = started.strftime("%Y-%m-%d %H:%M") if started else ""
+        post_activity_event(
+            db,
+            dynamic_id=dynamic_id,
+            actor=membership,
+            action="temp_unlock_deleted",
+            text=f"{sub_name} deleted a temporary unlock log ({reason}{f' · {when}' if when else ''})",
+            path=f"/dynamic/{dynamic_id}/chastity",
+            link_label="Open chastity",
+            subject_membership_id=lockup.for_membership_id,
+        )
+
+
+def _apply_chastity_bulk(db: Session, dynamic_id: str, membership: Membership, payload: ChastityBulkIn) -> ChastityBulkOut:
+    if not payload.updates and not payload.deletes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nothing to save")
+    deleted_ids = {item for item in payload.deletes if item}
+    for lockup_id in deleted_ids:
+        lockup = _load_lockup(db, dynamic_id, lockup_id)
+        _remove_lockup(db, dynamic_id, lockup, membership)
+    updated = 0
+    for item in payload.updates:
+        if item.id in deleted_ids:
+            continue
+        lockup = _load_lockup(db, dynamic_id, item.id)
+        for break_id in item.delete_breaks:
+            brk = next((b for b in lockup.breaks if b.id == break_id), None)
+            if brk is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Break not found")
+            _remove_break(db, dynamic_id, lockup, brk, membership)
+        db.flush()
+        lockup = _load_lockup(db, dynamic_id, item.id)
+        _apply_lockup_update(db, dynamic_id, lockup, item, membership)
+        for br_payload in item.breaks:
+            brk = next((b for b in lockup.breaks if b.id == br_payload.id), None)
+            if brk is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Break not found")
+            _apply_break_update(db, dynamic_id, lockup, brk, br_payload, membership)
+        updated += 1
+    from ..services.chastity_orgasm_repair import repair_missed_orgasm_releases
+
+    db.flush()
+    repair_missed_orgasm_releases(db, dynamic_id)
+    db.commit()
+    return ChastityBulkOut(updated=updated, deleted=len(deleted_ids))
+
+
+@router.patch("/{dynamic_id}/chastity/bulk", response_model=ChastityBulkOut)
+def bulk_update_lockups(
+    dynamic_id: str,
+    payload: ChastityBulkIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ChastityBulkOut:
+    require_chastity_feature(db, dynamic_id)
+    membership = get_membership(dynamic_id, user, db)
+    return _apply_chastity_bulk(db, dynamic_id, membership, payload)
+
+
+@router.patch("/{dynamic_id}/chastity/{lockup_id}", response_model=ChastityLockupOut)
+def update_lockup(
+    dynamic_id: str,
+    lockup_id: str,
+    payload: ChastityLockupUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ChastityLockupOut:
+    require_chastity_feature(db, dynamic_id)
+    membership = get_membership(dynamic_id, user, db)
+    lockup = _load_lockup(db, dynamic_id, lockup_id)
+    _apply_lockup_update(db, dynamic_id, lockup, payload, membership)
     db.commit()
     lockup = _load_lockup(db, dynamic_id, lockup.id)
     return _lockup_out(lockup, _membership_map(db, dynamic_id))
@@ -1492,40 +1672,7 @@ def delete_break(
     brk = next((b for b in lockup.breaks if b.id == break_id), None)
     if brk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Break not found")
-    dynamic = db.get(Dynamic, dynamic_id)
-    allow_sub = bool(getattr(dynamic, "chastity_sub_can_delete_breaks", True)) if dynamic else True
-    is_subject = membership.id == lockup.for_membership_id
-    if not is_dominant(membership):
-        if not is_subject:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not allowed to delete this unlock entry.",
-            )
-        if not allow_sub:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Keyholder has disallowed deleting temporary unlock logs.",
-            )
-
-    reason = (brk.break_reason or "temporary unlock").strip()
-    started = brk.started_at
-    db.delete(brk)
-    if not is_dominant(membership):
-        from ..services.chat_events import post_activity_event
-
-        sub = db.get(Membership, lockup.for_membership_id)
-        sub_name = sub.display_name if sub else "partner"
-        when = started.strftime("%Y-%m-%d %H:%M") if started else ""
-        post_activity_event(
-            db,
-            dynamic_id=dynamic_id,
-            actor=membership,
-            action="temp_unlock_deleted",
-            text=f"{sub_name} deleted a temporary unlock log ({reason}{f' · {when}' if when else ''})",
-            path=f"/dynamic/{dynamic_id}/chastity",
-            link_label="Open chastity",
-            subject_membership_id=lockup.for_membership_id,
-        )
+    _remove_break(db, dynamic_id, lockup, brk, membership)
     db.commit()
 
 
@@ -1547,32 +1694,7 @@ def update_break(
     brk = next((b for b in lockup.breaks if b.id == break_id), None)
     if brk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Break not found")
-
-    target = db.get(Membership, lockup.for_membership_id)
-    if not is_dominant(membership) and (target is None or membership.id != target.id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to edit this unlock")
-
-    if payload.started_at is not None:
-        brk.started_at = payload.started_at
-    if payload.clear_ended_at:
-        brk.ended_at = None
-    elif payload.ended_at is not None:
-        brk.ended_at = payload.ended_at
-    if payload.note is not None:
-        brk.note = payload.note.strip()
-    if payload.break_reason is not None:
-        brk.break_reason = payload.break_reason.strip()
-    if payload.break_type is not None:
-        brk.break_type = _parse_break_type(payload.break_type)
-    if payload.tags is not None:
-        brk.tags = tags_to_string(payload.tags)
-        dynamic = db.get(Dynamic, dynamic_id)
-        if dynamic is not None:
-            merge_chastity_tag_presets(dynamic, payload.tags)
-
-    from ..services.chastity import validate_break_times
-
-    validate_break_times(lockup, started_at=brk.started_at, ended_at=brk.ended_at)
+    _apply_break_update(db, dynamic_id, lockup, brk, payload, membership)
     db.commit()
     lockup = _load_lockup(db, dynamic_id, lockup.id)
     return _lockup_out(lockup, _membership_map(db, dynamic_id))

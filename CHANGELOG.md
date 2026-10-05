@@ -3,6 +3,19 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.12] — 2026-10-05
+
+### Added
+- Tasks and goals use compact rows. Tasks are grouped into Overdue, Due today, Upcoming, No due date, Needs approval, and Completed (closed until you open it). Open and closed sections are remembered on this device. Tap a row for the existing actions, including the overdue extend/cancel sheet
+- Each goal is a collapsible card with progress and the tasks and acts linked by its task-completed tag. Task rows show a goal chip that jumps to that goal. Everything else sits in Unassigned
+- Desktop layout (window 1100px or wider) for Chastity, Orgasm, and Tasks: sortable spreadsheet tables, click-to-edit cells, and a pending-changes bar that saves one batch. Lockup rows expand to an editable breaks table. Row checkboxes cover bulk delete, tags, and shifting times; tasks also cover complete, pause, reassign, due-date shift, and reminders
+- `PATCH /api/dynamics/{id}/chastity/bulk` and `PATCH /api/dynamics/{id}/tracking/bulk` apply update and delete lists in one transaction, then run the orgasm/lockup interval repair
+- `PATCH /api/dynamics/{id}/tasks/bulk-update` for inline and bulk task edits
+- Export CSV next to the Chastity and Orgasm CSV import, using the same columns as the template so a sheet can round-trip through Excel
+
+### Changed
+- Service worker cache `ubetra-v147`
+
 ## [1.11] — 2026-10-05
 
 ### Added
