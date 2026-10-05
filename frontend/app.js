@@ -3305,6 +3305,146 @@ function buildDevicePermissionsCard() {
   return card;
 }
 
+function buildEdgeGuardCard() {
+  const native = isNativeApp();
+  const status = el("p", { className: "muted" }, native ? "Loading Edge Guard…" : "");
+  const listEl = el("div", { className: "stack" });
+  const domainInput = el("input", {
+    type: "text",
+    placeholder: "example.com",
+    autocomplete: "off",
+    spellcheck: "false",
+  });
+  const enableToggle = el("input", { type: "checkbox" });
+  const enableLabel = el("label", { className: "row wrap", style: "gap:0.5rem;align-items:center;" }, [
+    enableToggle,
+    el("span", {}, "Block websites on this phone"),
+  ]);
+
+  const card = el("div", { className: "card stack", id: "edge-guard-card" }, [
+    el("h2", {}, "Edge Guard"),
+    el(
+      "p",
+      { className: "muted" },
+      native
+        ? "Local DNS filter that blocks sites system-wide — including Microsoft Edge’s long-press Preview. Uses a local VPN (traffic stays on this phone; nothing is sent to UBETRA servers)."
+        : "Website blocking needs the UBETRA Android app. Install the APK from this Settings page, then open Edge Guard there."
+    ),
+    status,
+  ]);
+
+  if (!native) {
+    return card;
+  }
+
+  card.appendChild(enableLabel);
+  card.appendChild(el("label", {}, ["Add website", domainInput]));
+  card.appendChild(el("div", { className: "row wrap" }, [
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: async () => {
+        const plugin = nativePlugin("UbetraEdgeGuard");
+        if (!plugin?.addBlockedDomain) {
+          showToast("Edge Guard plugin missing — rebuild the Android APK");
+          return;
+        }
+        const domain = (domainInput.value || "").trim();
+        if (!domain) {
+          showToast("Enter a domain like reddit.com");
+          return;
+        }
+        try {
+          await plugin.addBlockedDomain({ domain });
+          domainInput.value = "";
+          showToast(`Blocked ${domain}`);
+          await refresh();
+        } catch (err) {
+          showToast(err.message || "Could not add site");
+        }
+      },
+    }, "Add"),
+  ]));
+  card.appendChild(listEl);
+  card.appendChild(permHowTo([
+    "Add domains you want blocked (e.g. reddit.com). Subdomains are included.",
+    "Turn on Block websites. Android will ask to allow a VPN connection — Allow. This is a local DNS sinkhole, not a remote VPN.",
+    "Edge / Chrome Secure DNS (DoH) endpoints are blocked automatically so Preview cannot bypass the list.",
+    "A low-priority Edge Guard notification stays while filtering is on. Reboot keeps it if you left it enabled.",
+  ]));
+
+  enableToggle.addEventListener("change", async () => {
+    const plugin = nativePlugin("UbetraEdgeGuard");
+    if (!plugin?.setEnabled) return;
+    try {
+      const out = await plugin.setEnabled({ enabled: enableToggle.checked });
+      if (enableToggle.checked && out && out.vpnPermissionGranted === false) {
+        showToast("VPN permission is required for Edge Guard");
+        enableToggle.checked = false;
+      } else if (enableToggle.checked && !out?.running && (out?.domainCount || 0) === 0) {
+        showToast("Add at least one website first");
+        enableToggle.checked = false;
+      } else {
+        showToast(enableToggle.checked ? "Edge Guard on" : "Edge Guard off");
+      }
+      await refresh();
+    } catch (err) {
+      enableToggle.checked = false;
+      showToast(err.message || "Could not change Edge Guard");
+      await refresh();
+    }
+  });
+
+  async function refresh() {
+    const plugin = nativePlugin("UbetraEdgeGuard");
+    if (!plugin?.getStatus) {
+      status.textContent = "Edge Guard is not in this APK build. Rebuild with mobile/scripts/build-apk.sh.";
+      enableToggle.disabled = true;
+      return;
+    }
+    try {
+      const info = await plugin.getStatus();
+      enableToggle.checked = !!info.enabled;
+      enableToggle.disabled = false;
+      const parts = [];
+      if (info.running) parts.push("filtering now");
+      else if (info.enabled) parts.push("enabled, waiting for VPN");
+      else parts.push("off");
+      parts.push(`${info.domainCount || 0} site(s)`);
+      if (!info.vpnPermissionGranted && info.enabled) parts.push("needs VPN permission");
+      status.textContent = parts.join(" · ");
+      const domains = info.domains || [];
+      listEl.replaceChildren(
+        domains.length
+          ? el("ul", { className: "stack", style: "list-style:none;padding:0;margin:0;" }, domains.map((d) =>
+            el("li", { className: "row wrap", style: "justify-content:space-between;gap:0.5rem;" }, [
+              el("code", {}, d),
+              el("button", {
+                type: "button",
+                className: "ghost-btn",
+                onClick: async () => {
+                  try {
+                    await plugin.removeBlockedDomain({ domain: d });
+                    showToast(`Removed ${d}`);
+                    await refresh();
+                  } catch (err) {
+                    showToast(err.message || "Could not remove");
+                  }
+                },
+              }, "Remove"),
+            ])
+          ))
+          : el("p", { className: "muted" }, "No sites yet. Add a domain above.")
+      );
+    } catch (err) {
+      status.textContent = err.message || "Could not read Edge Guard status";
+    }
+  }
+
+  refresh();
+  return card;
+}
+
 function isAndroidBrowser() {
   return /Android/i.test(navigator.userAgent || "");
 }
@@ -21034,6 +21174,7 @@ function renderSettings() {
       ]));
       appendAndroidAppCard(stack, androidInfo);
       stack.appendChild(buildDevicePermissionsCard());
+      stack.appendChild(buildEdgeGuardCard());
 
       const usernameInput = el("input", {
         type: "text",
@@ -22704,7 +22845,7 @@ function renderSettings() {
         "This dynamic": "The same feature index as onboarding, plus settings for modules you turned on.",
         "AI & assistant": "Gemini: Google AI Studio → Create API key. OpenAI: platform.openai.com → API keys. Powers scenes, interviews, and Assistant Domme.",
         "Chat & privacy": "History retention, encryption, and push for this device.",
-        "This device": "Camera, microphone, notifications, and Android extras.",
+        "This device": "Camera, microphone, notifications, Android extras, and Edge Guard.",
         Help: "In-app wiki for this install.",
       };
       const titleMap = {
@@ -22733,6 +22874,7 @@ function renderSettings() {
         "Android app": "This device",
         "Update app": "This device",
         Permissions: "This device",
+        "Edge Guard": "This device",
         Wiki: "Help",
         About: "Help",
       };

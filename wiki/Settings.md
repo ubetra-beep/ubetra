@@ -14,7 +14,7 @@ Six groups (not a long list of accordions):
 | **This dynamic** | Same **feature index** as onboarding, plus settings for modules that are on |
 | **Chat & privacy** | Retention, encryption, push |
 | **AI & assistant** | Collapsed **LLM API Configuration** (keys + named connections), routing, Assistant Domme |
-| **This device** | Permissions, Android, Google Tasks (hidden until ready) |
+| **This device** | Permissions, Android, Edge Guard, Google Tasks (hidden until ready) |
 | **Help** | Wiki, About |
 
 For the full module map and “how to use it,” see **[Features & Settings](Features-and-Settings)**.
@@ -62,7 +62,7 @@ Feature toggles are Dom-controlled except partner-enableable sleep / cycle / man
 
 ## This device
 
-Camera, microphone, notifications, Android extras. Google Tasks UI is currently hidden until ready. Sleep/cycle Health Connect lives in the Android APK. Garmin OAuth appears when Sleep tracking is enabled.
+Camera, microphone, notifications, Android extras. **Edge Guard** (Android APK): local DNS filter that blocks chosen websites system-wide, including Microsoft Edge long-press Preview. Google Tasks UI is currently hidden until ready. Sleep/cycle Health Connect lives in the Android APK. Garmin OAuth appears when Sleep tracking is enabled.
 
 ## Help
 

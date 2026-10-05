@@ -13,6 +13,7 @@
     "@capacitor/app": "^7.0.1",
     "@capacitor/core": "^7.4.2",
     "@capacitor/push-notifications": "^7.0.1",
+    "@ubetra/edge-guard": "file:plugins/ubetra-edge-guard",
     "@ubetra/health-connect": "file:plugins/ubetra-health-connect"
   },
   "devDependencies": {
