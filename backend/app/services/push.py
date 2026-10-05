@@ -394,3 +394,98 @@ def notify_keyholders_push(
         dynamic_id=dynamic_id,
         kind="chat",
     )
+
+
+def notify_user_devices(
+    db: Session,
+    *,
+    user_id: str,
+    title: str,
+    body: str,
+    url: str,
+    tag: str,
+    kind: str = "chat",
+    respect_push_enabled: bool = True,
+) -> int:
+    """Send web + native push to one user. Returns successful delivery count."""
+    user = db.get(User, user_id)
+    if user is None:
+        return 0
+    if respect_push_enabled and not bool(getattr(user, "push_enabled", True)):
+        return 0
+
+    sent = 0
+    stale: list[PushSubscription] = []
+    stale_native: list[NativePushToken] = []
+    payload = {
+        "title": title[:80],
+        "body": (body or "")[:200],
+        "url": url,
+        "dynamic_id": "",
+        "tag": tag[:32],
+        "kind": kind,
+    }
+    for sub in db.query(PushSubscription).filter(PushSubscription.user_id == user_id).all():
+        result = send_web_push(sub, payload)
+        if result == "ok":
+            sent += 1
+        elif result == "stale":
+            stale.append(sub)
+    for native in db.query(NativePushToken).filter(NativePushToken.user_id == user_id).all():
+        result = send_fcm_data_message(
+            native.token,
+            title=payload["title"],
+            body=payload["body"],
+            data={
+                "url": url,
+                "dynamic_id": "",
+                "tag": payload["tag"],
+                "kind": kind,
+            },
+            kind=kind if kind in ("call", "task", "chat", "reload", "password_reset") else "chat",
+        )
+        if result == "ok":
+            sent += 1
+        elif result == "stale":
+            stale_native.append(native)
+    for sub in stale:
+        db.delete(sub)
+    for native in stale_native:
+        db.delete(native)
+    if stale or stale_native:
+        db.commit()
+    return sent
+
+
+def notify_app_reload(db: Session, *, user_id: str) -> int:
+    """Ask a user's devices to clear the service-worker cache and reload."""
+    return notify_user_devices(
+        db,
+        user_id=user_id,
+        title="UBETRA update",
+        body="Tap to refresh the app and load the latest version.",
+        url="/#/home",
+        tag="ubetra-reload",
+        kind="reload",
+        respect_push_enabled=False,
+    )
+
+
+def notify_password_reset_push(
+    db: Session,
+    *,
+    user_id: str,
+    code: str,
+    reset_url: str,
+) -> int:
+    """Deliver a password-reset code/link when SMTP is unavailable or as a backup."""
+    return notify_user_devices(
+        db,
+        user_id=user_id,
+        title="UBETRA password reset",
+        body=f"Code {code} — tap to set a new password (expires soon).",
+        url=reset_url,
+        tag="ubetra-pw-reset",
+        kind="password_reset",
+        respect_push_enabled=False,
+    )

@@ -75,6 +75,10 @@ def send_fcm_data_message(
             channel = "ubetra_tasks"
             ttl = "86400s"
             notif_priority = "PRIORITY_HIGH"
+        elif kind in ("reload", "password_reset"):
+            channel = "ubetra_chat"
+            ttl = "3600s"
+            notif_priority = "PRIORITY_HIGH"
         else:
             channel = "ubetra_chat"
             ttl = "86400s"

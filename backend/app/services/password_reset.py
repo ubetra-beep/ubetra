@@ -78,14 +78,39 @@ def request_password_reset(db: Session, email: str) -> dict:
         f"This expires in {RESET_TTL_MINUTES} minutes.\n"
         "If you did not request a reset, you can ignore this message.\n"
     )
-    send_email(to_email=normalized, subject="Reset your UBETRA password", body=body)
-    if settings.mfa_log_codes or not smtp_configured():
-        logger.info(
-            "Password reset for %s (%s): code=%s token=%s",
+    mailed = False
+    if smtp_configured() and (settings.smtp_password or not settings.smtp_user):
+        try:
+            send_email(to_email=normalized, subject="Reset your UBETRA password", body=body)
+            mailed = True
+        except Exception as exc:
+            logger.warning("Password reset email failed for %s: %s", normalized, exc)
+
+    # Always try device push as backup (and primary when SMTP is off).
+    pushed = 0
+    try:
+        from .push import notify_password_reset_push
+
+        # Relative URL works for web/native clients on this origin.
+        pushed = notify_password_reset_push(
+            db,
+            user_id=user.id,
+            code=code,
+            reset_url=f"/#/reset-password?email={quote(normalized)}&token={quote(token)}&code={quote(code)}",
+        )
+    except Exception as exc:
+        logger.warning("Password reset push failed for %s: %s", user.username, exc)
+
+    if settings.mfa_log_codes or not mailed:
+        # WARNING so codes appear in default uvicorn/docker logs when email fails.
+        logger.warning(
+            "Password reset for %s (%s): code=%s token=%s mailed=%s pushed=%s",
             user.username,
             normalized,
             code,
             token,
+            mailed,
+            pushed,
         )
     return GENERIC_OK
 

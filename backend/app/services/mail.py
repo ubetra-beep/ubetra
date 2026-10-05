@@ -12,7 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 def smtp_configured() -> bool:
-    return bool(settings.smtp_host and settings.smtp_from)
+    """True when SMTP can plausibly send (host/from set; password if user set)."""
+    if not (settings.smtp_host and settings.smtp_from):
+        return False
+    if settings.smtp_user and not settings.smtp_password:
+        return False
+    return True
 
 
 def send_email(*, to_email: str, subject: str, body: str) -> None:
@@ -26,16 +31,24 @@ def send_email(*, to_email: str, subject: str, body: str) -> None:
     msg["To"] = to_email
     msg.set_content(body)
 
-    if settings.smtp_tls:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
-            server.ehlo()
+    host = settings.smtp_host
+    port = int(settings.smtp_port or 587)
+    user = settings.smtp_user or ""
+    password = settings.smtp_password or ""
+    use_ssl = (not settings.smtp_tls) or port == 465
+
+    if use_ssl and port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=30) as server:
+            if user:
+                server.login(user, password)
+            server.send_message(msg)
+        return
+
+    with smtplib.SMTP(host, port, timeout=30) as server:
+        server.ehlo()
+        if settings.smtp_tls:
             server.starttls()
             server.ehlo()
-            if settings.smtp_user:
-                server.login(settings.smtp_user, settings.smtp_password)
-            server.send_message(msg)
-    else:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
-            if settings.smtp_user:
-                server.login(settings.smtp_user, settings.smtp_password)
-            server.send_message(msg)
+        if user:
+            server.login(user, password)
+        server.send_message(msg)
