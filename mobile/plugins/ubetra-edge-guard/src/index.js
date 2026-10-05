@@ -7,6 +7,7 @@ const UbetraEdgeGuard = registerPlugin("UbetraEdgeGuard", {
       enabled: false,
       running: false,
       vpnPermissionGranted: false,
+      locked: false,
       domainCount: 0,
       domains: [],
     }),

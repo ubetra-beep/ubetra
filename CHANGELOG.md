@@ -3,6 +3,19 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.13] — 2026-10-05
+
+### Added
+- Edge Guard blocklist is stored for the dynamic. The sub or keyholder can add sites (including a bulk import). The keyholder can remove sites, lock the list, and require the filter to stay on
+- While the list is locked, the sub's Android app rejects turning Edge Guard off, removing a site, or replacing the list with a shorter one. The sub sees **Request removal** instead. The keyholder approves or denies that from the inbox or from Settings, with a push either way
+- The phone checks in on open, resume, and the reload push. If Edge Guard is reported off, or the phone has not checked in for 6 hours, the keyholder is pushed once per episode. Uninstalling the app or revoking the VPN can only be detected
+- Keyholder **Edge Guard list** in the dynamic's settings, including on the web
+- File import on the Edge Guard card for a Mindful export plus JSON, CSV, or TXT. It looks for domain-like strings in known Mindful JSON fields first (`blockedWebsites`, `hosts`, `domains`, `website`, `host`, `url`, and similar), then falls back to a text scan. **Those field names are unconfirmed until a sample Mindful export is provided**
+- Android APK **0.88.0** / versionCode **88**
+
+### Changed
+- Service worker cache `ubetra-v148`
+
 ## [1.12] — 2026-10-05
 
 ### Added

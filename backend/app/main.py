@@ -43,6 +43,7 @@ from .routers import (
     tasks,
     vault,
     video,
+    edge_guard,
 )
 
 HAR_CATALOG = Path(
@@ -94,6 +95,7 @@ app.include_router(push.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(video.router, prefix="/api")
+app.include_router(edge_guard.router, prefix="/api")
 
 
 @app.on_event("startup")
@@ -112,8 +114,10 @@ def on_startup() -> None:
     finally:
         db.close()
     from .services.task_notify import start_task_notify_loop
+    from .services.edge_guard import start_edge_guard_loop
 
     start_task_notify_loop()
+    start_edge_guard_loop()
 
 
 @app.get("/api/health")

@@ -1231,3 +1231,47 @@ class AssistantChangeLog(Base):
 
     dynamic: Mapped["Dynamic"] = relationship(back_populates="assistant_change_logs")
 
+
+class EdgeGuardDomain(Base):
+    """Website blocklist row for one member's Edge Guard (usually the sub's phone)."""
+
+    __tablename__ = "edge_guard_domains"
+    __table_args__ = (
+        UniqueConstraint(
+            "dynamic_id",
+            "membership_id",
+            "domain",
+            name="uq_edge_guard_domain",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"), index=True)
+    domain: Mapped[str] = mapped_column(String(253))
+    added_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    removal_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class EdgeGuardPolicy(Base):
+    """Per-membership Edge Guard lock, required-on flag, and last phone check-in."""
+
+    __tablename__ = "edge_guard_policy"
+    __table_args__ = (
+        UniqueConstraint("dynamic_id", "membership_id", name="uq_edge_guard_policy"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"), index=True)
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    require_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str] = mapped_column(Text, default="{}")
+    # Set when the keyholder was told about this off/stale episode. Cleared when it ends.
+    off_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    stale_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+

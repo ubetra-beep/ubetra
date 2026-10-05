@@ -1567,3 +1567,70 @@ def run_migrations() -> None:
     }
     if dyn_feat_cols and "features_onboarded" not in dyn_feat_cols:
       conn.execute(text("ALTER TABLE dynamics ADD COLUMN features_onboarded BOOLEAN DEFAULT 0"))
+
+    tables_edge = {
+      row[0]
+      for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    }
+    if "edge_guard_domains" not in tables_edge:
+      conn.execute(
+        text(
+          "CREATE TABLE edge_guard_domains ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "membership_id VARCHAR(36) NOT NULL,"
+          "domain VARCHAR(253) NOT NULL,"
+          "added_by VARCHAR(36) DEFAULT '',"
+          "created_at DATETIME,"
+          "removal_requested_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(
+        text(
+          "CREATE UNIQUE INDEX IF NOT EXISTS uq_edge_guard_domain "
+          "ON edge_guard_domains (dynamic_id, membership_id, domain)"
+        )
+      )
+      conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_edge_guard_domains_dynamic_id ON edge_guard_domains (dynamic_id)")
+      )
+      conn.execute(
+        text(
+          "CREATE INDEX IF NOT EXISTS ix_edge_guard_domains_membership_id "
+          "ON edge_guard_domains (membership_id)"
+        )
+      )
+    if "edge_guard_policy" not in tables_edge:
+      conn.execute(
+        text(
+          "CREATE TABLE edge_guard_policy ("
+          "id VARCHAR(36) PRIMARY KEY,"
+          "dynamic_id VARCHAR(36) NOT NULL,"
+          "membership_id VARCHAR(36) NOT NULL,"
+          "locked BOOLEAN DEFAULT 0,"
+          "require_enabled BOOLEAN DEFAULT 0,"
+          "last_heartbeat DATETIME,"
+          "last_status TEXT DEFAULT '{}',"
+          "off_notified_at DATETIME,"
+          "stale_notified_at DATETIME,"
+          "created_at DATETIME,"
+          "updated_at DATETIME"
+          ")"
+        )
+      )
+      conn.execute(
+        text(
+          "CREATE UNIQUE INDEX IF NOT EXISTS uq_edge_guard_policy "
+          "ON edge_guard_policy (dynamic_id, membership_id)"
+        )
+      )
+      conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_edge_guard_policy_dynamic_id ON edge_guard_policy (dynamic_id)")
+      )
+      conn.execute(
+        text(
+          "CREATE INDEX IF NOT EXISTS ix_edge_guard_policy_membership_id "
+          "ON edge_guard_policy (membership_id)"
+        )
+      )

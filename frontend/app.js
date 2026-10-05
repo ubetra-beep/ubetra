@@ -666,6 +666,42 @@ function showInboxOverlay(dynamicId, items) {
       log.appendChild(row);
       return;
     }
+    if (item.kind === "edge_guard_removal" && item.edge_guard_domain_id) {
+      const decide = async (decision) => {
+        try {
+          await api(`/dynamics/${dynamicId}/edge-guard/domains/${item.edge_guard_domain_id}/decision`, {
+            method: "POST",
+            body: JSON.stringify({ decision }),
+          });
+        } catch (err) {
+          error.textContent = err.message || "Could not update.";
+          error.classList.remove("hidden");
+          return;
+        }
+        row.remove();
+        showToast(decision === "approve" ? "Site removed" : "Request denied");
+        if (!log.querySelector(".inbox-log-item")) overlay.remove();
+      };
+      const row = el("div", { className: `inbox-log-item ${item.kind}` }, [
+        el("div", { className: "inbox-log-title" }, item.title || "Edge Guard removal requested"),
+        item.body ? el("div", { className: "inbox-log-body" }, item.body) : null,
+        when ? el("div", { className: "inbox-log-when" }, when) : null,
+        el("div", { className: "row wrap" }, [
+          el("button", {
+            type: "button",
+            className: "primary-btn",
+            onClick: () => decide("approve"),
+          }, "Approve removal"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => decide("deny"),
+          }, "Deny"),
+        ]),
+      ]);
+      log.appendChild(row);
+      return;
+    }
     const row = el("button", {
       type: "button",
       className: `inbox-log-item ${item.kind || ""}`,
@@ -3382,140 +3418,584 @@ function buildDevicePermissionsCard() {
   return card;
 }
 
-function buildEdgeGuardCard() {
-  const native = isNativeApp();
-  const status = el("p", { className: "muted" }, native ? "Loading Edge Guard…" : "");
-  const listEl = el("div", { className: "stack" });
-  const domainInput = el("input", {
-    type: "text",
-    placeholder: "example.com",
-    autocomplete: "off",
-    spellcheck: "false",
-  });
-  const enableToggle = el("input", { type: "checkbox" });
-  const enableLabel = el("label", { className: "row wrap", style: "gap:0.5rem;align-items:center;" }, [
-    enableToggle,
-    el("span", {}, "Block websites on this phone"),
-  ]);
+const EDGE_GUARD_LIST_KEYS = new Set([
+  "blockedwebsites", "blockedhosts", "blockeddomains", "blockedurls",
+  "websites", "hosts", "domains", "siteblocklist", "blocklist", "blockedwebs",
+]);
+const EDGE_GUARD_VALUE_KEYS = new Set([
+  "website", "host", "hostname", "domain", "url", "address", "site",
+]);
+const EDGE_GUARD_FILE_TLDS = new Set([
+  "js", "css", "json", "html", "htm", "png", "jpg", "jpeg", "svg", "gif", "webp",
+  "md", "py", "kt", "xml", "txt", "csv", "map", "woff", "woff2", "ttf",
+]);
 
+function normalizeEdgeKey(key) {
+  return String(key || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeEdgeDomain(raw) {
+  let text = String(raw || "").trim().toLowerCase();
+  text = text.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
+  text = text.split("/")[0].split("?")[0].split("#")[0];
+  if (text.includes("@")) text = text.split("@").pop();
+  if (text.startsWith("www.")) text = text.slice(4);
+  if (text.includes(":")) text = text.split(":")[0];
+  text = text.replace(/^\.+|\.+$/g, "");
+  if (!text || text.length > 253) return "";
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(text)) return "";
+  return text;
+}
+
+function pushEdgeDomain(out, seen, raw) {
+  const domain = normalizeEdgeDomain(raw);
+  if (!domain || seen.has(domain)) return;
+  seen.add(domain);
+  out.push(domain);
+}
+
+function harvestMindfulValue(value, out, seen, depth) {
+  if (depth > 8 || value == null) return;
+  if (typeof value === "string") {
+    pushEdgeDomain(out, seen, value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => harvestMindfulValue(item, out, seen, depth + 1));
+    return;
+  }
+  if (typeof value !== "object") return;
+  Object.entries(value).forEach(([key, child]) => {
+    const norm = normalizeEdgeKey(key);
+    if (EDGE_GUARD_VALUE_KEYS.has(norm) && typeof child === "string") {
+      pushEdgeDomain(out, seen, child);
+    } else if (child && typeof child === "object") {
+      harvestMindfulValue(child, out, seen, depth + 1);
+    }
+  });
+}
+
+function collectMindfulFields(node, out, seen, depth) {
+  if (depth > 12 || node == null) return;
+  if (Array.isArray(node)) {
+    node.forEach((item) => collectMindfulFields(item, out, seen, depth + 1));
+    return;
+  }
+  if (typeof node !== "object") return;
+  Object.entries(node).forEach(([key, value]) => {
+    const norm = normalizeEdgeKey(key);
+    if (EDGE_GUARD_LIST_KEYS.has(norm)) {
+      harvestMindfulValue(value, out, seen, 0);
+      return;
+    }
+    if (EDGE_GUARD_VALUE_KEYS.has(norm) && typeof value === "string") {
+      pushEdgeDomain(out, seen, value);
+      return;
+    }
+    if (value && typeof value === "object") collectMindfulFields(value, out, seen, depth + 1);
+  });
+}
+
+function domainsFromRegexScan(text) {
+  const out = [];
+  const seen = new Set();
+  const re = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b/gi;
+  let match;
+  while ((match = re.exec(String(text || "")))) {
+    const domain = normalizeEdgeDomain(match[0]);
+    if (!domain || seen.has(domain)) continue;
+    const tld = domain.split(".").pop();
+    if (EDGE_GUARD_FILE_TLDS.has(tld)) continue;
+    seen.add(domain);
+    out.push(domain);
+  }
+  return out;
+}
+
+function domainsFromEdgeGuardFile(text) {
+  const trimmed = String(text || "").replace(/^\uFEFF/, "").trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const data = JSON.parse(trimmed);
+      const fromFields = [];
+      collectMindfulFields(data, fromFields, new Set(), 0);
+      if (fromFields.length) return fromFields;
+    } catch {
+      /* regex fallback */
+    }
+  }
+  return domainsFromRegexScan(trimmed);
+}
+
+function edgeGuardDynamic(preferredId) {
+  const list = state.dynamics || [];
+  const youAreSub = (d) => (d.partners || []).some((p) => p.is_you && p.role === "submissive");
+  if (preferredId) {
+    const chosen = list.find((d) => d.id === preferredId);
+    if (chosen) return chosen;
+  }
+  const active = list.find((d) => d.id === getActiveDynamicId());
+  if (active && youAreSub(active)) return active;
+  return list.find(youAreSub) || active || list[0] || null;
+}
+
+let edgeGuardSyncing = null;
+function syncEdgeGuardFromServer() {
+  if (!state.token || !isNativeApp()) return Promise.resolve();
+  if (edgeGuardSyncing) return edgeGuardSyncing;
+  edgeGuardSyncing = syncEdgeGuardFromServerInner().finally(() => {
+    edgeGuardSyncing = null;
+  });
+  return edgeGuardSyncing;
+}
+
+async function syncEdgeGuardFromServerInner() {
+  const dynamic = edgeGuardDynamic();
+  const plugin = nativePlugin("UbetraEdgeGuard");
+  if (!dynamic || !plugin?.getStatus || !plugin?.setBlockedDomains) return;
+  const remote = await api(`/dynamics/${dynamic.id}/edge-guard`);
+  let domains = (remote.you?.domains || []).map((row) => row.domain);
+  const seedKey = `ubetra_edge_guard_seeded_${dynamic.id}`;
+  let seeded = false;
+  try {
+    seeded = localStorage.getItem(seedKey) === "1";
+  } catch {
+    seeded = true;
+  }
+  if (!seeded) {
+    const local = await plugin.getStatus().catch(() => ({ domains: [] }));
+    const have = new Set(domains);
+    const extra = (local.domains || [])
+      .map((d) => normalizeEdgeDomain(d))
+      .filter((d) => d && !have.has(d));
+    if (extra.length) {
+      const added = await api(`/dynamics/${dynamic.id}/edge-guard/domains`, {
+        method: "POST",
+        body: JSON.stringify({ domains: extra }),
+      });
+      domains = (added.you?.domains || domains.map((domain) => ({ domain }))).map((row) => row.domain || row);
+    }
+    try {
+      localStorage.setItem(seedKey, "1");
+    } catch {
+      /* ignore */
+    }
+  }
+  await plugin.setBlockedDomains({
+    domains,
+    serverSync: true,
+    locked: !!remote.you?.locked,
+  });
+  const info = await plugin.getStatus();
+  await api(`/dynamics/${dynamic.id}/edge-guard/heartbeat`, {
+    method: "POST",
+    body: JSON.stringify({
+      enabled: !!info.enabled,
+      running: !!info.running,
+      vpn_permission: !!info.vpnPermissionGranted,
+      domain_count: info.domainCount || (info.domains || []).length || 0,
+    }),
+  });
+}
+
+function showEdgeGuardImportPreview(text, existing, onAdd) {
+  const found = domainsFromEdgeGuardFile(text);
+  if (!found.length) {
+    showToast("No domains found in that file");
+    return;
+  }
+  const have = new Set((existing || []).map((d) => normalizeEdgeDomain(d)).filter(Boolean));
+  const checks = found.map((domain) => {
+    const already = have.has(domain);
+    const box = el("input", { type: "checkbox", checked: !already, disabled: already });
+    return { domain, box, already };
+  });
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const addBtn = el("button", {
+    type: "button",
+    className: "primary-btn",
+    onClick: async () => {
+      const picked = checks.filter((row) => row.box.checked && !row.already).map((row) => row.domain);
+      if (!picked.length) {
+        showToast("Select at least one new site");
+        return;
+      }
+      addBtn.disabled = true;
+      try {
+        await onAdd(picked);
+        backdrop.remove();
+      } catch (err) {
+        addBtn.disabled = false;
+        showToast(err.message || "Could not add sites");
+      }
+    },
+  }, "Add selected");
+  backdrop.appendChild(el("div", { className: "card stack modal-card" }, [
+    el("h3", {}, "Import sites"),
+    el("p", { className: "muted" }, "Mindful export field names are unconfirmed until a sample file is available. Known names are tried first, then any domain-like text. Uncheck anything that should stay off the list."),
+    el("div", { className: "stack", style: "max-height:40vh;overflow:auto;" }, checks.map(({ domain, box, already }) =>
+      el("label", { className: "checkbox-label" }, [box, ` ${domain}${already ? " (already blocked)" : ""}`])
+    )),
+    el("div", { className: "row wrap" }, [
+      addBtn,
+      el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Cancel"),
+    ]),
+  ]));
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+}
+
+function edgeGuardImportInput(existing, onAdd) {
+  return el("label", {}, [
+    "Import Mindful, JSON, CSV, or TXT",
+    el("input", {
+      type: "file",
+      accept: ".json,.csv,.txt,.backup,application/json,text/csv,text/plain",
+      onChange: async (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+        if (!file) return;
+        try {
+          showEdgeGuardImportPreview(await file.text(), existing, onAdd);
+        } catch (err) {
+          showToast(err.message || "Could not read that file");
+        }
+      },
+    }),
+  ]);
+}
+
+function edgeGuardDomainList(dynamicId, member, { canRemove, canRequest, onDone }) {
+  const domains = member?.domains || [];
+  if (!domains.length) return el("p", { className: "muted" }, "No sites yet.");
+  return el("ul", { className: "stack", style: "list-style:none;padding:0;margin:0;" }, domains.map((row) => {
+    const actions = [];
+    if (canRemove) {
+      actions.push(el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          try {
+            await api(`/dynamics/${dynamicId}/edge-guard/domains/${row.id}`, { method: "DELETE" });
+            showToast(`Removed ${row.domain}`);
+            await onDone();
+          } catch (err) {
+            showToast(err.message || "Could not remove");
+          }
+        },
+      }, row.removal_requested_at ? "Approve removal" : "Remove"));
+    }
+    if (canRemove && row.removal_requested_at) {
+      actions.push(el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          try {
+            await api(`/dynamics/${dynamicId}/edge-guard/domains/${row.id}/decision`, {
+              method: "POST",
+              body: JSON.stringify({ decision: "deny" }),
+            });
+            showToast("Request denied");
+            await onDone();
+          } catch (err) {
+            showToast(err.message || "Could not deny");
+          }
+        },
+      }, "Deny"));
+    }
+    if (canRequest) {
+      const pending = !!row.removal_requested_at;
+      actions.push(el("button", {
+        type: "button",
+        className: "ghost-btn",
+        disabled: pending,
+        onClick: async () => {
+          try {
+            await api(`/dynamics/${dynamicId}/edge-guard/domains/${row.id}/removal-request`, { method: "POST" });
+            showToast("Removal requested");
+            await onDone();
+          } catch (err) {
+            showToast(err.message || "Could not request removal");
+          }
+        },
+      }, pending ? "Requested" : "Request removal"));
+    }
+    return el("li", { className: "row wrap", style: "justify-content:space-between;gap:0.5rem;" }, [
+      el("code", {}, row.domain),
+      el("div", { className: "row wrap" }, actions),
+    ]);
+  }));
+}
+
+function edgeGuardCheckinLine(member) {
+  if (!member?.last_heartbeat) return "No phone check-in yet.";
+  const st = member.last_status || {};
+  const when = formatLocalDateTime(member.last_heartbeat, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const bits = [`Last check-in ${when}`, st.enabled ? "reported on" : "reported off"];
+  if (st.vpn_permission === false) bits.push("VPN permission missing");
+  bits.push(`${st.domain_count || 0} on the phone`);
+  return bits.join(" · ");
+}
+
+function buildEdgeGuardCard(dynamicId) {
+  const native = isNativeApp();
+  const dynamic = edgeGuardDynamic(dynamicId);
+  const status = el("p", { className: "muted" }, dynamic ? "Loading Edge Guard…" : "");
+  const controls = el("div", { className: "stack" });
   const card = el("div", { className: "card stack", id: "edge-guard-card" }, [
     el("h2", {}, "Edge Guard"),
     el(
       "p",
       { className: "muted" },
       native
-        ? "Local DNS filter that blocks sites system-wide — including Microsoft Edge’s long-press Preview. Uses a local VPN (traffic stays on this phone; nothing is sent to UBETRA servers)."
-        : "Website blocking needs the UBETRA Android app. Install the APK from this Settings page, then open Edge Guard there."
+        ? "Local DNS filter that blocks sites system-wide — including Microsoft Edge’s long-press Preview. The VPN stays on this phone. The blocklist is saved here so a keyholder can lock it."
+        : "Website blocking runs in the UBETRA Android app. Install the APK from this Settings page. A locked list can still be viewed here."
     ),
     status,
+    controls,
   ]);
-
-  if (!native) {
-    return card;
-  }
-
-  card.appendChild(enableLabel);
-  card.appendChild(el("label", {}, ["Add website", domainInput]));
-  card.appendChild(el("div", { className: "row wrap" }, [
-    el("button", {
-      type: "button",
-      className: "primary-btn",
-      onClick: async () => {
-        const plugin = nativePlugin("UbetraEdgeGuard");
-        if (!plugin?.addBlockedDomain) {
-          showToast("Edge Guard plugin missing — rebuild the Android APK");
-          return;
-        }
-        const domain = (domainInput.value || "").trim();
-        if (!domain) {
-          showToast("Enter a domain like reddit.com");
-          return;
-        }
-        try {
-          await plugin.addBlockedDomain({ domain });
-          domainInput.value = "";
-          showToast(`Blocked ${domain}`);
-          await refresh();
-        } catch (err) {
-          showToast(err.message || "Could not add site");
-        }
-      },
-    }, "Add"),
-  ]));
-  card.appendChild(listEl);
-  card.appendChild(permHowTo([
-    "Add domains you want blocked (e.g. reddit.com). Subdomains are included.",
-    "Turn on Block websites. Android will ask to allow a VPN connection — Allow. This is a local DNS sinkhole, not a remote VPN.",
-    "Edge / Chrome Secure DNS (DoH) endpoints are blocked automatically so Preview cannot bypass the list.",
-    "A low-priority Edge Guard notification stays while filtering is on. Reboot keeps it if you left it enabled.",
-  ]));
-
-  enableToggle.addEventListener("change", async () => {
-    const plugin = nativePlugin("UbetraEdgeGuard");
-    if (!plugin?.setEnabled) return;
-    try {
-      const out = await plugin.setEnabled({ enabled: enableToggle.checked });
-      if (enableToggle.checked && out && out.vpnPermissionGranted === false) {
-        showToast("VPN permission is required for Edge Guard");
-        enableToggle.checked = false;
-      } else if (enableToggle.checked && !out?.running && (out?.domainCount || 0) === 0) {
-        showToast("Add at least one website first");
-        enableToggle.checked = false;
-      } else {
-        showToast(enableToggle.checked ? "Edge Guard on" : "Edge Guard off");
-      }
-      await refresh();
-    } catch (err) {
-      enableToggle.checked = false;
-      showToast(err.message || "Could not change Edge Guard");
-      await refresh();
-    }
-  });
+  if (!dynamic) return card;
 
   async function refresh() {
-    const plugin = nativePlugin("UbetraEdgeGuard");
-    if (!plugin?.getStatus) {
-      status.textContent = "Edge Guard is not in this APK build. Rebuild with mobile/scripts/build-apk.sh.";
-      enableToggle.disabled = true;
-      return;
-    }
+    let remote = null;
+    let info = null;
     try {
-      const info = await plugin.getStatus();
-      enableToggle.checked = !!info.enabled;
-      enableToggle.disabled = false;
+      remote = await api(`/dynamics/${dynamic.id}/edge-guard`);
+    } catch (err) {
+      status.textContent = err.message || "Could not load the Edge Guard list";
+    }
+    const plugin = nativePlugin("UbetraEdgeGuard");
+    if (native) {
+      if (!plugin?.getStatus) {
+        status.textContent = "Edge Guard is not in this APK build. Install 0.88.0 or newer.";
+      } else {
+        try {
+          info = await plugin.getStatus();
+        } catch (err) {
+          status.textContent = err.message || "Could not read Edge Guard status";
+        }
+      }
+    }
+    const you = remote?.you;
+    const keyholder = !!remote?.you_are_keyholder;
+    const locked = !!(you?.locked || (info && info.locked));
+    const subLocked = locked && !keyholder;
+    if (info) {
       const parts = [];
       if (info.running) parts.push("filtering now");
       else if (info.enabled) parts.push("enabled, waiting for VPN");
       else parts.push("off");
-      parts.push(`${info.domainCount || 0} site(s)`);
+      parts.push(`${(you?.domains || info.domains || []).length} site(s)`);
+      if (subLocked) parts.push("locked by your keyholder");
       if (!info.vpnPermissionGranted && info.enabled) parts.push("needs VPN permission");
       status.textContent = parts.join(" · ");
-      const domains = info.domains || [];
-      listEl.replaceChildren(
-        domains.length
-          ? el("ul", { className: "stack", style: "list-style:none;padding:0;margin:0;" }, domains.map((d) =>
-            el("li", { className: "row wrap", style: "justify-content:space-between;gap:0.5rem;" }, [
-              el("code", {}, d),
-              el("button", {
-                type: "button",
-                className: "ghost-btn",
-                onClick: async () => {
-                  try {
-                    await plugin.removeBlockedDomain({ domain: d });
-                    showToast(`Removed ${d}`);
-                    await refresh();
-                  } catch (err) {
-                    showToast(err.message || "Could not remove");
-                  }
-                },
-              }, "Remove"),
-            ])
-          ))
-          : el("p", { className: "muted" }, "No sites yet. Add a domain above.")
-      );
-    } catch (err) {
-      status.textContent = err.message || "Could not read Edge Guard status";
+    } else if (you) {
+      status.textContent = subLocked ? "Locked by your keyholder." : edgeGuardCheckinLine(you);
     }
+    const showToggle = native && !!plugin?.setEnabled && !(subLocked && (info ? info.enabled : true));
+    const domainInput = el("input", {
+      type: "text",
+      placeholder: "example.com",
+      autocomplete: "off",
+      spellcheck: "false",
+    });
+    const kids = [];
+    if (showToggle) {
+      const enableToggle = el("input", { type: "checkbox", checked: !!info?.enabled });
+      enableToggle.addEventListener("change", async () => {
+        const want = enableToggle.checked;
+        try {
+          const out = await plugin.setEnabled({ enabled: want });
+          if (want && out && out.vpnPermissionGranted === false) {
+            showToast("VPN permission is required for Edge Guard");
+          } else if (want && !out?.running && (out?.domainCount || 0) === 0) {
+            showToast("Add at least one website first");
+          } else {
+            showToast(want ? "Edge Guard on" : "Edge Guard off");
+          }
+        } catch (err) {
+          showToast(err.message || "Could not change Edge Guard");
+        }
+        try {
+          await syncEdgeGuardFromServer();
+        } catch {
+          /* status refresh still runs */
+        }
+        await refresh();
+      });
+      kids.push(el("label", { className: "row wrap", style: "gap:0.5rem;align-items:center;" }, [
+        enableToggle,
+        el("span", {}, "Block websites on this phone"),
+      ]));
+    } else if (subLocked && native) {
+      kids.push(el("p", {}, "Locked on by your keyholder. This phone cannot turn Edge Guard off or remove sites."));
+    }
+    const addDomains = async (domains) => {
+      const result = await api(`/dynamics/${dynamic.id}/edge-guard/domains`, {
+        method: "POST",
+        body: JSON.stringify({ domains }),
+      });
+      const added = result.added || [];
+      showToast(added.length ? `Added ${added.length} site(s)` : "No new sites to add");
+      if (native) await syncEdgeGuardFromServer().catch(() => {});
+      await refresh();
+    };
+    if (!keyholder || native) {
+      kids.push(el("label", {}, ["Add website", domainInput]));
+      kids.push(el("div", { className: "row wrap" }, [
+        el("button", {
+          type: "button",
+          className: "primary-btn",
+          onClick: async () => {
+            const domain = (domainInput.value || "").trim();
+            if (!domain) {
+              showToast("Enter a domain like reddit.com");
+              return;
+            }
+            try {
+              await addDomains([domain]);
+              domainInput.value = "";
+            } catch (err) {
+              showToast(err.message || "Could not add site");
+            }
+          },
+        }, "Add"),
+      ]));
+      kids.push(edgeGuardImportInput((you?.domains || []).map((row) => row.domain), addDomains));
+      kids.push(el("p", { className: "muted" }, "Mindful field names are unconfirmed until a sample export is provided."));
+      kids.push(edgeGuardDomainList(dynamic.id, you || { domains: [] }, {
+        canRemove: keyholder || !subLocked,
+        canRequest: subLocked,
+        onDone: async () => {
+          if (native) await syncEdgeGuardFromServer().catch(() => {});
+          await refresh();
+        },
+      }));
+    }
+    if (native) {
+      kids.push(permHowTo([
+        "Add domains you want blocked (e.g. reddit.com). Subdomains are included.",
+        "Turn on Block websites. Android will ask to allow a VPN connection — Allow. This is a local DNS sinkhole, not a remote VPN.",
+        "When your keyholder locks the list, Remove and the off switch disappear. Use Request removal instead.",
+        "Uninstalling the app or revoking the VPN cannot be blocked. UBETRA can only tell your keyholder.",
+      ]));
+    }
+    controls.replaceChildren(...kids);
+  }
+
+  refresh();
+  return card;
+}
+
+function buildEdgeGuardManageCard(dynamicId) {
+  const status = el("p", { className: "muted" }, "Loading Edge Guard…");
+  const body = el("div", { className: "stack" });
+  const card = el("div", { className: "card stack", id: "edge-guard-manage" }, [
+    el("h2", {}, "Edge Guard list"),
+    el("p", { className: "muted" }, "Blocklist for this dynamic, on any device. Locking stops the sub from removing sites or turning the filter off in the app. If the list has sites or is locked, you are told once when the phone reports Edge Guard off, and once if it misses a check-in for 6 hours. Uninstall and VPN revoke can only be detected."),
+    status,
+    body,
+  ]);
+
+  async function refresh() {
+    let remote;
+    try {
+      remote = await api(`/dynamics/${dynamicId}/edge-guard`);
+    } catch (err) {
+      status.textContent = err.message || "Could not load Edge Guard";
+      return;
+    }
+    const subs = (remote.members || []).filter((m) => m.role === "submissive");
+    const people = subs.length ? subs : (remote.members || []).filter((m) => m.membership_id !== remote.you?.membership_id);
+    if (!people.length) {
+      status.textContent = "No submissive partner in this dynamic yet.";
+      body.replaceChildren();
+      return;
+    }
+    status.textContent = "";
+    body.replaceChildren(...people.map((member) => {
+      const domainInput = el("input", {
+        type: "text",
+        placeholder: "example.com",
+        autocomplete: "off",
+        spellcheck: "false",
+      });
+      const lockBox = el("input", { type: "checkbox", checked: !!member.locked });
+      const requireBox = el("input", { type: "checkbox", checked: !!member.require_enabled });
+      const patch = async (payload) => {
+        await api(`/dynamics/${dynamicId}/edge-guard/policy`, {
+          method: "PATCH",
+          body: JSON.stringify({ membership_id: member.membership_id, ...payload }),
+        });
+        await refresh();
+      };
+      lockBox.addEventListener("change", async () => {
+        try {
+          await patch({ locked: lockBox.checked });
+          showToast(lockBox.checked ? "Edge Guard locked" : "Edge Guard unlocked");
+        } catch (err) {
+          lockBox.checked = !lockBox.checked;
+          showToast(err.message || "Could not update the lock");
+        }
+      });
+      requireBox.addEventListener("change", async () => {
+        try {
+          await patch({ require_enabled: requireBox.checked });
+          showToast("Saved");
+        } catch (err) {
+          requireBox.checked = !requireBox.checked;
+          showToast(err.message || "Could not update");
+        }
+      });
+      const addDomains = async (domains) => {
+        const result = await api(`/dynamics/${dynamicId}/edge-guard/domains`, {
+          method: "POST",
+          body: JSON.stringify({ domains, membership_id: member.membership_id }),
+        });
+        showToast((result.added || []).length ? `Added ${result.added.length} site(s)` : "No new sites to add");
+        await refresh();
+      };
+      return el("div", { className: "stack" }, [
+        el("h3", {}, member.display_name || "Sub"),
+        el("p", { className: "muted" }, edgeGuardCheckinLine(member)),
+        el("label", { className: "checkbox-label" }, [lockBox, " Lock the list (sub cannot remove sites or turn Edge Guard off)"]),
+        el("label", { className: "checkbox-label" }, [requireBox, " Require Edge Guard to stay on (also alert when the list is still empty)"]),
+        el("label", {}, ["Add website", domainInput]),
+        el("div", { className: "row wrap" }, [
+          el("button", {
+            type: "button",
+            className: "primary-btn",
+            onClick: async () => {
+              const domain = (domainInput.value || "").trim();
+              if (!domain) {
+                showToast("Enter a domain like reddit.com");
+                return;
+              }
+              try {
+                await addDomains([domain]);
+              } catch (err) {
+                showToast(err.message || "Could not add site");
+              }
+            },
+          }, "Add"),
+        ]),
+        edgeGuardImportInput((member.domains || []).map((row) => row.domain), addDomains),
+        el("p", { className: "muted" }, "Mindful field names are unconfirmed until a sample export is provided."),
+        edgeGuardDomainList(dynamicId, member, {
+          canRemove: true,
+          canRequest: false,
+          onDone: refresh,
+        }),
+      ]);
+    }));
   }
 
   refresh();
@@ -4296,7 +4776,8 @@ function wireNativePushCallWake() {
     const wakeFromPush = (data) => {
       const kind = String(data?.kind || "");
       if (kind === "call") pollIncomingVideoCall().catch(() => {});
-      if (kind === "reload") reloadAppShell();
+      if (kind === "edge_guard") syncEdgeGuardFromServer().catch(() => {});
+      if (kind === "reload") syncEdgeGuardFromServer().finally(() => reloadAppShell());
     };
     Push.addListener("pushNotificationReceived", (ev) => {
       wakeFromPush(ev?.notification?.data || ev?.data || {});
@@ -4313,7 +4794,10 @@ function wireNativePushCallWake() {
     });
   }
   App?.addListener?.("appStateChange", (ev) => {
-    if (ev?.isActive && state.token) pollIncomingVideoCall().catch(() => {});
+    if (ev?.isActive && state.token) {
+      pollIncomingVideoCall().catch(() => {});
+      syncEdgeGuardFromServer().catch(() => {});
+    }
   });
 }
 
@@ -4769,7 +5253,7 @@ async function bootstrap() {
         return;
       }
       if (event.data?.type === "ubetra-reload") {
-        reloadAppShell();
+        syncEdgeGuardFromServer().finally(() => reloadAppShell());
         return;
       }
       if (event.data?.type === "ubetra-navigate" && event.data.url) {
@@ -4810,6 +5294,7 @@ async function bootstrap() {
     if (document.visibilityState !== "visible" || !state.token) return;
     refreshAppUpdates().catch(() => {});
     maybeShowPunishmentReminders();
+    syncEdgeGuardFromServer().catch(() => {});
   });
 
   // Render login immediately so buttons work while token validation runs
@@ -4830,6 +5315,7 @@ async function bootstrap() {
       refreshAppUpdates().catch(() => {});
       startVideoCallWatcher();
       wireNativePushCallWake();
+      syncEdgeGuardFromServer().catch(() => {});
       return;
     } catch {
       setToken(null);
@@ -21334,7 +21820,10 @@ function renderSettings() {
       ]));
       appendAndroidAppCard(stack, androidInfo);
       stack.appendChild(buildDevicePermissionsCard());
-      stack.appendChild(buildEdgeGuardCard());
+      stack.appendChild(buildEdgeGuardCard(initialDynamicId));
+      if (policy?.you_are_dominant && initialDynamicId) {
+        stack.appendChild(buildEdgeGuardManageCard(initialDynamicId));
+      }
 
       const usernameInput = el("input", {
         type: "text",
@@ -23042,6 +23531,7 @@ function renderSettings() {
         "Feelings notifications": "This dynamic",
         "Chastity policy": "This dynamic",
         "Sex & orgasm tracking details": "This dynamic",
+        "Edge Guard list": "This dynamic",
         "Privacy & security": "Chat & privacy",
         "Assistant domme": "AI & assistant",
         "LLM API Configuration": "AI & assistant",
@@ -23107,10 +23597,13 @@ function renderSettings() {
 
       if (focus) {
         setTimeout(() => {
-          const target = document.getElementById(`settings-${focus}`);
+          const target = document.getElementById(focus === "edge-guard" ? "settings-features" : `settings-${focus}`);
           if (target) {
             target.open = true;
             target.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+          if (focus === "edge-guard") {
+            document.getElementById("edge-guard-manage")?.scrollIntoView({ behavior: "smooth", block: "start" });
           }
         }, 50);
       }

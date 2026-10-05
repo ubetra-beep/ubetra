@@ -26,6 +26,7 @@ class UbetraEdgeGuardPlugin : Plugin() {
         ret.put("enabled", EdgeGuardPrefs.isEnabled(context))
         ret.put("running", EdgeGuardVpnService.isRunning)
         ret.put("vpnPermissionGranted", VpnService.prepare(context) == null)
+        ret.put("locked", EdgeGuardPrefs.isLocked(context))
         ret.put("domainCount", domains.size)
         ret.put("domains", JSArray(domains))
         call.resolve(ret)
@@ -57,6 +58,11 @@ class UbetraEdgeGuardPlugin : Plugin() {
     @PluginMethod
     fun setEnabled(call: PluginCall) {
         val enabled = call.getBoolean("enabled", false) ?: false
+        val serverSync = call.getBoolean("serverSync", false) ?: false
+        if (!enabled && EdgeGuardPrefs.isLocked(context) && !serverSync) {
+            call.reject("Edge Guard is locked by your keyholder")
+            return
+        }
         if (enabled) {
             if (EdgeGuardPrefs.getDomains(context).isEmpty()) {
                 call.reject("Add at least one website before enabling Edge Guard")
@@ -102,6 +108,7 @@ class UbetraEdgeGuardPlugin : Plugin() {
 
     @PluginMethod
     fun setBlockedDomains(call: PluginCall) {
+        val serverSync = call.getBoolean("serverSync", false) ?: false
         val arr = call.getArray("domains") ?: JSArray()
         val list = ArrayList<String>()
         for (i in 0 until arr.length()) {
@@ -112,10 +119,22 @@ class UbetraEdgeGuardPlugin : Plugin() {
             }
             if (value.isNotBlank()) list.add(value)
         }
+        if (serverSync && call.data != null && call.data.has("locked")) {
+            EdgeGuardPrefs.setLocked(context, call.getBoolean("locked", false) ?: false)
+        }
+        if (!serverSync && EdgeGuardPrefs.isLocked(context)) {
+            val current = EdgeGuardPrefs.getDomains(context)
+            val next = DomainMatcher.normalizeAll(list)
+            if (!next.containsAll(current)) {
+                call.reject("Edge Guard is locked by your keyholder")
+                return
+            }
+        }
         EdgeGuardPrefs.setDomains(context, list)
         syncService()
         val ret = JSObject()
         ret.put("domains", JSArray(EdgeGuardPrefs.getDomains(context).sorted()))
+        ret.put("locked", EdgeGuardPrefs.isLocked(context))
         call.resolve(ret)
     }
 
@@ -135,9 +154,14 @@ class UbetraEdgeGuardPlugin : Plugin() {
 
     @PluginMethod
     fun removeBlockedDomain(call: PluginCall) {
+        val serverSync = call.getBoolean("serverSync", false) ?: false
         val domain = call.getString("domain")
         if (domain.isNullOrBlank()) {
             call.reject("domain is required")
+            return
+        }
+        if (EdgeGuardPrefs.isLocked(context) && !serverSync) {
+            call.reject("Edge Guard is locked by your keyholder")
             return
         }
         val domains = EdgeGuardPrefs.removeDomain(context, domain).sorted()
@@ -164,6 +188,7 @@ class UbetraEdgeGuardPlugin : Plugin() {
         ret.put("enabled", EdgeGuardPrefs.isEnabled(context))
         ret.put("running", EdgeGuardVpnService.isRunning)
         ret.put("vpnPermissionGranted", VpnService.prepare(context) == null)
+        ret.put("locked", EdgeGuardPrefs.isLocked(context))
         ret.put("domainCount", domains.size)
         ret.put("domains", JSArray(domains))
         return ret

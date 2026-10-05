@@ -9,6 +9,7 @@ object EdgeGuardPrefs {
     private const val PREFS = "ubetra_edge_guard"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_DOMAINS = "domains"
+    private const val KEY_LOCKED = "locked"
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -18,6 +19,14 @@ object EdgeGuardPrefs {
 
     fun setEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_ENABLED, enabled).apply()
+    }
+
+    /** Set only from a server sync. The in-app UI cannot clear this. */
+    fun isLocked(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_LOCKED, false)
+
+    fun setLocked(context: Context, locked: Boolean) {
+        prefs(context).edit().putBoolean(KEY_LOCKED, locked).apply()
     }
 
     fun getDomains(context: Context): Set<String> {

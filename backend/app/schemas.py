@@ -384,6 +384,7 @@ class InboxItemOut(BaseModel):
     path: str = ""
     task_id: str | None = None
     task_list_id: str | None = None
+    edge_guard_domain_id: str | None = None
 
 
 class InboxOut(BaseModel):
@@ -2334,6 +2335,64 @@ class InstructorSessionOut(BaseModel):
 class InstructorAssignIn(BaseModel):
     assigned_to_membership_id: str | None = None
     duration_min: int | None = Field(default=None, ge=1, le=180)
+
+
+class EdgeGuardStatusOut(BaseModel):
+    enabled: bool = False
+    running: bool = False
+    vpn_permission: bool = False
+    domain_count: int = 0
+
+
+class EdgeGuardDomainOut(BaseModel):
+    id: str
+    domain: str
+    added_by: str = ""
+    created_at: datetime
+    removal_requested_at: datetime | None = None
+
+
+class EdgeGuardMemberOut(BaseModel):
+    membership_id: str
+    display_name: str = ""
+    role: str
+    locked: bool = False
+    require_enabled: bool = False
+    last_heartbeat: datetime | None = None
+    last_status: EdgeGuardStatusOut = Field(default_factory=EdgeGuardStatusOut)
+    domains: list[EdgeGuardDomainOut] = Field(default_factory=list)
+
+
+class EdgeGuardOut(BaseModel):
+    you_are_keyholder: bool
+    you: EdgeGuardMemberOut
+    members: list[EdgeGuardMemberOut] = Field(default_factory=list)
+
+
+class EdgeGuardAddOut(EdgeGuardOut):
+    added: list[str] = Field(default_factory=list)
+
+
+class EdgeGuardDomainsIn(BaseModel):
+    domains: list[str] = Field(default_factory=list, max_length=500)
+    membership_id: str | None = None
+
+
+class EdgeGuardPolicyIn(BaseModel):
+    locked: bool | None = None
+    require_enabled: bool | None = None
+    membership_id: str | None = None
+
+
+class EdgeGuardHeartbeatIn(BaseModel):
+    enabled: bool = False
+    running: bool = False
+    vpn_permission: bool = False
+    domain_count: int = Field(default=0, ge=0, le=10000)
+
+
+class EdgeGuardDecisionIn(BaseModel):
+    decision: Literal["approve", "deny"]
 
 
 HistoryDashboardOut.model_rebuild()
