@@ -58,6 +58,16 @@ def has_denial_tag(tags: list[str]) -> bool:
     return False
 
 
+def has_cheated_tag(tags: list[str]) -> bool:
+    for raw in tags or []:
+        t = " ".join(str(raw).lower().replace("-", " ").replace("_", " ").split())
+        if not t:
+            continue
+        if "cheat" in t:
+            return True
+    return False
+
+
 def has_milking_tag(tags: list[str]) -> bool:
     for raw in tags or []:
         t = " ".join(str(raw).lower().replace("-", " ").replace("_", " ").split())

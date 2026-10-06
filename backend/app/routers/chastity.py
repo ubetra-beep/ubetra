@@ -53,6 +53,7 @@ from ..schemas import (
 )
 from ..services.features import is_feature_enabled
 from ..services.tags import tags_to_list, tags_to_string
+from ..services.chastity_release import effective_unlock_presets, serialize_unlock_presets
 from ..services.chastity import (
     BREAK_TYPE_LABELS,
     EMERGENCY_BREAK_TYPES,
@@ -147,6 +148,7 @@ def _lockup_out(lockup: ChastityLockup, memberships: dict[str, Membership]) -> C
         release_notes=lockup.release_notes,
         tags=tags_to_list(getattr(lockup, "tags", "") or ""),
         ended_kind=getattr(lockup, "ended_kind", "") or "",
+        goal_unmet=bool(getattr(lockup, "goal_unmet", False)),
         timer_overdue=_timer_overdue(lockup),
         record_type=lockup.record_type.value,
         status=lockup.status.value,
@@ -228,6 +230,10 @@ def _settings_out(db: Session, dynamic_id: str, membership: Membership) -> Chast
         sub_can_delete_breaks=bool(
             getattr(dynamic, "chastity_sub_can_delete_breaks", True) if dynamic else True
         ),
+        auto_relock_after_orgasm=bool(
+            getattr(dynamic, "chastity_auto_relock_after_orgasm", True) if dynamic else True
+        ),
+        unlock_presets=effective_unlock_presets(dynamic),
     )
 
 
@@ -409,6 +415,26 @@ def update_chastity_policy(
                 else "disallowed temporary unlock log deletion by sub"
             ),
         )
+    if payload.auto_relock_after_orgasm is not None:
+        dynamic.chastity_auto_relock_after_orgasm = payload.auto_relock_after_orgasm
+        post_system_event(
+            db,
+            dynamic_id,
+            membership,
+            (
+                "enabled auto re-lock after orgasm"
+                if payload.auto_relock_after_orgasm
+                else "disabled auto re-lock after orgasm"
+            ),
+        )
+    if payload.unlock_presets is not None:
+        dynamic.chastity_unlock_presets = serialize_unlock_presets(payload.unlock_presets)
+        post_system_event(
+            db,
+            dynamic_id,
+            membership,
+            "updated chastity unlock presets",
+        )
     db.commit()
     return _settings_out(db, dynamic_id, membership)
 
@@ -494,6 +520,8 @@ def put_chastity_goals(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
 
     raw = payload if isinstance(payload, dict) else {}
+    previous = parse_goals(getattr(dynamic, "chastity_goals", None))
+    prev_by_id = {g["id"]: g for g in previous["goals"]}
     data = parse_goals(json.dumps(raw))
     raw_goals = raw.get("goals") if isinstance(raw.get("goals"), list) else []
     resolve_flags = {
@@ -507,6 +535,20 @@ def put_chastity_goals(
     default_sub = subs[0].id if len(subs) == 1 else None
 
     for goal in data["goals"]:
+        old = prev_by_id.get(goal["id"])
+        if old and len(old.get("history") or []) > len(goal.get("history") or []):
+            goal["history"] = list(old.get("history") or [])
+        if old and not goal.get("last_met_at"):
+            goal["last_met_at"] = old.get("last_met_at")
+        if not goal.get("for_membership_id") and default_sub:
+            goal["for_membership_id"] = default_sub
+        if old and int(goal.get("repeat_count") or 0) > int(old.get("repeat_count") or 0):
+            hist = list(goal.get("history") or [])
+            last = hist[-1] if hist else None
+            if not last or last.get("outcome") not in {"gift", "cheated", "reset"}:
+                hist.append({"at": now_iso, "outcome": "reset", "progress": ""})
+                goal["history"] = hist[-100:]
+                goal["last_met_at"] = None
         if not goal.get("created_at"):
             goal["created_at"] = now_iso
         if not goal.get("active", True):
@@ -1269,6 +1311,68 @@ def create_break(
         dynamic_id,
         membership,
         f"started chastity break ({reason}) for {target.display_name}",
+    )
+    db.commit()
+    lockup = _load_lockup(db, dynamic_id, lockup.id)
+    return _lockup_out(lockup, _membership_map(db, dynamic_id))
+
+
+@router.post(
+    "/{dynamic_id}/chastity/{lockup_id}/breaks/historical",
+    response_model=ChastityLockupOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_historical_break(
+    dynamic_id: str,
+    lockup_id: str,
+    payload: ChastityBreakCreate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ChastityLockupOut:
+    """Add a finished break on an active or ended lockup, inside the lockup window."""
+    require_chastity_feature(db, dynamic_id)
+    membership = get_membership(dynamic_id, user, db)
+    lockup = _load_lockup(db, dynamic_id, lockup_id)
+    if payload.started_at is None or payload.ended_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Historical breaks need a start and an end.",
+        )
+    break_type = _parse_break_type(payload.break_type)
+    target = db.get(Membership, lockup.for_membership_id)
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid partner")
+    if break_type in EMERGENCY_BREAK_TYPES:
+        if not is_dominant(membership) and membership.id != target.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to log this break")
+    elif not is_dominant(membership):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant can authorize a temporary unlock.",
+        )
+    from ..services.chastity import validate_break_times
+
+    validate_break_times(lockup, started_at=payload.started_at, ended_at=payload.ended_at)
+    reason = payload.break_reason.strip() or BREAK_TYPE_LABELS.get(break_type.value, break_type.value)
+    tag_list = [t for t in (payload.tags or []) if str(t).strip()]
+    if reason and reason not in tag_list:
+        tag_list = [reason, *tag_list]
+    brk = ChastityBreak(
+        lockup_id=lockup.id,
+        break_type=break_type,
+        break_reason=reason,
+        started_at=payload.started_at,
+        ended_at=payload.ended_at,
+        note=payload.note.strip(),
+        tags=tags_to_string(tag_list),
+        created_by_membership_id=membership.id,
+    )
+    db.add(brk)
+    post_system_event(
+        db,
+        dynamic_id,
+        membership,
+        f"logged a past chastity break ({reason}) for {target.display_name}",
     )
     db.commit()
     lockup = _load_lockup(db, dynamic_id, lockup.id)

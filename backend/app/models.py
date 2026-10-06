@@ -114,7 +114,8 @@ class ChastityEndedKind(str, enum.Enum):
     """How a lockup period ended — drives timeline title."""
 
     unlocked = "unlocked"  # ordinary end → "Unlocked"
-    released_orgasm = "released_orgasm"  # full orgasm → "Released!"
+    released_orgasm = "released_orgasm"  # full orgasm → "Granted Orgasm!"
+    cheated_orgasm = "cheated_orgasm"  # ruined + cheated → "Cheated Orgasm!"
     released_timer = "released_timer"  # planned end confirmed → "Released!"
     historical = "historical"
 
@@ -275,7 +276,7 @@ class Dynamic(Base):
     # Task category chips (separate from orgasm tag_presets)
     task_tag_presets: Mapped[str] = mapped_column(
         Text,
-        default="Domestic,Health / Hygiene,Sensual,Sexual",
+        default="Domestic,Health / Hygiene,Sensual,Sexual,Submission",
     )
     chat_retain_history: Mapped[bool] = mapped_column(Boolean, default=False)
     chat_e2e_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -295,6 +296,10 @@ class Dynamic(Base):
     chat_clear_dom_only: Mapped[bool] = mapped_column(Boolean, default=False)
     # When False, only the keyholder can delete temporary unlock log entries
     chastity_sub_can_delete_breaks: Mapped[bool] = mapped_column(Boolean, default=True)
+    # After an orgasm-type release, start a new lockup at the release time
+    chastity_auto_relock_after_orgasm: Mapped[bool] = mapped_column(Boolean, default=True)
+    # JSON list of {name, break_type, start, end} one-tap unlock windows
+    chastity_unlock_presets: Mapped[str] = mapped_column(Text, default="")
     shared_llm_provider: Mapped[str] = mapped_column(String(32), default="")
     shared_llm_api_key: Mapped[str] = mapped_column(String(512), default="")
     shared_llm_model: Mapped[str] = mapped_column(String(120), default="")
@@ -453,6 +458,8 @@ class Membership(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     # Last time this member dismissed the frosted inbox overlay
     inbox_acked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    inbox_task_ack_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    inbox_late_ack_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     chat_bubble_color: Mapped[str] = mapped_column(String(16), default="")
 
     user: Mapped[User] = relationship(back_populates="memberships")
@@ -592,11 +599,31 @@ class Task(Base):
     # JSON {"due": iso, "sent": [offsets]} for the current due occurrence
     due_reminders_sent: Mapped[str] = mapped_column(Text, default="")
     overdue_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # When set, advance_due_date steps by this many days (every-N-days)
+    recurrence_interval: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When the current next_due_at was written by schedule_next_occurrence
+    occurrence_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     task_list: Mapped[TaskList] = relationship(back_populates="tasks")
     assigned_to: Mapped["Membership | None"] = relationship(
         foreign_keys=[assigned_to_membership_id]
     )
+
+
+class TaskCompletion(Base):
+    """One stored completion. Recurring tasks clear Task.completed_at, so goals read this."""
+
+    __tablename__ = "task_completions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
+    dynamic_id: Mapped[str] = mapped_column(String(36), index=True)
+    membership_id: Mapped[str] = mapped_column(String(36), index=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    tags: Mapped[str] = mapped_column(String(500), default="")
+    late: Mapped[bool] = mapped_column(Boolean, default=False)
+    completed_by_membership_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    content_snippet: Mapped[str] = mapped_column(String(200), default="")
 
 
 class ChatMessage(Base):
@@ -815,6 +842,7 @@ class OrgTrackingEntry(Base):
     satisfaction: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1-5
     edging_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notes_private: Mapped[bool] = mapped_column(Boolean, default=False)
+    goal_unmet: Mapped[bool] = mapped_column(Boolean, default=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -875,8 +903,9 @@ class ChastityLockup(Base):
     device_notes: Mapped[str] = mapped_column(Text, default="")
     release_notes: Mapped[str] = mapped_column(Text, default="")
     tags: Mapped[str] = mapped_column(String(500), default="")
-    # unlocked | released_orgasm | released_timer | historical | "" while active
+    # unlocked | released_orgasm | cheated_orgasm | released_timer | historical | "" while active
     ended_kind: Mapped[str] = mapped_column(String(32), default="")
+    goal_unmet: Mapped[bool] = mapped_column(Boolean, default=False)
     # When we last pushed the keyholder about planned_end_at passing
     timer_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     record_type: Mapped[ChastityRecordType] = mapped_column(

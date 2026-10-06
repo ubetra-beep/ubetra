@@ -22,6 +22,8 @@ from .tasks_service import (
 DOM_CONTROLLED_SETTING_KEYS = frozenset(
     {
         "chastity.sub_can_delete_breaks",
+        "chastity.auto_relock_after_orgasm",
+        "chastity.unlock_presets",
         "features",
         "feelings.prompt_mode",
         "feelings.require_end_of_day",
@@ -44,6 +46,8 @@ DOM_CONTROLLED_SETTING_KEYS = frozenset(
 def setting_label(key: str) -> str:
     labels = {
         "chastity.sub_can_delete_breaks": "Allow sub to delete temporary unlock logs",
+        "chastity.auto_relock_after_orgasm": "Lock again after an orgasm release",
+        "chastity.unlock_presets": "Chastity unlock presets",
         "features": "Application features",
         "feelings.prompt_mode": "Feelings prompt mode",
         "feelings.require_end_of_day": "End-of-day feelings reminder",
@@ -105,6 +109,20 @@ def apply_setting(
             if dynamic.chastity_sub_can_delete_breaks
             else "disallowed temporary unlock log deletion by sub"
         )
+
+    if setting_key == "chastity.auto_relock_after_orgasm":
+        dynamic.chastity_auto_relock_after_orgasm = bool(value)
+        return (
+            "enabled auto re-lock after orgasm"
+            if dynamic.chastity_auto_relock_after_orgasm
+            else "disabled auto re-lock after orgasm"
+        )
+
+    if setting_key == "chastity.unlock_presets":
+        from .chastity_release import serialize_unlock_presets
+
+        dynamic.chastity_unlock_presets = serialize_unlock_presets(value if isinstance(value, list) else [])
+        return "updated chastity unlock presets"
 
     if setting_key == "chat.system_events":
         dynamic.chat_system_events = bool(value)
@@ -248,10 +266,16 @@ def apply_setting(
 
 
 def policy_snapshot(dynamic: Dynamic) -> dict:
+    from .chastity_release import effective_unlock_presets
+
     return {
         "chastity_sub_can_delete_breaks": bool(
             getattr(dynamic, "chastity_sub_can_delete_breaks", True)
         ),
+        "chastity_auto_relock_after_orgasm": bool(
+            getattr(dynamic, "chastity_auto_relock_after_orgasm", True)
+        ),
+        "chastity_unlock_presets": effective_unlock_presets(dynamic),
         "feelings_prompt_mode": getattr(dynamic, "feelings_prompt_mode", None) or "soft",
         "feelings_require_end_of_day": bool(
             getattr(dynamic, "feelings_require_end_of_day", True)

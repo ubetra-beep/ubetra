@@ -49,6 +49,7 @@ import android.webkit.CookieManager;
 import android.webkit.URLUtil;
 import android.widget.Toast;
 import com.getcapacitor.BridgeActivity;
+import org.duckdns.ubeneeko.appupdater.UbetraAppUpdaterPlugin;
 import org.duckdns.ubeneeko.edgeguard.UbetraEdgeGuardPlugin;
 import org.duckdns.ubeneeko.healthconnect.UbetraHealthConnectPlugin;
 
@@ -58,6 +59,7 @@ public class MainActivity extends BridgeActivity {
     registerPlugin(UbetraHealthConnectPlugin.class);
     registerPlugin(UbetraMediaPlugin.class);
     registerPlugin(UbetraEdgeGuardPlugin.class);
+    registerPlugin(UbetraAppUpdaterPlugin.class);
     super.onCreate(savedInstanceState);
     createChannels();
     attachDownloadListener();
@@ -93,7 +95,7 @@ public class MainActivity extends BridgeActivity {
         manager.enqueue(request);
         Toast.makeText(
           this,
-          "Downloading update. When it finishes, close UBETRA completely, then tap the download to install.",
+          "Saved to Downloads/ubetra.apk. Tap the download notification to install.",
           Toast.LENGTH_LONG
         ).show();
       } catch (Exception err) {
@@ -263,6 +265,20 @@ if [[ -f "$APP_GRADLE" ]]; then
   echo "==> Set versionName $VERSION_NAME versionCode $VERSION_CODE"
   sed -i "s/versionCode [0-9][0-9]*/versionCode ${VERSION_CODE}/" "$APP_GRADLE"
   sed -i "s/versionName \".*\"/versionName \"${VERSION_NAME}\"/" "$APP_GRADLE"
+fi
+
+FILE_PATHS="$(find "$MOBILE/android" -name 'file_paths.xml' | head -1 || true)"
+if [[ -n "$FILE_PATHS" ]]; then
+  python3 - "$FILE_PATHS" <<'PY'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text()
+if 'path="Download/"' not in text:
+    text = text.replace("</paths>", '    <external-files-path name="apk" path="Download/" />\n</paths>')
+    path.write_text(text)
+    print("patched", path)
+PY
 fi
 
 VARS="$MOBILE/android/variables.gradle"

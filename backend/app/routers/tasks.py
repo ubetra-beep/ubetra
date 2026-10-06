@@ -15,6 +15,7 @@ from ..models import (
     PartnerRole,
     Task,
     TaskApprovalStatus,
+    TaskCompletion,
     TaskList,
     TaskRecurrence,
     TaskSource,
@@ -37,6 +38,7 @@ from ..schemas import (
     TaskBulkUpdateIn,
     TaskCalendarItem,
     TaskCalendarOut,
+    TaskCompletionOut,
     TaskChangeRequestIn,
     TaskChangeReviewIn,
     TaskCompleteIn,
@@ -54,11 +56,13 @@ from ..schemas import (
 from ..services.tags import tags_to_list, tags_to_string
 from ..services.tasks_service import (
     ack_inbox,
+    advance_due_date,
     apply_due_auto_punish,
     build_inbox,
     can_complete_task,
     clear_makeup,
     parse_auto_punish_rules,
+    record_task_completion,
     reset_due_reminders,
     resolve_due_at,
     schedule_next_occurrence,
@@ -168,6 +172,17 @@ def _effective_due(task: Task) -> datetime | None:
     return task.next_due_at or task.due_at
 
 
+def _sole_sub_id(db: Session, dynamic_id: str) -> str | None:
+    subs = (
+        db.query(Membership)
+        .filter(Membership.dynamic_id == dynamic_id, Membership.role == PartnerRole.submissive)
+        .all()
+    )
+    if len(subs) == 1:
+        return subs[0].id
+    return None
+
+
 def _membership_in_dynamic(db: Session, dynamic_id: str, membership_id: str | None) -> bool:
     if not membership_id:
         return True
@@ -192,7 +207,7 @@ def get_tag_presets(
     presets = tags_to_list(dynamic.tag_presets)
     task_presets = tags_to_list(
         getattr(dynamic, "task_tag_presets", None)
-        or "Domestic,Health / Hygiene,Sensual,Sexual"
+        or "Domestic,Health / Hygiene,Sensual,Sexual,Submission"
     )
     org_tags: set[str] = set()
     for row in db.query(OrgTrackingEntry.tags).filter(
@@ -255,6 +270,37 @@ def post_inbox_ack(
     db.commit()
     db.refresh(membership)
     return InboxOut(**build_inbox(db, dynamic_id, membership))
+
+
+@router.get("/dynamics/{dynamic_id}/task-completions", response_model=list[TaskCompletionOut])
+def list_task_completions(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[TaskCompletionOut]:
+    get_membership(dynamic_id, user, db)
+    rows = (
+        db.query(TaskCompletion, Task)
+        .join(Task, TaskCompletion.task_id == Task.id)
+        .filter(TaskCompletion.dynamic_id == dynamic_id)
+        .order_by(TaskCompletion.completed_at.desc())
+        .limit(200)
+        .all()
+    )
+    return [
+        TaskCompletionOut(
+            id=row.id,
+            task_id=row.task_id,
+            task_list_id=task.task_list_id,
+            membership_id=row.membership_id,
+            completed_at=row.completed_at,
+            tags=tags_to_list(row.tags or ""),
+            late=bool(row.late),
+            completed_by_membership_id=row.completed_by_membership_id,
+            content_snippet=row.content_snippet or "",
+        )
+        for row, task in rows
+    ]
 
 
 @router.get("/dynamics/{dynamic_id}/tasks", response_model=list[TaskListOut])
@@ -342,13 +388,14 @@ def task_calendar(
                             completed_at=completed,
                         )
                     )
-                cursor = cursor + (
-                    timedelta(days=1)
-                    if task.recurrence == TaskRecurrence.daily
-                    else timedelta(days=7)
-                    if task.recurrence == TaskRecurrence.weekly
-                    else timedelta(days=30)
+                nxt = advance_due_date(
+                    cursor,
+                    task.recurrence,
+                    getattr(task, "recurrence_interval", None),
                 )
+                if nxt <= cursor:
+                    break
+                cursor = nxt
     items.sort(key=lambda i: i.due_at)
     return TaskCalendarOut(items=items)
 
@@ -371,7 +418,7 @@ def create_task_list(
             detail="Only the dominant partner can create task lists",
         )
 
-    default_assignee = payload.assigned_to_membership_id
+    default_assignee = payload.assigned_to_membership_id or _sole_sub_id(db, dynamic_id)
     if not _membership_in_dynamic(db, dynamic_id, default_assignee):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid assignee")
 
@@ -407,6 +454,11 @@ def create_task_list(
             source=TaskSource.dom,
             created_by_membership_id=membership.id,
             recurrence=task_payload.recurrence,
+            recurrence_interval=(
+                int(task_payload.recurrence_interval)
+                if getattr(task_payload, "recurrence_interval", None)
+                else None
+            ),
             due_at=due,
             next_due_at=next_due if task_payload.recurrence != TaskRecurrence.none else None,
             assigned_to_membership_id=assignee,
@@ -466,7 +518,7 @@ def add_task_item(
         is_private = False
         event_text = f"requested task (pending approval): {task_snippet(payload.content)}"
     elif membership.role == PartnerRole.dominant:
-        assignee = payload.assigned_to_membership_id
+        assignee = payload.assigned_to_membership_id or _sole_sub_id(db, dynamic_id)
         if not _membership_in_dynamic(db, dynamic_id, assignee):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid assignee")
         is_private = bool(payload.is_private)
@@ -503,6 +555,9 @@ def add_task_item(
             source=source,
             created_by_membership_id=membership.id,
             recurrence=payload.recurrence,
+            recurrence_interval=(
+                int(payload.recurrence_interval) if getattr(payload, "recurrence_interval", None) else None
+            ),
             due_at=due,
             next_due_at=next_due if payload.recurrence != TaskRecurrence.none else None,
             assigned_to_membership_id=assignee,
@@ -664,8 +719,15 @@ def _apply_task_fields(db: Session, dynamic_id: str, task: Task, payload) -> Non
         task.recurrence = payload.recurrence
         if payload.recurrence == TaskRecurrence.none:
             task.next_due_at = None
+            task.recurrence_interval = None
         elif task.next_due_at is None:
             task.next_due_at = task.due_at or datetime.utcnow()
+    if getattr(payload, "recurrence_interval", None) is not None:
+        try:
+            interval = int(payload.recurrence_interval)
+        except (TypeError, ValueError):
+            interval = 0
+        task.recurrence_interval = interval if interval > 0 else None
     if payload.due_at is not None:
         task.due_at = resolve_due_at(due_at=payload.due_at, due_in_amount=None, due_in_unit=None)
         reset_due_reminders(task)
@@ -738,6 +800,14 @@ def _perform_task_complete(
         )
     due = _effective_due(task)
     late = bool(due and due < when)
+    record_task_completion(
+        db,
+        task=task,
+        dynamic_id=task_list.dynamic_id,
+        completed_by=membership,
+        when=when,
+        late=late,
+    )
     if late and membership.role == PartnerRole.dominant and task_needs_makeup(task):
         task.makeup_status = "granted"
         task.makeup_granted_at = datetime.utcnow()
@@ -1518,15 +1588,13 @@ def bulk_task_action(
         elif payload.action == "unpause":
             task.paused = False
         elif payload.action == "remove_future":
-            # Keep history of completed one-shots; stop recurring series.
+            # Stop a recurring series without writing a fake completion.
+            # One-off tasks are left as they are.
             if task.recurrence != TaskRecurrence.none:
                 task.recurrence = TaskRecurrence.none
                 task.next_due_at = None
-                task.paused = False
-                if not task.completed_at:
-                    # Cancel open future by marking done without rolling.
-                    task.completed_at = datetime.utcnow()
-                    clear_makeup(task)
+                task.recurrence_interval = None
+                task.paused = True
         elif payload.action == "apply_tag":
             if not tag:
                 raise HTTPException(

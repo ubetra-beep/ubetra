@@ -15,8 +15,8 @@ from ..models import (
     OrgEventType,
     OrgTrackingEntry,
 )
+from .chastity_release import event_goal_kind, maybe_relock_after_orgasm, orgasm_end_kind
 from .tags import tags_to_list
-from .tracking_events import has_full_orgasm_tag
 
 
 def repair_missed_orgasm_releases(db: Session, dynamic_id: str) -> int:
@@ -44,7 +44,8 @@ def repair_missed_orgasm_releases(db: Session, dynamic_id: str) -> int:
         for row in entry.orgasms or []:
             tags.extend(tags_to_list(getattr(row, "tags", "") or ""))
         tags.extend(tags_to_list(entry.tags or ""))
-        if not has_full_orgasm_tag(tags):
+        end_kind = orgasm_end_kind(tags)
+        if end_kind is None:
             continue
         at = entry.occurred_at or datetime.utcnow()
         lockup = (
@@ -63,6 +64,7 @@ def repair_missed_orgasm_releases(db: Session, dynamic_id: str) -> int:
         kind = getattr(lockup, "ended_kind", "") or ""
         if kind in (
             ChastityEndedKind.released_orgasm.value,
+            ChastityEndedKind.cheated_orgasm.value,
             ChastityEndedKind.released_timer.value,
         ):
             continue
@@ -89,16 +91,30 @@ def repair_missed_orgasm_releases(db: Session, dynamic_id: str) -> int:
 
         lockup.status = LockupStatus.ended
         lockup.ended_at = at
-        lockup.ended_kind = ChastityEndedKind.released_orgasm.value
+        lockup.ended_kind = end_kind
         lockup.timer_notified_at = None
+        gift_kind = event_goal_kind(tags)
+        if gift_kind:
+            from ..models import Dynamic
+            from .chastity_goals import goal_unmet_for_event
+
+            dynamic = db.get(Dynamic, dynamic_id)
+            if dynamic is not None:
+                lockup.goal_unmet = goal_unmet_for_event(
+                    db, dynamic, entry.for_membership_id, gift_kind
+                )
         if not (lockup.release_notes or "").strip():
-            lockup.release_notes = "Released with full orgasm"
+            lockup.release_notes = (
+                "Cheated orgasm" if end_kind == "cheated_orgasm" else "Released with full orgasm"
+            )
         updated += 1
 
         needs_continuation = bool(post_breaks) or (
             resume_at is not None and resume_at > at and was_open
         )
         if not needs_continuation:
+            if was_open:
+                maybe_relock_after_orgasm(db, lockup)
             continue
 
         new_start = resume_at if resume_at and resume_at > at else at

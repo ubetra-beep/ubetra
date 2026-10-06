@@ -720,6 +720,8 @@ function renderTaskDesktopTable(dynamicId, rows, { partners = [], goals = [], on
     if (key === "assignee") return task.assigned_to_display_name || "";
     if (key === "due") return task.next_due_at || task.due_at || "";
     if (key === "recurrence") return task.recurrence || "";
+    if (key === "interval") return task.recurrence_interval ? String(task.recurrence_interval) : "";
+    if (key === "approval") return task.approval_status === "pending" || task.change_request_type ? "needs approval" : "";
     if (key === "reminders") return Array.isArray(task.reminder_offsets) ? task.reminder_offsets.join(",") : "";
     if (key === "tags") return (task.tags || []).join(", ");
     if (key === "goal") return matchTaskGoal(task, goals)?.title || "";
@@ -747,6 +749,8 @@ function renderTaskDesktopTable(dynamicId, rows, { partners = [], goals = [], on
           ["assignee", "Assignee"],
           ["due", "Due"],
           ["recurrence", "Recurrence"],
+          ["interval", "Every N days"],
+          ["approval", "Approval"],
           ["reminders", "Reminders"],
           ["tags", "Tags"],
           ["goal", "Goal"],
@@ -814,6 +818,15 @@ function renderTaskDesktopTable(dynamicId, rows, { partners = [], goals = [], on
         ),
         sheetTimeCell(task.due_at || task.next_due_at, (iso) => { if (iso) pending.patch(task.id, { due_at: iso }); }),
         sheetSelectCell(task.recurrence || "none", recurrences, task.recurrence || "none", (value) => pending.patch(task.id, { recurrence: value })),
+        sheetTextCell(
+          task.recurrence_interval ? String(task.recurrence_interval) : "—",
+          task.recurrence_interval ? String(task.recurrence_interval) : "",
+          (text) => {
+            const n = Number(String(text).trim());
+            pending.patch(task.id, { recurrence_interval: Number.isFinite(n) && n > 0 ? n : null });
+          },
+        ),
+        el("td", {}, task.approval_status === "pending" || task.change_request_type ? "Needs approval" : ""),
         sheetTextCell(
           Array.isArray(task.reminder_offsets) ? formatReminderOffsets(task.reminder_offsets) : "Default",
           Array.isArray(task.reminder_offsets) ? task.reminder_offsets.join(", ") : "",

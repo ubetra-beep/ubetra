@@ -365,6 +365,8 @@ def get_dynamic_policy(
     return DynamicPolicyOut(
         you_are_dominant=is_dominant(membership),
         chastity_sub_can_delete_breaks=snap["chastity_sub_can_delete_breaks"],
+        chastity_auto_relock_after_orgasm=snap.get("chastity_auto_relock_after_orgasm", True),
+        chastity_unlock_presets=snap.get("chastity_unlock_presets") or [],
         feelings_prompt_mode=snap["feelings_prompt_mode"],
         feelings_require_end_of_day=snap["feelings_require_end_of_day"],
         feelings_prompt_after_events=snap.get("feelings_prompt_after_events", True),

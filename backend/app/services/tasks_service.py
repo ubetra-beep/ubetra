@@ -97,14 +97,27 @@ def reset_due_reminders(task: Task) -> None:
     task.overdue_notified_at = None
 
 
-def advance_due_date(current: datetime, recurrence: TaskRecurrence) -> datetime:
-    if recurrence == TaskRecurrence.daily:
-        return current + timedelta(days=1)
-    if recurrence == TaskRecurrence.weekly:
-        return current + timedelta(days=7)
-    if recurrence == TaskRecurrence.monthly:
-        return current + timedelta(days=30)
-    return current
+def advance_due_date(
+    current: datetime,
+    recurrence: TaskRecurrence,
+    interval: int | None = None,
+) -> datetime:
+    days = None
+    try:
+        if interval is not None and int(interval) > 0:
+            days = int(interval)
+    except (TypeError, ValueError):
+        days = None
+    if days is None:
+        if recurrence == TaskRecurrence.daily:
+            days = 1
+        elif recurrence == TaskRecurrence.weekly:
+            days = 7
+        elif recurrence == TaskRecurrence.monthly:
+            days = 30
+    if not days:
+        return current
+    return current + timedelta(days=days)
 
 
 def schedule_next_occurrence(task: Task, *, from_time: datetime | None = None) -> None:
@@ -113,9 +126,61 @@ def schedule_next_occurrence(task: Task, *, from_time: datetime | None = None) -
         return
     base = from_time or task.next_due_at or task.due_at or datetime.utcnow()
     task.completed_at = None
-    task.next_due_at = advance_due_date(base, task.recurrence)
+    interval = getattr(task, "recurrence_interval", None)
+    nxt = advance_due_date(base, task.recurrence, interval)
+    now = datetime.utcnow()
+    for _ in range(400):
+        if nxt > now:
+            break
+        nxt = advance_due_date(nxt, task.recurrence, interval)
+    task.next_due_at = nxt
+    task.occurrence_scheduled_at = now
     task.auto_punish_applied_at = None
     reset_due_reminders(task)
+
+
+def completion_subject_id(db: Session, dynamic_id: str, task: Task) -> str | None:
+    """Sub the completion counts toward: assignee, else the sole sub, else a sub creator."""
+    if task.assigned_to_membership_id:
+        return task.assigned_to_membership_id
+    subs = (
+        db.query(Membership)
+        .filter(Membership.dynamic_id == dynamic_id, Membership.role == PartnerRole.submissive)
+        .all()
+    )
+    if len(subs) == 1:
+        return subs[0].id
+    if task.created_by_membership_id:
+        creator = db.get(Membership, task.created_by_membership_id)
+        if creator is not None and creator.role == PartnerRole.submissive and creator.dynamic_id == dynamic_id:
+            return creator.id
+    return subs[0].id if subs else None
+
+
+def record_task_completion(
+    db: Session,
+    *,
+    task: Task,
+    dynamic_id: str,
+    completed_by: Membership,
+    when: datetime,
+    late: bool,
+) -> None:
+    from ..models import TaskCompletion
+
+    subject = completion_subject_id(db, dynamic_id, task) or completed_by.id
+    db.add(
+        TaskCompletion(
+            task_id=task.id,
+            dynamic_id=dynamic_id,
+            membership_id=subject,
+            completed_at=when,
+            tags=task.tags or "",
+            late=bool(late),
+            completed_by_membership_id=completed_by.id,
+            content_snippet=(task.content or "")[:200],
+        )
+    )
 
 
 def task_visible(task: Task, tasks: list[Task], viewer: Membership) -> bool:
@@ -198,6 +263,7 @@ def task_out(
         remind_at=getattr(task, "remind_at", None),
         remind_every_minutes=getattr(task, "remind_every_minutes", None),
         reminder_offsets=parse_reminder_offsets(getattr(task, "reminder_offsets", None)),
+        recurrence_interval=getattr(task, "recurrence_interval", None),
         overdue_notified_at=getattr(task, "overdue_notified_at", None),
     )
 
@@ -459,7 +525,8 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
     """Pending frosted-overlay items: activity since ack + tasks due soon."""
     since = membership.inbox_acked_at or (datetime.utcnow() - timedelta(days=14))
     now = datetime.utcnow()
-    soon = now + timedelta(hours=24)
+    task_ack = getattr(membership, "inbox_task_ack_at", None)
+    late_ack = getattr(membership, "inbox_late_ack_at", None)
 
     items: list[dict] = []
 
@@ -483,6 +550,9 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
         if not action:
             continue
         if action == "feelings_logged" and not notify_feelings:
+            continue
+        # Late rows come from task_completions so recurring lates survive the next due date.
+        if action == "task_completed_late":
             continue
         # Punishment inbox is keyholder-only (dedicated rows below).
         if action.startswith("punishment") and membership.role != PartnerRole.dominant:
@@ -523,7 +593,24 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
             if not task_visible(task, ordered, membership):
                 continue
             due = task.next_due_at or task.due_at
-            if due is None or due > soon:
+            if due is None:
+                continue
+            overdue = due <= now
+            if not overdue:
+                offsets = parse_reminder_offsets(getattr(task, "reminder_offsets", None))
+                if offsets is None:
+                    offsets = default_reminder_offsets(dynamic) if dynamic else list(DEFAULT_REMINDER_OFFSETS)
+                lead = max(offsets) if offsets else 0
+                if due > now + timedelta(minutes=lead):
+                    continue
+                scheduled = getattr(task, "occurrence_scheduled_at", None)
+                if (
+                    task.recurrence != TaskRecurrence.none
+                    and scheduled is not None
+                    and now - scheduled < timedelta(minutes=5)
+                ):
+                    continue
+            if task_ack is not None and due <= task_ack:
                 continue
             assignee = getattr(task, "assigned_to_membership_id", None)
             if assignee and assignee != membership.id:
@@ -534,7 +621,6 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
                         continue
                 elif membership.role != PartnerRole.submissive:
                     continue
-            overdue = due <= now
             items.append(
                 {
                     "id": f"task-{task.id}",
@@ -549,26 +635,38 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
             )
 
     if membership.role == PartnerRole.dominant:
-        for task_list in lists:
-            for task in task_list.tasks:
-                if not task.completed_at:
-                    continue
-                if not bool(getattr(task, "completed_late", False)):
-                    continue
-                if getattr(task, "late_ack_at", None):
-                    continue
-                items.append(
-                    {
-                        "id": f"late-{task.id}",
-                        "kind": "task_completed_late",
-                        "title": "Task completed late",
-                        "body": (task.content or "")[:200],
-                        "occurred_at": task.completed_at,
-                        "path": f"/dynamic/{dynamic_id}/tasks?task={task.id}",
-                        "task_id": task.id,
-                        "task_list_id": task_list.id,
-                    }
-                )
+        from ..models import TaskCompletion
+
+        late_rows = (
+            db.query(TaskCompletion, Task, TaskList)
+            .join(Task, TaskCompletion.task_id == Task.id)
+            .join(TaskList, Task.task_list_id == TaskList.id)
+            .filter(
+                TaskCompletion.dynamic_id == dynamic_id,
+                TaskCompletion.late.is_(True),
+            )
+            .order_by(TaskCompletion.completed_at.desc())
+            .limit(30)
+            .all()
+        )
+        for completion, task, task_list in late_rows:
+            if late_ack is not None and completion.completed_at <= late_ack:
+                continue
+            task_late_ack = getattr(task, "late_ack_at", None)
+            if task_late_ack is not None and task_late_ack >= completion.completed_at:
+                continue
+            items.append(
+                {
+                    "id": f"late-{completion.id}",
+                    "kind": "task_completed_late",
+                    "title": "Task completed late",
+                    "body": (completion.content_snippet or task.content or "")[:200],
+                    "occurred_at": completion.completed_at,
+                    "path": f"/dynamic/{dynamic_id}/tasks?task={task.id}",
+                    "task_id": task.id,
+                    "task_list_id": task_list.id,
+                }
+            )
 
     items.sort(key=lambda i: (i.get("occurred_at") or datetime.min).isoformat(), reverse=True)
 
@@ -642,4 +740,7 @@ def _event_path(dynamic_id: str, action: str) -> str:
     return f"/dynamic/{dynamic_id}/track"
 
 def ack_inbox(membership: Membership) -> None:
-    membership.inbox_acked_at = datetime.utcnow()
+    now = datetime.utcnow()
+    membership.inbox_acked_at = now
+    membership.inbox_task_ack_at = now
+    membership.inbox_late_ack_at = now

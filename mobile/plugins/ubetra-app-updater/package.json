@@ -1,0 +1,16 @@
+{
+  "name": "@ubetra/app-updater",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Download an APK into app storage and open the system installer",
+  "main": "src/index.js",
+  "files": ["android", "src"],
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=7.0.0"
+  }
+}

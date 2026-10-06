@@ -612,15 +612,23 @@ def _history_lines(messages: list[AssistantMessage]) -> str:
 
 
 def _confession_block(db: Session, dynamic_id: str, report_id: str) -> str:
-    if not report_id:
+    raw_ids = [part.strip() for part in (report_id or "").replace(";", ",").split(",") if part.strip()]
+    if not raw_ids:
         return ""
-    report = db.get(PunishmentReport, report_id)
-    if report is None or report.dynamic_id != dynamic_id:
+    lines = [f"{len(raw_ids)} confession(s):"]
+    found = 0
+    for rid in raw_ids:
+        report = db.get(PunishmentReport, rid)
+        if report is None or report.dynamic_id != dynamic_id:
+            continue
+        found += 1
+        when = report.created_at.isoformat() if report.created_at else ""
+        lines.append(
+            f"- id={report.id} status={report.status} at {when}\n{(report.action_text or '').strip()[:2000]}"
+        )
+    if not found:
         return ""
-    return (
-        f"Pending confession id={report.id} status={report.status} "
-        f"at {report.created_at}:\n{(report.action_text or '').strip()[:2000]}"
-    )
+    return "\n".join(lines)
 
 
 def _change_log_block(db: Session, dynamic_id: str) -> str:

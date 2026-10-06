@@ -41,6 +41,7 @@ from ..services.tags import tags_to_list, tags_to_string
 from ..services.chat_events import post_activity_event, post_system_event
 
 from ..services.tracking_events import has_full_orgasm_tag, is_orgasm_event, is_play_event, orgasm_count
+from ..services.chastity_release import event_goal_kind, maybe_relock_after_orgasm, orgasm_end_kind
 
 from ..services.feelings import feelings_status, has_recent_context_checkin
 
@@ -54,6 +55,14 @@ from ..timeutil import as_naive_utc
 
 router = APIRouter(prefix="/dynamics", tags=["org-tracking"])
 
+def _entry_orgasm_tags(entry: OrgTrackingEntry) -> list[str]:
+    orgasm_tags: list[str] = []
+    for row in entry.orgasms or []:
+        orgasm_tags.extend(tags_to_list(getattr(row, "tags", "") or ""))
+    orgasm_tags.extend(tags_to_list(entry.tags or ""))
+    return orgasm_tags
+
+
 def _maybe_release_lockup_for_full_orgasm(
     db: Session,
     *,
@@ -62,14 +71,12 @@ def _maybe_release_lockup_for_full_orgasm(
     target: Membership,
     entry: OrgTrackingEntry,
 ) -> None:
-    """If a full orgasm was logged during a lockup (incl. on break), end as Released!."""
+    """End a lockup for a full orgasm, or a ruined orgasm that is also cheated."""
     if entry.event_type not in (OrgEventType.orgasm, OrgEventType.both):
         return
-    orgasm_tags: list[str] = []
-    for row in entry.orgasms or []:
-        orgasm_tags.extend(tags_to_list(getattr(row, "tags", "") or ""))
-    orgasm_tags.extend(tags_to_list(entry.tags or ""))
-    if not has_full_orgasm_tag(orgasm_tags):
+    orgasm_tags = _entry_orgasm_tags(entry)
+    end_kind = orgasm_end_kind(orgasm_tags)
+    if end_kind is None:
         return
 
     from ..services.chastity import active_break, active_lockup
@@ -96,6 +103,7 @@ def _maybe_release_lockup_for_full_orgasm(
             return
         if (getattr(lockup, "ended_kind", "") or "") in (
             ChastityEndedKind.released_orgasm.value,
+            ChastityEndedKind.cheated_orgasm.value,
             ChastityEndedKind.released_timer.value,
         ):
             return
@@ -113,20 +121,31 @@ def _maybe_release_lockup_for_full_orgasm(
     lockup.status = LockupStatus.ended
     lockup.ended_at = ended_at
     lockup.ended_by_membership_id = membership.id
-    lockup.ended_kind = ChastityEndedKind.released_orgasm.value
+    lockup.ended_kind = end_kind
     lockup.timer_notified_at = None
+    gift_kind = event_goal_kind(orgasm_tags)
+    if gift_kind:
+        from ..services.chastity_goals import goal_unmet_for_event
+
+        dynamic = db.get(Dynamic, dynamic_id)
+        if dynamic is not None:
+            lockup.goal_unmet = goal_unmet_for_event(db, dynamic, target.id, gift_kind)
     if not (lockup.release_notes or "").strip():
-        lockup.release_notes = "Released with full orgasm"
+        lockup.release_notes = (
+            "Cheated orgasm" if end_kind == "cheated_orgasm" else "Released with full orgasm"
+        )
+    label = "cheated orgasm" if end_kind == "cheated_orgasm" else "full orgasm"
     post_activity_event(
         db,
         dynamic_id=dynamic_id,
         actor=membership,
         action="lockup_ended",
-        text=f"ended chastity lockup for {target.display_name} (full orgasm)",
+        text=f"ended chastity lockup for {target.display_name} ({label})",
         path=f"/dynamic/{dynamic_id}/chastity",
         link_label="Open chastity",
         subject_membership_id=target.id,
     )
+    maybe_relock_after_orgasm(db, lockup)
 
 
 
@@ -193,6 +212,7 @@ def _entry_out(
         during_own_lockup=during_own_lockup,
         locked_partner_names=locked_partner_names or [],
         session_entry_count=session_entry_count,
+        goal_unmet=bool(getattr(entry, "goal_unmet", False)),
     )
 
 def _membership_map(db: Session, dynamic_id: str) -> dict[str, Membership]:
@@ -556,6 +576,14 @@ def log_tracking_entry(
         subject_membership_id=target.id,
     )
 
+    orgasm_tags = _entry_orgasm_tags(entry)
+    gift_kind = event_goal_kind(orgasm_tags)
+    dynamic_row = db.get(Dynamic, dynamic_id)
+    if gift_kind and dynamic_row is not None:
+        from ..services.chastity_goals import goal_unmet_for_event
+
+        entry.goal_unmet = goal_unmet_for_event(db, dynamic_row, target.id, gift_kind)
+
     _maybe_release_lockup_for_full_orgasm(
         db,
         dynamic_id=dynamic_id,
@@ -563,6 +591,17 @@ def log_tracking_entry(
         target=target,
         entry=entry,
     )
+
+    if gift_kind and dynamic_row is not None:
+        from ..services.chastity_goals import note_orgasm_gift
+
+        note_orgasm_gift(
+            db,
+            dynamic_row,
+            sub_id=target.id,
+            occurred_at=entry.occurred_at,
+            tags=orgasm_tags,
+        )
 
     db.commit()
 

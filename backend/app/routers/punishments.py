@@ -24,6 +24,91 @@ from ..services.punishments import (
 router = APIRouter(prefix="/dynamics", tags=["punishments"])
 
 
+def _load_reports(db: Session, dynamic_id: str, ids: list) -> list:
+    found = []
+    for raw in ids or []:
+        rid = str(raw or "").strip()
+        if not rid:
+            continue
+        report = get_report(db, dynamic_id, rid)
+        if report is not None:
+            found.append(report)
+    return found
+
+
+@router.post("/{dynamic_id}/punishments/bulk")
+def post_punishment_bulk(
+    dynamic_id: str,
+    payload: dict[str, Any],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can do this.")
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    action = str(payload.get("action") or "").strip().lower()
+    reports = _load_reports(db, dynamic_id, payload.get("ids") if isinstance(payload.get("ids"), list) else [])
+    if not reports:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No reports found")
+    results = []
+    for report in reports:
+        if action == "assign":
+            results.append(
+                assign_punishment(
+                    db,
+                    dynamic=dynamic,
+                    membership=membership,
+                    report=report,
+                    adjustments=payload.get("adjustments") if isinstance(payload.get("adjustments"), list) else [],
+                )
+            )
+        elif action == "goal":
+            results.append(
+                set_goal_as_punishment(
+                    db,
+                    dynamic=dynamic,
+                    membership=membership,
+                    report=report,
+                    payload=payload,
+                )
+            )
+        elif action == "remind":
+            results.append(remind_tomorrow(db, membership=membership, report=report))
+        elif action == "covered":
+            results.append(mark_covered(db, membership=membership, report=report))
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown bulk action")
+    db.commit()
+    return {"count": len(results), "results": results}
+
+
+@router.post("/{dynamic_id}/punishments/ideas")
+def post_punishment_ideas_many(
+    dynamic_id: str,
+    payload: dict[str, Any],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    membership = get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    reports = _load_reports(db, dynamic_id, payload.get("ids") if isinstance(payload.get("ids"), list) else [])
+    if dynamic is None or not reports:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+    result = generate_punishment_ideas(
+        db,
+        dynamic=dynamic,
+        membership=membership,
+        user=user,
+        report=reports[0],
+        reports=reports,
+    )
+    db.commit()
+    return result
+
+
 @router.get("/{dynamic_id}/punishments/options")
 def get_punishment_options(
     dynamic_id: str,

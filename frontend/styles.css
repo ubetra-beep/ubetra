@@ -3171,6 +3171,12 @@ details[open] summary {
   align-items: center;
   width: 2.15rem;
   gap: 0.12rem;
+  background: none;
+  border: 0;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
 }
 
 .sleep-ring {
@@ -3386,9 +3392,40 @@ details[open] summary {
   padding: 0.7rem 0.75rem;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.1);
+  border-left-width: 4px;
   background: rgba(255, 255, 255, 0.06);
   color: inherit;
   cursor: pointer;
+}
+
+.inbox-log-item.tone-red { border-left-color: #e85d6c; }
+.inbox-log-item.tone-amber { border-left-color: #e0a045; }
+.inbox-log-item.tone-blue { border-left-color: #5b9bd5; }
+.inbox-log-item.tone-purple { border-left-color: #b07be0; }
+.inbox-log-item.tone-green { border-left-color: #5dae78; }
+.inbox-log-item.tone-grey { border-left-color: #8a8f98; }
+
+.inbox-tone-chip {
+  display: inline-block;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  margin-bottom: 0.2rem;
+}
+
+.goal-history-met { border-left: 4px solid #5dae78; }
+.goal-history-gift { border-left: 4px solid #5b9bd5; }
+.goal-history-reset { border-left: 4px solid #e0a045; }
+.goal-history-cheated { border-left: 4px solid #e85d6c; }
+.goal-history-item { padding: 0.35rem 0.55rem; margin: 0.25rem 0; }
+
+.chastity-timeline-period.term-cheated { border-color: #e85d6c; }
+.chastity-timeline-period.term-unmet { border-color: #e0a045; }
+.chastity-event-cheated { color: #e85d6c; }
+
+.task-compact.needs-approval {
+  box-shadow: inset 3px 0 0 #e0a045;
 }
 
 .inbox-log-item:hover {

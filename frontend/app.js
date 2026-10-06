@@ -587,11 +587,43 @@ function isPunishmentInboxItem(item) {
   return String(item?.kind || "").includes("punishment") || !!punishmentReportIdFromInboxItem(item);
 }
 
+function inboxToneClass(kind) {
+  const k = String(kind || "");
+  if (k.startsWith("punishment") || k.includes("confession")) return "tone-red";
+  if (k === "task_overdue" || k === "task_completed_late") return "tone-amber";
+  if (k === "task_due_soon") return "tone-blue";
+  if (k.startsWith("lockup") || k.includes("chastity") || k === "orgasm_logged") return "tone-purple";
+  if (k === "edge_guard_removal" || k.includes("approval")) return "tone-green";
+  return "tone-grey";
+}
+
+function groupInboxItems(items) {
+  const out = [];
+  const index = new Map();
+  (items || []).forEach((item) => {
+    const special =
+      item.kind === "task_completed_late" ||
+      item.kind === "edge_guard_removal" ||
+      isPunishmentInboxItem(item);
+    const key = special ? `one:${item.id}` : `${item.kind}|${item.title || ""}`;
+    const existing = index.get(key);
+    if (!existing) {
+      const row = { ...item, count: 1 };
+      index.set(key, row);
+      out.push(row);
+      return;
+    }
+    existing.count += 1;
+  });
+  return out;
+}
+
 function showInboxOverlay(dynamicId, items) {
   const existing = document.getElementById("inbox-overlay");
   if (existing) existing.remove();
 
   const punishItems = items.filter(isPunishmentInboxItem);
+  const displayItems = groupInboxItems(items);
   const log = el("div", { className: "inbox-log" });
   const error = el("p", { className: "error hidden" });
 
@@ -616,7 +648,7 @@ function showInboxOverlay(dynamicId, items) {
     overlay.remove();
   };
 
-  items.forEach((item) => {
+  displayItems.forEach((item) => {
     const when = item.occurred_at
       ? formatLocalDateTime(item.occurred_at, {
         month: "short",
@@ -641,8 +673,8 @@ function showInboxOverlay(dynamicId, items) {
         if (!log.querySelector(".inbox-log-item")) overlay.remove();
         if (path) navigate(path);
       };
-      const row = el("div", { className: `inbox-log-item ${item.kind}` }, [
-        el("div", { className: "inbox-log-title" }, item.title || "Task completed late"),
+      const row = el("div", { className: `inbox-log-item ${inboxToneClass(item.kind)} ${item.kind}` }, [
+        el("div", { className: "inbox-log-title" }, item.count > 1 ? `${item.title || "Task completed late"} x${item.count}` : (item.title || "Task completed late")),
         item.body ? el("div", { className: "inbox-log-body" }, item.body) : null,
         when ? el("div", { className: "inbox-log-when" }, when) : null,
         el("div", { className: "row wrap" }, [
@@ -682,8 +714,8 @@ function showInboxOverlay(dynamicId, items) {
         showToast(decision === "approve" ? "Site removed" : "Request denied");
         if (!log.querySelector(".inbox-log-item")) overlay.remove();
       };
-      const row = el("div", { className: `inbox-log-item ${item.kind}` }, [
-        el("div", { className: "inbox-log-title" }, item.title || "Edge Guard removal requested"),
+      const row = el("div", { className: `inbox-log-item ${inboxToneClass(item.kind)} ${item.kind}` }, [
+        el("div", { className: "inbox-log-title" }, item.count > 1 ? `${item.title || "Edge Guard removal requested"} x${item.count}` : (item.title || "Edge Guard removal requested")),
         item.body ? el("div", { className: "inbox-log-body" }, item.body) : null,
         when ? el("div", { className: "inbox-log-when" }, when) : null,
         el("div", { className: "row wrap" }, [
@@ -702,11 +734,13 @@ function showInboxOverlay(dynamicId, items) {
       log.appendChild(row);
       return;
     }
+    const titleText = item.count > 1 ? `${item.title || "Update"} x${item.count}` : (item.title || "Update");
     const row = el("button", {
       type: "button",
-      className: `inbox-log-item ${item.kind || ""}`,
+      className: `inbox-log-item ${inboxToneClass(item.kind)} ${item.kind || ""}`,
     }, [
-      el("div", { className: "inbox-log-title" }, item.title || "Update"),
+      el("div", { className: `inbox-tone-chip ${inboxToneClass(item.kind)}` }, inboxToneClass(item.kind).replace("tone-", "")),
+      el("div", { className: "inbox-log-title" }, titleText),
       item.body ? el("div", { className: "inbox-log-body" }, item.body) : null,
       when ? el("div", { className: "inbox-log-when" }, when) : null,
     ]);
@@ -719,6 +753,17 @@ function showInboxOverlay(dynamicId, items) {
 
   const actions = el("div", { className: "stack" }, [
     error,
+    punishItems.length >= 2
+      ? el("button", {
+        className: "primary-btn",
+        type: "button",
+        onClick: async () => {
+          const ids = punishItems.map(punishmentReportIdFromInboxItem).filter(Boolean);
+          await dismiss();
+          if (ids.length) navigate(`/dynamic/${dynamicId}/punishment?ids=${ids.join(",")}`);
+        },
+      }, "Respond to all")
+      : null,
     punishItems.length
       ? el("button", {
         className: "ghost-btn",
@@ -734,7 +779,7 @@ function showInboxOverlay(dynamicId, items) {
   ]);
 
   const panel = el("div", { className: "inbox-panel" }, [
-    el("h2", {}, "While you were away"),
+    el("h2", {}, "Important notifications"),
     el("p", { className: "muted" }, punishItems.length
       ? "Tap an item to handle it. Snooze punishments until tomorrow if you are not ready."
       : "Activity and tasks that need your eye."),
@@ -761,6 +806,8 @@ function punishmentNeedsDommeResponse(report) {
 }
 
 async function maybeShowPunishmentReminders() {
+  // Punishments are listed on the Important notifications sheet.
+  return;
   if (!state.token || !state.user?.onboarding_completed) return;
   if (document.visibilityState !== "visible") return;
   if (document.getElementById("inbox-overlay")) return;
@@ -1108,12 +1155,13 @@ function isDueInFutureBeyondToday(dueIso) {
   return !isDueTodayOrPast(dueIso);
 }
 
-const DEFAULT_TASK_CATEGORY_TAGS = ["Domestic", "Health / Hygiene", "Sensual", "Sexual"];
+const DEFAULT_TASK_CATEGORY_TAGS = ["Domestic", "Health / Hygiene", "Sensual", "Sexual", "Submission"];
 const TASK_TAG_LABELS = {
   domestic: "Domestic",
   "health / hygiene": "Health / Hygiene",
   sensual: "Sensual",
   sexual: "Sexual",
+  submission: "Submission",
   punishment: "Punishment",
 };
 
@@ -1225,7 +1273,10 @@ const TASK_AI_PROMPTS = [
 function buildTaskAssistRow(textarea, { dynamicId, listId = "", taskId = "" } = {}) {
   const status = el("p", { className: "muted" });
   const custom = el("input", { placeholder: "Or type your own rewrite prompt…" });
-  const row = el("div", { className: "row wrap" });
+  const picker = el("select");
+  picker.appendChild(el("option", { value: "" }, "AI assist"));
+  TASK_AI_PROMPTS.forEach((p) => picker.appendChild(el("option", { value: p.id }, p.label)));
+  picker.appendChild(el("option", { value: "custom" }, "Custom prompt"));
   async function run(promptId, customPrompt = "") {
     if (!isAiEnabled()) {
       openAiOffSheet("Task assist rewrites the wording with your shared AI context.");
@@ -1249,23 +1300,16 @@ function buildTaskAssistRow(textarea, { dynamicId, listId = "", taskId = "" } = 
       status.textContent = ex.message;
     }
   }
-  TASK_AI_PROMPTS.forEach((p) => {
-    row.appendChild(el("button", {
-      type: "button",
-      className: "ghost-btn ai-only",
-      "data-ai-label": p.label,
-      onClick: () => run(p.id),
-    }, p.label));
+  picker.addEventListener("change", () => {
+    const promptId = picker.value;
+    picker.value = "";
+    if (!promptId) return;
+    if (promptId === "custom") run("custom", custom.value.trim());
+    else run(promptId);
   });
-  row.appendChild(el("button", {
-    type: "button",
-    className: "ghost-btn ai-only",
-    "data-ai-label": "Custom task rewrite",
-    onClick: () => run("custom", custom.value.trim()),
-  }, "Custom"));
-  return el("div", { className: "stack" }, [
-    el("p", { className: "muted" }, [el("span", { className: "ai-mark" }, "✦"), " AI assist"]),
-    row,
+  return el("details", { className: "stack" }, [
+    el("summary", {}, [el("span", { className: "ai-mark" }, "✦"), " AI assist"]),
+    picker,
     custom,
     status,
   ]);
@@ -2096,6 +2140,18 @@ function formatTimeOfDay(value) {
   const d = new Date();
   d.setHours(t.h, t.min, 0, 0);
   return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function presetWindowForDate(day, preset) {
+  const start = parseTimeOfDay(preset?.start || "23:00");
+  const end = parseTimeOfDay(preset?.end || "07:00");
+  if (!start || !end) return null;
+  const base = day instanceof Date ? day : new Date(`${day}T12:00:00`);
+  if (Number.isNaN(base.getTime())) return null;
+  const started = new Date(base.getFullYear(), base.getMonth(), base.getDate(), start.h, start.min, 0, 0);
+  const ended = new Date(base.getFullYear(), base.getMonth(), base.getDate(), end.h, end.min, 0, 0);
+  if (ended <= started) ended.setDate(ended.getDate() + 1);
+  return { started_at: started.toISOString(), ended_at: ended.toISOString() };
 }
 
 function dueIsoFromTimeOfDay(value, fallback = "20:00") {
@@ -3189,8 +3245,16 @@ async function getInstalledApkInfo() {
 
 async function openAndroidApkDownload(url) {
   const abs = new URL(url || "/apk/ubetra.apk", window.location.origin).href;
+  const updater = nativePlugin("UbetraAppUpdater");
+  if (updater && typeof updater.downloadAndInstall === "function") {
+    const can = typeof updater.canInstall === "function" ? await updater.canInstall() : { canInstall: true };
+    if (can && can.canInstall === false && typeof updater.openInstallPermission === "function") {
+      await updater.openInstallPermission();
+    }
+    await updater.downloadAndInstall({ url: abs });
+    return;
+  }
   if (isNativeApp()) {
-    // Stay in the WebView so MainActivity's DownloadManager listener can catch the APK.
     window.location.assign(abs);
     return;
   }
@@ -3210,7 +3274,7 @@ function appendAndroidAppCard(stack, androidApp) {
       : "The Android APK is not published on this server yet.";
   } else if (native) {
     status.textContent =
-      "Downloads to your phone, then close UBETRA completely before installing. Play Protect may warn because this is a sideloaded app — tap Install anyway. If you still see “App not installed”, uninstall the old UBETRA once (the signing key is now stable), then install this APK.";
+      "Saved to Downloads/ubetra.apk. Tap the download notification to install. Play Protect may warn because this is a sideloaded app — tap Install anyway.";
   } else {
     status.textContent = `Android APK ${androidApp.version || ""} — more reliable notifications than the browser PWA. Play Protect may warn on sideload; tap Install anyway. If install fails, uninstall the old UBETRA once, then install this file.`;
   }
@@ -3221,9 +3285,11 @@ function appendAndroidAppCard(stack, androidApp) {
     onClick: async () => {
       if (!available) return;
       try {
-        status.textContent = native
-          ? "Starting download… when it finishes, swipe UBETRA closed, then tap the download notification to install."
-          : "Downloading APK…";
+        status.textContent = nativePlugin("UbetraAppUpdater")
+          ? "Downloading update…"
+          : (native
+            ? "Saved to Downloads/ubetra.apk. Tap the download notification to install."
+            : "Downloading APK…");
         await openAndroidApkDownload(androidApp.url || "/apk/ubetra.apk");
       } catch (err) {
         status.textContent = err.message || "Could not start download.";
@@ -4087,7 +4153,7 @@ function showApkUpdatePopup(android) {
   const backdrop = el("div", { className: "modal-backdrop" });
   const card = el("div", { className: "card stack modal-card" }, [
     el("h3", {}, "Android app update"),
-    el("p", {}, `Version ${android.version || code} is ready on the server. Download, close UBETRA fully, then install.`),
+    el("p", {}, `Version ${android.version || code} is ready on the server. Downloading update… The system installer opens when it finishes. Older apps save Downloads/ubetra.apk — tap the download notification to install.`),
     el("button", {
       type: "button",
       className: "primary-btn",
@@ -6103,7 +6169,111 @@ function sleepRingDash(hours, locked) {
   return parts.join(" ");
 }
 
-function renderChastityDayCell(day) {
+function lockupCoversLocalDay(lockup, dateStr) {
+  const start = new Date(`${dateStr}T00:00:00`);
+  const end = new Date(`${dateStr}T23:59:59`);
+  const lockStart = new Date(lockup.started_at).getTime();
+  const lockEnd = lockup.ended_at ? new Date(lockup.ended_at).getTime() : Date.now();
+  return lockEnd >= start.getTime() && lockStart <= end.getTime();
+}
+
+async function openChastityDaySheet(dynamicId, day) {
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const card = el("div", { className: "card stack modal-card" }, [
+    el("h3", {}, day.date || "Day"),
+    el("p", { className: "muted" }, "Loading lockups…"),
+  ]);
+  backdrop.appendChild(card);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+  try {
+    const [lockups, settings] = await Promise.all([
+      api(`/dynamics/${dynamicId}/chastity`),
+      api(`/dynamics/${dynamicId}/chastity/settings`).catch(() => ({ unlock_presets: [] })),
+    ]);
+    const covering = (lockups || []).filter((lockup) => lockupCoversLocalDay(lockup, day.date));
+    const sleep = (settings.unlock_presets || []).find((preset) =>
+      String(preset.break_type || "").includes("sleep") || String(preset.name || "").toLowerCase() === "sleep"
+    ) || { name: "Sleep", break_type: "authorized_sleep", start: "23:00", end: "07:00" };
+    const startInput = el("input", { type: "datetime-local" });
+    const endInput = el("input", { type: "datetime-local" });
+    const window = presetWindowForDate(day.date, sleep);
+    if (window) {
+      startInput.value = toLocalDatetimeValue(new Date(window.started_at));
+      endInput.value = toLocalDatetimeValue(new Date(window.ended_at));
+    }
+    const lockupSelect = el("select");
+    covering.forEach((lockup) => {
+      lockupSelect.appendChild(el("option", { value: lockup.id }, `${formatLocalDateTime(lockup.started_at)} · ${lockup.status}`));
+    });
+    const err = el("p", { className: "error hidden" });
+    async function postBreak(startedAt, endedAt) {
+      const lockupId = lockupSelect.value;
+      if (!lockupId) {
+        err.textContent = "No lockup covers this day.";
+        err.classList.remove("hidden");
+        return;
+      }
+      err.classList.add("hidden");
+      await api(`/dynamics/${dynamicId}/chastity/${lockupId}/breaks/historical`, {
+        method: "POST",
+        body: JSON.stringify({
+          break_type: sleep.break_type || "authorized_sleep",
+          break_reason: sleep.name || "Sleep",
+          started_at: startedAt,
+          ended_at: endedAt,
+          note: sleep.name || "Sleep",
+          tags: [sleep.name || "Sleep"],
+        }),
+      });
+      backdrop.remove();
+      showToast("Sleep unlock added.");
+    }
+    card.replaceChildren(
+      el("h3", {}, day.date || "Day"),
+      covering.length
+        ? el("div", { className: "stack" }, covering.map((lockup) => el("p", {}, `${lockup.status} · ${formatLocalDateTime(lockup.started_at)} – ${lockup.ended_at ? formatLocalDateTime(lockup.ended_at) : "ongoing"}`)))
+        : el("p", { className: "muted" }, "No lockup covers this day."),
+      covering.length ? el("label", { className: "stack" }, ["Lockup", lockupSelect]) : null,
+      covering.length ? el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: async () => {
+          try {
+            const span = presetWindowForDate(day.date, sleep);
+            if (!span) return;
+            await postBreak(span.started_at, span.ended_at);
+          } catch (ex) {
+            err.textContent = ex.message;
+            err.classList.remove("hidden");
+          }
+        },
+      }, "Add sleep unlock") : null,
+      covering.length ? el("label", { className: "stack" }, ["Custom start", startInput]) : null,
+      covering.length ? el("label", { className: "stack" }, ["Custom end", endInput]) : null,
+      covering.length ? el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          try {
+            await postBreak(datetimeLocalToIso(startInput.value), datetimeLocalToIso(endInput.value));
+          } catch (ex) {
+            err.textContent = ex.message;
+            err.classList.remove("hidden");
+          }
+        },
+      }, "Add custom unlock") : null,
+      err,
+      el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Close"),
+    );
+  } catch (ex) {
+    card.replaceChildren(el("p", { className: "error" }, ex.message || "Could not load this day."));
+  }
+}
+
+function renderChastityDayCell(day, { dynamicId = "" } = {}) {
   const dayNum = String(new Date(`${day.date}T12:00:00`).getDate());
   const hours = day.sleep_hours;
   const hasSleep = hours != null && Number(hours) > 0;
@@ -6111,7 +6281,14 @@ function renderChastityDayCell(day) {
   if (hasSleep) {
     title.push(`${Number(hours).toFixed(1)}h sleep${day.sleep_locked ? " locked" : " unlocked"}`);
   }
-  const host = el("div", { className: "chastity-day", title: title.join(" · ") });
+  const host = el("button", {
+    type: "button",
+    className: "chastity-day",
+    title: title.join(" · "),
+    onClick: () => {
+      if (dynamicId) openChastityDaySheet(dynamicId, day);
+    },
+  });
   if (hasSleep) {
     const locked = !!day.sleep_locked;
     const wrap = el("div", {
@@ -6136,7 +6313,7 @@ function renderChastityDayCell(day) {
   return host;
 }
 
-function renderChastityCalendar(days) {
+function renderChastityCalendar(days, { dynamicId = "" } = {}) {
   const byMonth = {};
   days.forEach((d) => {
     const key = d.date.slice(0, 7);
@@ -6150,7 +6327,7 @@ function renderChastityCalendar(days) {
     ]);
     const grid = el("div", { className: "chastity-day-grid" });
     byMonth[monthKey].forEach((day) => {
-      grid.appendChild(renderChastityDayCell(day));
+      grid.appendChild(renderChastityDayCell(day, { dynamicId }));
     });
     monthEl.appendChild(grid);
     wrap.appendChild(monthEl);
@@ -6409,7 +6586,7 @@ function renderHistoryReport(dynamicId, reportId) {
               { label: "Partial days", value: partner.partial_days },
               { label: "Free days", value: partner.free_days },
             ]),
-            renderChastityCalendar(partner.days),
+            renderChastityCalendar(partner.days, { dynamicId: id }),
           ]));
         });
         historyReportShell(id, report.title, nodes);
@@ -6932,9 +7109,26 @@ function isTermSplittingUnlock(ev) {
 
 function chastityEndTitle(lockup) {
   const kind = lockup?.ended_kind || "";
-  if (kind === "released_orgasm" || kind === "released_timer") return "Released!";
+  if (kind === "cheated_orgasm") return "Cheated Orgasm!";
+  if (kind === "released_orgasm") return "Granted Orgasm!";
+  if (kind === "released_timer") return "Released!";
   if (kind === "historical") return "Unlocked";
   return "Unlocked";
+}
+
+function orgasmInlineTitle(entry) {
+  const tags = [];
+  (entry?.orgasms || []).forEach((row) => (row.tags || []).forEach((tag) => tags.push(String(tag))));
+  (entry?.tags || []).forEach((tag) => tags.push(String(tag)));
+  const lower = tags.map((tag) => tag.toLowerCase());
+  const cheated = lower.some((tag) => tag.includes("cheat"));
+  let label = "Orgasm";
+  if (lower.some((tag) => tag.includes("ruin"))) label = "Ruined";
+  else if (lower.some((tag) => tag.includes("denied") || tag.includes("denial"))) label = "Denied";
+  else if (lower.some((tag) => tag.includes("milk"))) label = "Milking";
+  else if (lower.some((tag) => tag.includes("full"))) label = "Full";
+  else if (tags[0]) label = tags[0];
+  return { label, cheated, tags };
 }
 
 function chastityBreakTitle(brk) {
@@ -6963,6 +7157,7 @@ function buildChastityTimelineEvents(lockups, opts = {}) {
       tags: lockup.tags || [],
       noteKey: "device_notes",
       endedKind: lockup.ended_kind || "",
+      goalUnmet: !!lockup.goal_unmet,
     });
     (lockup.breaks || []).forEach((brk) => {
       const endOk = !brk.ended_at || new Date(brk.ended_at) > new Date(brk.started_at);
@@ -6991,9 +7186,11 @@ function buildChastityTimelineEvents(lockups, opts = {}) {
     });
     if (lockup.ended_at) {
       const title = chastityEndTitle(lockup);
+      const endedKind = lockup.ended_kind || "";
+      const isRelease = endedKind === "released_orgasm" || endedKind === "released_timer" || endedKind === "cheated_orgasm";
       events.push({
         id: "release-" + lockup.id,
-        kind: title === "Released!" ? "release" : "unlocked",
+        kind: isRelease ? "release" : "unlocked",
         lockupId: lockup.id,
         at: lockup.ended_at,
         endAt: lockup.ended_at,
@@ -7003,7 +7200,9 @@ function buildChastityTimelineEvents(lockups, opts = {}) {
         detail: lockup.release_notes || "",
         tags: lockup.tags || [],
         noteKey: "release_notes",
-        endedKind: lockup.ended_kind || "",
+        endedKind,
+        cheated: endedKind === "cheated_orgasm",
+        goalUnmet: !!lockup.goal_unmet,
       });
     } else {
       // Active lockup — Eventual release at the top of the term
@@ -7155,6 +7354,43 @@ function chastityTermLabelFromEvents(events, { isNewest = false } = {}) {
   };
 }
 
+function attachOrgasmTimelineEvents(periods, entries) {
+  (entries || []).forEach((entry) => {
+    if (entry.event_type !== "orgasm" && entry.event_type !== "both") return;
+    const at = new Date(entry.occurred_at).getTime();
+    if (!Number.isFinite(at)) return;
+    const info = orgasmInlineTitle(entry);
+    const ev = {
+      id: "org-" + entry.id,
+      kind: "orgasm",
+      at: entry.occurred_at,
+      endAt: entry.occurred_at,
+      title: info.cheated ? "Cheated Orgasm!" : info.label,
+      cheated: info.cheated,
+      goalUnmet: !!entry.goal_unmet,
+      detail: info.tags.join(", "),
+      tags: info.tags,
+      synthetic: true,
+    };
+    const host = periods.find((term) => {
+      const lock = term.find((row) => row.kind === "lockup");
+      if (!lock) return false;
+      const start = new Date(lock.at).getTime();
+      const release = [...term].reverse().find((row) => row.kind === "release" || row.kind === "unlocked");
+      const end = release ? new Date(release.at).getTime() : Date.now();
+      return Number.isFinite(start) && at >= start && at <= end + 1000;
+    });
+    if (!host) return;
+    host.push(ev);
+    host.sort((a, b) => new Date(a.at) - new Date(b.at));
+    const release = host.find((row) => row.kind === "release" && row.endedKind === "released_orgasm");
+    if (release && info.label && info.label !== "Orgasm") {
+      release.title = info.cheated ? "Cheated Orgasm!" : `Granted Orgasm! · ${info.label}`;
+      release.cheated = info.cheated || release.cheated;
+    }
+  });
+}
+
 function renderChastityTimeline(lockups, partnerName, opts = {}) {
   const {
     dynamicId,
@@ -7163,8 +7399,10 @@ function renderChastityTimeline(lockups, partnerName, opts = {}) {
     youAreDominant = false,
     tagPresets = [],
     onSaved = null,
+    orgasmEntries = [],
   } = opts;
   const periods = buildChastityTerms(lockups, { youAreDominant });
+  attachOrgasmTimelineEvents(periods, orgasmEntries);
   const body = el("div", { className: "chastity-timeline hidden" });
   const toggle = el("button", {
     type: "button",
@@ -7347,7 +7585,7 @@ function renderChastityTimeline(lockups, partnerName, opts = {}) {
       const header = el("div", { className: "chastity-timeline-header" }, [
         el("button", {
           type: "button",
-          className: "chastity-timeline-title-btn",
+          className: `chastity-timeline-title-btn${event.cheated || event.title === "Cheated Orgasm!" ? " chastity-event-cheated" : ""}`,
           onClick: () => detail.classList.toggle("hidden"),
         }, event.title),
       ]);
@@ -7470,8 +7708,11 @@ function renderChastityTimeline(lockups, partnerName, opts = {}) {
         idx === 0 ||
         termEvents.some((e) => e.open) ||
         termEvents.some((e) => e.kind === "lockup" && !e.endValue && !e.synthetic);
+      const cheated = termEvents.some((e) => e.cheated || e.title === "Cheated Orgasm!" || e.endedKind === "cheated_orgasm");
+      const unmet = !cheated && termEvents.some((e) => e.goalUnmet);
+      const tone = cheated ? " term-cheated" : unmet ? " term-unmet" : "";
       periodsHost.appendChild(
-        el("details", { className: "chastity-timeline-period", open: openByDefault }, [
+        el("details", { className: `chastity-timeline-period${tone}`, open: openByDefault }, [
           el("summary", { className: "chastity-timeline-period-summary" }, [
             el("span", { className: "chastity-timeline-period-range" }, label.range),
             el("span", { className: "chastity-timeline-period-days" }, label.daysLabel),
@@ -7759,15 +8000,48 @@ function appendCreateTaskForm(stack, {
       ? "Punishment task(s). One per line."
       : "One task per line",
   });
+  const repeating = el("input", { type: "checkbox" });
   const recurrence = el("select");
-  [["none", "One-time"], ["daily", "Daily"], ["weekly", "Weekly"]].forEach(([v, l]) => {
+  [["daily", "Daily"], ["weekly", "Weekly"], ["every", "Every X days"]].forEach(([v, l]) => {
     recurrence.appendChild(el("option", { value: v }, l));
   });
-  const assignee = buildAssigneeSelect(dynamic.partners, { includeDefault: false });
-  const defaultAssignee = confession?.reported_by_membership_id
-    || dynamic.partners?.find((p) => !p.is_you)?.id
-    || "";
-  if (defaultAssignee) assignee.value = defaultAssignee;
+  const everyDays = el("input", { type: "number", min: "2", max: "366", value: "3" });
+  const timeChip = { value: "08:00" };
+  const timeRow = el("div", { className: "row wrap" });
+  [
+    ["08:00", "Morning 08:00"],
+    ["12:00", "Mid Day 12:00"],
+    ["18:00", "Evening 18:00"],
+    ["custom", "Custom"],
+  ].forEach(([value, label]) => {
+    timeRow.appendChild(el("button", {
+      type: "button",
+      className: value === "08:00" ? "primary-btn" : "ghost-btn",
+      onClick: () => {
+        timeChip.value = value;
+        timeRow.querySelectorAll("button").forEach((btn) => btn.className = "ghost-btn");
+        timeRow.querySelector(`[data-time="${value}"]`)?.classList.replace("ghost-btn", "primary-btn");
+      },
+      "data-time": value,
+    }, label));
+  });
+  const customTime = el("input", { type: "time", value: "20:00" });
+  const repeatBox = el("div", { className: "stack hidden" }, [
+    el("label", { className: "stack" }, ["Repeats", recurrence]),
+    el("label", { className: "stack hidden every-n" }, ["Every how many days", everyDays]),
+    el("p", { className: "muted time-chips" }, "Due time"),
+    timeRow,
+    customTime,
+  ]);
+  repeating.addEventListener("change", () => {
+    repeatBox.classList.toggle("hidden", !repeating.checked);
+  });
+  recurrence.addEventListener("change", () => {
+    repeatBox.querySelector(".every-n")?.classList.toggle("hidden", recurrence.value !== "every");
+    repeatBox.querySelector(".time-chips")?.classList.toggle("hidden", recurrence.value === "weekly");
+    timeRow.classList.toggle("hidden", recurrence.value === "weekly");
+    customTime.classList.toggle("hidden", recurrence.value === "weekly");
+  });
   const dueBy = buildDueByControls();
   const reminders = buildTaskReminderControls({ defaults: reminderDefaults });
   const tagPresets = [...(presets || DEFAULT_TASK_CATEGORY_TAGS)];
@@ -7784,8 +8058,8 @@ function appendCreateTaskForm(stack, {
       : el("p", { className: "muted" }, "At least one category tag is required. Due date is optional."),
     title,
     tasksBox,
-    el("label", { className: "stack" }, ["Recurrence", recurrence]),
-    el("label", { className: "stack" }, ["Assign to", assignee]),
+    el("label", { className: "checkbox-label" }, [repeating, " Repeating task"]),
+    repeatBox,
     dueBy.node,
     reminders.node,
     el("p", { className: "muted" }, "Category tags (pick at least one)"),
@@ -7800,7 +8074,11 @@ function appendCreateTaskForm(stack, {
       onClick: async () => {
         error.classList.add("hidden");
         try {
-          const result = await api(`/dynamics/${dynamicId}/punishments/${confession.id}/ideas`, { method: "POST" });
+          const ideaIds = (confession.ids && confession.ids.length) ? confession.ids : [confession.id];
+          const result = await api(`/dynamics/${dynamicId}/punishments/ideas`, {
+            method: "POST",
+            body: JSON.stringify({ ids: ideaIds }),
+          });
           const ideas = result.ideas || [];
           ideasHost.replaceChildren();
           if (!ideas.length) {
@@ -7854,23 +8132,36 @@ function appendCreateTaskForm(stack, {
         error.classList.remove("hidden");
         return;
       }
-      if (!assignee.value) {
-        error.textContent = "Choose who this is assigned to.";
-        error.classList.remove("hidden");
-        return;
-      }
       const reminderOffsets = reminders.getOffsets();
+      let recurrenceValue = "none";
+      let recurrenceInterval = null;
+      if (repeating.checked) {
+        if (recurrence.value === "weekly") recurrenceValue = "weekly";
+        else if (recurrence.value === "every") {
+          recurrenceValue = "daily";
+          recurrenceInterval = Math.max(2, Number(everyDays.value) || 2);
+        } else {
+          recurrenceValue = "daily";
+          recurrenceInterval = 1;
+        }
+      }
       const payload = {
         title: title.value.trim(),
-        assigned_to_membership_id: assignee.value,
         tasks: lines.map((content, index) => {
           const row = {
             content,
             visibility: index === 0 ? "visible" : "after_prior",
-            recurrence: recurrence.value,
+            recurrence: recurrenceValue,
             tags,
           };
-          dueBy.applyTo(row);
+          if (recurrenceInterval) row.recurrence_interval = recurrenceInterval;
+          if (repeating.checked && recurrenceValue === "daily") {
+            const clock = timeChip.value === "custom" ? customTime.value : timeChip.value;
+            const due = dueIsoFromTimeOfDay(clock || "08:00");
+            if (due) row.due_at = due;
+          } else {
+            dueBy.applyTo(row);
+          }
           if (reminderOffsets) row.reminder_offsets = reminderOffsets;
           return row;
         }),
@@ -7882,7 +8173,11 @@ function appendCreateTaskForm(stack, {
         });
         if (confession?.id) {
           try {
-            await api(`/dynamics/${dynamicId}/punishments/${confession.id}/covered`, { method: "POST" });
+            const coverIds = (confession.ids && confession.ids.length) ? confession.ids : [confession.id];
+            await api(`/dynamics/${dynamicId}/punishments/bulk`, {
+              method: "POST",
+              body: JSON.stringify({ ids: coverIds, action: "covered" }),
+            });
           } catch {
             /* task still created */
           }
@@ -7900,7 +8195,11 @@ function appendCreateTaskForm(stack, {
       }
     },
   }, confession ? "Assign task" : "Create task list"));
-  stack.appendChild(el("div", { className: "card stack" }, cardKids));
+  const form = el("details", { className: "card stack", open: !!confession }, [
+    el("summary", {}, confession ? "Assign a punishment task" : "Create task"),
+    ...cardKids.filter((node) => node && node.tagName !== "H2"),
+  ]);
+  stack.appendChild(form);
 }
 
 function renderTasksActsSwitcher(dynamicId, active) {
@@ -8527,26 +8826,24 @@ function renderOverlap(dynamicId) {
 
 function renderTasks(dynamicId) {
   const { query } = parseRoute();
-  if (query.get("tab") === "goals") {
-    renderTaskGoals(dynamicId);
-    return;
-  }
   if (query.get("tab") === "regimen") {
     renderTrainingRegimen(dynamicId);
     return;
   }
-  const punishId = query.get("punish") || "";
+  const punishIds = (query.get("punish") || "").split(",").map((s) => s.trim()).filter(Boolean);
   viewEl.replaceChildren(el("p", { className: "muted" }, "Loading tasks..."));
   Promise.all([
     loadDynamic(dynamicId),
     api(`/dynamics/${dynamicId}/tags`).catch(() => ({ presets: [], task_presets: DEFAULT_TASK_CATEGORY_TAGS })),
-    punishId
-      ? api(`/dynamics/${dynamicId}/punishments/${punishId}`).catch(() => null)
-      : Promise.resolve(null),
+    punishIds.length
+      ? Promise.all(punishIds.map((pid) => api(`/dynamics/${dynamicId}/punishments/${pid}`).catch(() => null)))
+      : Promise.resolve([]),
     api(`/dynamics/${dynamicId}/policy`).catch(() => null),
     api(`/dynamics/${dynamicId}/chastity-goals`).catch(() => null),
+    api(`/dynamics/${dynamicId}/acts`).catch(() => []),
+    api(`/dynamics/${dynamicId}/task-completions`).catch(() => []),
   ])
-    .then(([, tagData, punishData, policy, goalsData]) => {
+    .then(([, tagData, punishPayload, policy, goalsData, acts, completions]) => {
       const dynamic = state.currentDynamic;
       const you = dynamic.partners.find((p) => p.is_you);
       const isDom = you?.role === "dominant";
@@ -8554,12 +8851,33 @@ function renderTasks(dynamicId) {
       const taskCategoryPresets = (tagData.task_presets && tagData.task_presets.length)
         ? tagData.task_presets
         : DEFAULT_TASK_CATEGORY_TAGS;
-      const confession = punishData?.report || null;
+      const reports = (Array.isArray(punishPayload) ? punishPayload : [])
+        .map((row) => row?.report)
+        .filter(Boolean);
+      const confession = reports[0]
+        ? {
+          ...reports[0],
+          ids: reports.map((r) => r.id),
+          action_text: reports.map((r) => r.action_text).filter(Boolean).join("\n"),
+        }
+        : null;
       const error = el("div", { className: "error hidden" });
       const stack = el("div", { className: "stack" }, [
-        el("h1", {}, "Tasks & acts"),
+        el("h1", {}, "Tasks"),
         assistantChatEntry(dynamicId),
-        renderTasksActsSwitcher(dynamicId, "tasks"),
+        el("div", { className: "row wrap" }, [
+          el("button", {
+            type: "button",
+            className: "ghost-btn ai-only",
+            "data-ai-label": "Training regimen drafts task lists with your shared AI context.",
+            onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=regimen`),
+          }, "Build training regimen"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => navigate(`/dynamic/${dynamicId}/acts`),
+          }, "Acts page"),
+        ]),
         el("p", { className: "muted" }, confession
           ? "Assign a punishment task for this confession."
           : "Create tasks here. Open, missed, and paused work is below."),
@@ -9208,7 +9526,6 @@ function renderTasks(dynamicId) {
       }
 
       function taskGroupOf(task) {
-        if (task.approval_status === "pending") return "approval";
         if (task.completed_at) return "completed";
         const due = taskDueDate(task);
         if (!due) return "none";
@@ -9223,10 +9540,15 @@ function renderTasks(dynamicId) {
         const goal = matchTaskGoal(task, activeGoalConfigs(goalsData));
         const dueText = taskDueChip(task);
         const chips = [];
+        const needsApproval = task.approval_status === "pending" || !!task.change_request_type;
         if (!task.completed_at && taskIsPastDue(task)) chips.push(["late", "Late"]);
-        if (task.approval_status === "pending" || task.change_request_type) chips.push(["pending", "Pending approval"]);
+        if (needsApproval) chips.push(["pending", "Needs approval"]);
         if (task.paused) chips.push(["paused", "Paused"]);
-        if (task.recurrence && task.recurrence !== "none") chips.push(["recur", task.recurrence]);
+        if (task.recurrence && task.recurrence !== "none") {
+          const interval = Number(task.recurrence_interval || 0);
+          const recurLabel = interval > 1 ? `every ${interval} days` : task.recurrence;
+          chips.push(["recur", recurLabel]);
+        }
         const check = el("input", { type: "checkbox" });
         if (task.completed_at) {
           check.checked = true;
@@ -9247,7 +9569,7 @@ function renderTasks(dynamicId) {
         } else {
           check.disabled = true;
         }
-        const row = el("div", { className: `task-compact${task.completed_at ? " done" : ""}` }, [
+        const row = el("div", { className: `task-compact${task.completed_at ? " done" : ""}${needsApproval ? " needs-approval" : ""}` }, [
           check,
           el("span", { className: "task-compact-title" }, task.content),
           dueText ? el("span", { className: "task-chip" }, dueText) : null,
@@ -9321,6 +9643,89 @@ function renderTasks(dynamicId) {
         }
       }
 
+      function paintActsSection() {
+        const section = el("section", { className: "card stack" }, [
+          el("h2", {}, "Requested by sub"),
+        ]);
+        const list = Array.isArray(acts) ? acts : [];
+        if (!list.length) section.appendChild(el("p", { className: "muted" }, "No acts of submission yet."));
+        else {
+          list.slice(0, 20).forEach((act) => {
+            section.appendChild(el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: () => navigate(`/dynamic/${dynamicId}/acts`),
+            }, `${act.act_type_title || act.hint_text || "Act"} · ${act.status || "requested"}`));
+          });
+        }
+        return section;
+      }
+
+      function paintRecurring() {
+        const buckets = { daily: [], weekly: [], every: [] };
+        taskRows().forEach((row) => {
+          const task = row.task;
+          if (!task.recurrence || task.recurrence === "none" || task.completed_at) return;
+          const interval = Number(task.recurrence_interval || 0);
+          if (task.recurrence === "weekly") buckets.weekly.push(row);
+          else if (interval > 1) buckets.every.push(row);
+          else buckets.daily.push(row);
+        });
+        const section = el("details", { className: "task-timeline-section stack" });
+        section.open = taskSectionIsOpen(`${dynamicId}:recurring`, false);
+        const total = buckets.daily.length + buckets.weekly.length + buckets.every.length;
+        section.appendChild(el("summary", {}, [
+          el("span", {}, "Recurring tasks"),
+          el("span", { className: "task-timeline-count" }, String(total)),
+        ]));
+        section.addEventListener("toggle", () => rememberTaskSection(`${dynamicId}:recurring`, section.open));
+        [
+          ["daily", "Daily", buckets.daily],
+          ["weekly", "Weekly", buckets.weekly],
+          ["every", "Every N days", buckets.every],
+        ].forEach(([id, title, rows]) => {
+          section.appendChild(paintTaskGroup(id, title, rows, rows.length > 0));
+        });
+        return section;
+      }
+
+      function paintCompletions() {
+        const rows = Array.isArray(completions) ? completions : [];
+        const section = el("details", { className: "task-timeline-section stack chastity-timeline" });
+        section.open = taskSectionIsOpen(`${dynamicId}:completed-log`, false);
+        section.appendChild(el("summary", {}, [
+          el("span", {}, "Completed"),
+          el("span", { className: "task-timeline-count" }, String(rows.length)),
+        ]));
+        section.addEventListener("toggle", () => rememberTaskSection(`${dynamicId}:completed-log`, section.open));
+        if (!rows.length) {
+          section.appendChild(el("p", { className: "muted" }, "None yet."));
+          return section;
+        }
+        const groups = new Map();
+        rows.forEach((row) => {
+          const d = new Date(row.completed_at);
+          const key = Number.isNaN(d.getTime())
+            ? "Unknown day"
+            : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(row);
+        });
+        groups.forEach((dayRows, label) => {
+          const day = el("div", { className: "stack" }, [el("h3", {}, label)]);
+          dayRows.forEach((row) => {
+            const when = row.completed_at ? new Date(row.completed_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : "";
+            day.appendChild(el("p", { className: row.late ? "task-chip task-chip-late" : "" }, [
+              when ? `${when} · ` : "",
+              row.content_snippet || "Task",
+              row.late ? " · late" : "",
+            ].join("")));
+          });
+          section.appendChild(day);
+        });
+        return section;
+      }
+
       if (desktopMode()) {
         stack.appendChild(renderTaskDesktopTable(dynamicId, taskRows(), {
           partners: dynamic.partners || [],
@@ -9330,15 +9735,31 @@ function renderTasks(dynamicId) {
           onError: showError,
         }));
       } else {
-        const grouped = { overdue: [], today: [], upcoming: [], none: [], approval: [], completed: [] };
-        taskRows().forEach((row) => grouped[taskGroupOf(row.task)].push(row));
+        const grouped = { overdue: [], today: [], upcoming: [], none: [], completed: [] };
+        taskRows().forEach((row) => {
+          const key = taskGroupOf(row.task);
+          if (grouped[key]) grouped[key].push(row);
+        });
         stack.appendChild(paintTaskGroup("overdue", "Overdue", grouped.overdue, grouped.overdue.length > 0));
         stack.appendChild(paintTaskGroup("today", "Due today", grouped.today, true));
         stack.appendChild(paintTaskGroup("upcoming", "Upcoming", grouped.upcoming, true));
         stack.appendChild(paintTaskGroup("none", "No due date", grouped.none, grouped.none.length > 0));
-        stack.appendChild(paintTaskGroup("approval", "Needs approval", grouped.approval, grouped.approval.length > 0));
-        stack.appendChild(paintTaskGroup("completed", "Completed", grouped.completed, false));
         if (isDom) stack.appendChild(bulkBar);
+      }
+      stack.appendChild(paintActsSection());
+      stack.appendChild(paintRecurring());
+      stack.appendChild(paintCompletions());
+      if (goalsData && you?.role === "dominant") {
+        stack.appendChild(renderChastityGoalsCard(dynamicId, goalsData, {
+          partners: dynamic.partners || [],
+          tasks: taskRows(),
+          acts: Array.isArray(acts) ? acts : [],
+          focusGoalId: query.get("goal") || "",
+          onSaved: () => {
+            refreshDomGoalHeader(dynamicId);
+            renderTasks(dynamicId);
+          },
+        }));
       }
 
 
@@ -13304,6 +13725,134 @@ function punishmentFacetRow(dynamicId, report) {
   ]);
 }
 
+function renderPunishmentCombined(dynamicId, ids) {
+  const id = dynamicId || getActiveDynamicId();
+  setViewContent(el("p", { className: "muted" }, "Loading confessions…"));
+  Promise.all([
+    api(`/dynamics/${id}/punishments`),
+    loadDynamic(id),
+  ])
+    .then(([data]) => {
+      const wanted = new Set(ids);
+      const reports = (data.reports || []).filter((r) => wanted.has(r.id));
+      const isDom = !!(data.you_are_dominant);
+      const error = el("div", { className: "error hidden" });
+      const stack = el("div", { className: "stack" }, [
+        el("h1", {}, "Punishment"),
+        el("p", { className: "muted" }, `${reports.length} confession${reports.length === 1 ? "" : "s"}. One response applies to all of them.`),
+      ]);
+      reports.forEach((report) => {
+        stack.appendChild(el("div", { className: "card stack" }, [
+          el("strong", {}, report.reporter_name || "Partner"),
+          el("p", {}, report.action_text || ""),
+          el("p", { className: "muted" }, report.created_at ? new Date(report.created_at).toLocaleString() : ""),
+        ]));
+      });
+      if (!isDom) {
+        stack.appendChild(el("p", { className: "muted" }, "Your keyholder will decide the punishment."));
+        setViewContent(stack);
+        return;
+      }
+      const goalTitle = el("input", { placeholder: "Goal title" });
+      const goalKind = el("select");
+      [["ruin_gift", "Ruin"], ["orgasm_grant", "Orgasm"], ["misc_gift", "Other"]].forEach(([value, label]) => {
+        goalKind.appendChild(el("option", { value }, label));
+      });
+      const goalCount = el("input", { type: "number", min: "1", value: "1" });
+      async function bulk(action, extra = {}) {
+        error.classList.add("hidden");
+        await api(`/dynamics/${id}/punishments/bulk`, {
+          method: "POST",
+          body: JSON.stringify({ ids: reports.map((r) => r.id), action, ...extra }),
+        });
+      }
+      stack.appendChild(el("div", { className: "card stack" }, [
+        el("h2", {}, "Respond to all"),
+        el("button", {
+          type: "button",
+          className: "primary-btn",
+          onClick: () => navigate(`/dynamic/${id}/tasks?punish=${encodeURIComponent(reports.map((r) => r.id).join(","))}`),
+        }, "Assign a task"),
+        el("label", { className: "stack" }, ["Goal title", goalTitle]),
+        el("label", { className: "stack" }, ["Gift type", goalKind]),
+        el("label", { className: "stack" }, ["Tasks to complete", goalCount]),
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: async () => {
+            try {
+              await bulk("goal", {
+                title: goalTitle.value.trim() || "Punishment goal",
+                kind: goalKind.value,
+                start_mode: goalKind.value === "ruin_gift" ? "rolling_ruin" : goalKind.value === "orgasm_grant" ? "rolling" : "now",
+                requirements: [{ type: "tasks_completed", value: Math.max(1, Number(goalCount.value) || 1) }],
+              });
+              showToast("Goal set for each confession.");
+              navigate(`/dynamic/${id}/punishment`);
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, "Set goal"),
+        el("button", {
+          type: "button",
+          className: "ghost-btn ai-only",
+          "data-ai-label": "Suggests punishment tasks with AI.",
+          onClick: async () => {
+            try {
+              const result = await api(`/dynamics/${id}/punishments/ideas`, {
+                method: "POST",
+                body: JSON.stringify({ ids: reports.map((r) => r.id) }),
+              });
+              const ideas = result.ideas || [];
+              const host = el("div", { className: "stack" });
+              if (!ideas.length) host.appendChild(el("p", { className: "muted" }, "No ideas returned."));
+              ideas.forEach((idea) => {
+                host.appendChild(el("p", {}, idea.title || idea.summary || "Idea"));
+              });
+              stack.appendChild(host);
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, "Ask assistant for punishment task ideas"),
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: async () => {
+            try {
+              await bulk("remind");
+              showToast("Reminder set for tomorrow.");
+              navigate(`/dynamic/${id}/punishment`);
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, "Remind me tomorrow"),
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: async () => {
+            try {
+              await bulk("covered");
+              showToast("Marked as covered.");
+              navigate(`/dynamic/${id}/punishment`);
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, "I've got it covered"),
+        error,
+      ]));
+      setViewContent(stack);
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+}
+
 function renderPunishment(dynamicId, reportId = null) {
   const id = dynamicId || getActiveDynamicId();
   if (!id) {
@@ -13311,6 +13860,14 @@ function renderPunishment(dynamicId, reportId = null) {
     return;
   }
   state.activeDynamicId = id;
+  const idsParam = parseRoute().query.get("ids") || "";
+  if (!reportId && idsParam) {
+    const ids = idsParam.split(",").map((s) => s.trim()).filter(Boolean);
+    if (ids.length) {
+      renderPunishmentCombined(id, ids);
+      return;
+    }
+  }
   if (reportId) {
     renderPunishmentDetail(id, reportId);
     return;
@@ -14971,9 +15528,11 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
     [...(goalsData.goals || []), ...(goalsData.archived_goals || [])].map((g) => [g.id, g])
   );
   const error = el("div", { className: "error hidden" });
-  const host = el("details", { className: "card stack goals-collapse" }, [
-    el("summary", {}, "Orgasm and Chastity goals"),
-    el("p", { className: "muted" }, "Currently active goals drive header meters. Archive when finished or replaced; repeat to restart tracking from now. Rolling starts from the last full orgasm; Start now ignores prior events."),
+  const giftLabel = (kind) => ({ orgasm_grant: "Orgasm", ruin_gift: "Ruin", misc_gift: "Other" }[kind] || "Other");
+  const subs = (partners || []).filter((p) => p.role === "submissive");
+  const host = el("section", { className: "card stack goals-section", id: "orgasm-chastity-goals" }, [
+    el("h2", {}, "Orgasm and Chastity goals"),
+    el("p", { className: "muted" }, "Each goal is its own card. Orgasm and Ruin start from the last gift of that type. Other starts now."),
   ]);
 
   const headerHidden = el("input", { type: "checkbox" });
@@ -14988,7 +15547,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
   const archivedHost = el("div", { className: "stack" });
 
   function baselineFor(goal) {
-    const mode = goal.start_mode === "now" ? "now" : "rolling";
+    const mode = goal.start_mode === "now" ? "now" : goal.start_mode === "rolling_ruin" ? "rolling_ruin" : "rolling";
     return goalsData.baselines?.[mode] || null;
   }
 
@@ -15017,12 +15576,24 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
 
   function paintGoalCard(goal, { archived }) {
     const kindSelect = el("select");
-    kinds.forEach((k) => {
-      const opt = el("option", { value: k.id }, k.title);
-      if (goal.kind === k.id) opt.selected = true;
+    [
+      ["ruin_gift", "Ruin"],
+      ["orgasm_grant", "Orgasm"],
+      ["misc_gift", "Other"],
+    ].forEach(([id, label]) => {
+      const opt = el("option", { value: id }, label);
+      if (goal.kind === id) opt.selected = true;
       kindSelect.appendChild(opt);
     });
-    kindSelect.addEventListener("change", () => { goal.kind = kindSelect.value; });
+    kindSelect.addEventListener("change", () => {
+      goal.kind = kindSelect.value;
+      if (!archived) {
+        goal.start_mode = goal.kind === "ruin_gift" ? "rolling_ruin" : goal.kind === "orgasm_grant" ? "rolling" : "now";
+        goal.resolve_reset = true;
+        goal.reset_at = null;
+        paintGoals();
+      }
+    });
     kindSelect.disabled = archived;
 
     const title = el("input", { value: goal.title || "", placeholder: "Goal title" });
@@ -15030,14 +15601,18 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
     title.disabled = archived;
 
     const forSelect = el("select");
-    forSelect.appendChild(el("option", { value: "" }, "Default sub"));
-    partners.filter((p) => p.role === "submissive").forEach((p) => {
-      const opt = el("option", { value: p.id }, p.display_name);
-      if (goal.for_membership_id === p.id) opt.selected = true;
-      forSelect.appendChild(opt);
-    });
-    forSelect.addEventListener("change", () => { goal.for_membership_id = forSelect.value || null; });
-    forSelect.disabled = archived;
+    if (subs.length > 1) {
+      forSelect.appendChild(el("option", { value: "" }, "Default sub"));
+      subs.forEach((p) => {
+        const opt = el("option", { value: p.id }, p.display_name);
+        if (goal.for_membership_id === p.id) opt.selected = true;
+        forSelect.appendChild(opt);
+      });
+      forSelect.addEventListener("change", () => { goal.for_membership_id = forSelect.value || null; });
+      forSelect.disabled = archived;
+    } else if (subs.length === 1 && !goal.for_membership_id) {
+      goal.for_membership_id = subs[0].id;
+    }
 
     const startSelect = el("select");
     startModes.forEach((m) => {
@@ -15218,20 +15793,23 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       }, "Delete permanently"));
     }
 
+    const historyRows = (goal.history || progress?.history || []).map((entry) => el("div", {
+      className: `goal-history-item goal-history-${entry.outcome || "reset"}`,
+    }, [entry.outcome || "reset", entry.at ? ` · ${formatGoalStamp(entry.at)}` : "", entry.progress ? ` · ${entry.progress}` : ""].join("")));
     const fold = el("details", {
       className: `card stack goal-fold${archived ? " goal-archived" : ""}`,
       id: `goal-${goal.id}`,
-      open: !archived || focusGoalId === goal.id,
+      open: focusGoalId === goal.id,
     });
     if (focusGoalId === goal.id) fold.open = true;
     [
       el("summary", {}, [
-        el("span", {}, goal.title || "Goal"),
+        el("span", {}, `${goal.title || "Goal"} — ${giftLabel(goal.kind)}`),
         el("span", { className: "task-timeline-count" }, progressBits || (archived ? "Archived" : "Goal")),
       ]),
-      el("label", {}, ["Goal type", kindSelect]),
       el("label", {}, ["Title", title]),
-      el("label", {}, ["For", forSelect]),
+      el("label", {}, ["Gift type", kindSelect]),
+      subs.length > 1 ? el("label", {}, ["For", forSelect]) : null,
       archived ? null : el("label", {}, ["Tracking start", startSelect]),
       archived ? null : startHint,
       el("strong", {}, "Requirements"),
@@ -15243,6 +15821,11 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
         ? el("p", { className: "muted" }, `Countdown: ${formatGoalCountdown(progress.countdown_at)}`)
         : null,
       progress?.ready && !archived ? el("p", { className: "pill ok" }, "Ready to grant") : null,
+      el("details", { className: "goal-history" }, [
+        el("summary", {}, "Completed"),
+        historyRows.length ? null : el("p", { className: "muted" }, "No completed cycles yet."),
+        ...historyRows,
+      ]),
       actions,
       archived ? null : renderGoalLinkedItems(dynamicId, goal, tasks, acts),
     ].forEach((node) => { if (node) fold.appendChild(node); });
@@ -15325,12 +15908,13 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
         id: `goal-${Date.now()}`,
         kind: "orgasm_grant",
         title: "Next orgasm / unlock",
-        for_membership_id: null,
+        for_membership_id: subs[0]?.id || null,
         requirements: [
           { type: "days_since_full_orgasm", value: 7 },
           { type: "tasks_completed", value: 3 },
         ],
-        start_mode: startMode,
+        start_mode: "rolling",
+        history: [],
         reset_at: null,
         resolve_reset: true,
         created_at: null,
@@ -15374,8 +15958,9 @@ function renderChastity(dynamicId) {
     api(`/dynamics/${dynamicId}/chastity/tags`).catch(() => ({ presets: [] })),
     api(`/dynamics/${dynamicId}/chastity-goals`).catch(() => null),
     loadDynamic(dynamicId),
+    api(`/dynamics/${dynamicId}/tracking`).catch(() => []),
   ])
-    .then(([overview, settings, lockups, limitProposals, tagData, goalsData]) => {
+    .then(([overview, settings, lockups, limitProposals, tagData, goalsData, , orgasmEntries]) => {
       const dynamic = state.currentDynamic;
       const you = dynamic.partners.find((p) => p.is_you);
       const error = el("div", { className: "error hidden" });
@@ -15562,6 +16147,7 @@ function renderChastity(dynamicId) {
             youAreDominant: !!settings.you_are_dominant,
             subCanDeleteBreaks: settings.sub_can_delete_breaks !== false,
             tagPresets: chastityTagPresets,
+            orgasmEntries: (orgasmEntries || []).filter((entry) => entry.for_membership_id === partner.membership_id),
             onSaved: () => renderChastity(dynamicId),
           }));
         }
@@ -15831,7 +16417,34 @@ function renderChastity(dynamicId) {
             className: "ghost-btn",
             type: "button",
             onClick: () => showUnlockDisambiguation(),
-          }, "Unlock"));
+          }, "Temporary unlock"));
+          (settings.unlock_presets || []).forEach((preset) => {
+            actions.appendChild(el("button", {
+              className: "ghost-btn",
+              type: "button",
+              onClick: async () => {
+                const window = presetWindowForDate(new Date(), preset);
+                if (!window || !partner.active_lockup_id) return;
+                try {
+                  await api(`/dynamics/${dynamicId}/chastity/${partner.active_lockup_id}/break`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      break_type: preset.break_type,
+                      break_reason: preset.name,
+                      started_at: window.started_at,
+                      ended_at: window.ended_at,
+                      note: preset.name,
+                      tags: [preset.name],
+                    }),
+                  });
+                  renderChastity(dynamicId);
+                } catch (err) {
+                  error.textContent = err.message;
+                  error.classList.remove("hidden");
+                }
+              },
+            }, preset.name || "Unlock"));
+          });
         }
 
         if (partner.state === "on_break" && (isDom || isLockedSub)) {
@@ -23339,17 +23952,84 @@ function renderSettings() {
       if (policy && initialDynamicId && optionalFeatureEnabled(featuresBundle, "chastity")) {
         const allowDelete = el("input", { type: "checkbox" });
         allowDelete.checked = policy.chastity_sub_can_delete_breaks !== false;
-        let chastityBaseline = allowDelete.checked;
+        const autoRelock = el("input", { type: "checkbox" });
+        autoRelock.checked = policy.chastity_auto_relock_after_orgasm !== false;
+        const presetRows = [];
+        const presetHost = el("div", { className: "stack" });
+        const seedPresets = (policy.chastity_unlock_presets && policy.chastity_unlock_presets.length)
+          ? policy.chastity_unlock_presets
+          : [{ name: "Sleep", break_type: "authorized_sleep", start: "23:00", end: "07:00" }];
+        function readPresets() {
+          return presetRows.map((row) => ({
+            name: row.name.value.trim(),
+            break_type: row.type.value,
+            start: row.start.value,
+            end: row.end.value,
+          })).filter((row) => row.name && row.start && row.end);
+        }
+        function addPresetRow(preset = { name: "", break_type: "authorized_sleep", start: "23:00", end: "07:00" }) {
+          const name = el("input", { type: "text", value: preset.name || "", placeholder: "Name" });
+          const type = el("select");
+          [
+            ["authorized_sleep", "Sleep"],
+            ["hygiene", "Hygiene"],
+            ["other", "Other"],
+          ].forEach(([value, label]) => type.appendChild(el("option", { value }, label)));
+          type.value = preset.break_type || "authorized_sleep";
+          const start = el("input", { type: "time", value: preset.start || "23:00" });
+          const end = el("input", { type: "time", value: preset.end || "07:00" });
+          const row = { name, type, start, end };
+          const line = el("div", { className: "row wrap" }, [
+            name,
+            type,
+            start,
+            end,
+            el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: () => {
+                const idx = presetRows.indexOf(row);
+                if (idx >= 0) presetRows.splice(idx, 1);
+                line.remove();
+                draft.refresh();
+              },
+            }, "Remove"),
+          ]);
+          presetRows.push(row);
+          presetHost.appendChild(line);
+        }
+        seedPresets.forEach((preset) => addPresetRow(preset));
+        let chastityBaseline = JSON.stringify({
+          allow: allowDelete.checked,
+          relock: autoRelock.checked,
+          presets: readPresets(),
+        });
         const chastityStatus = el("p", { className: "muted" });
         const chastityError = el("div", { className: "error hidden" });
         const chastityCard = el("div", { className: "card stack" }, [
           el("h2", {}, "Chastity policy"),
-          el("p", { className: "muted" }, "Controls who may delete temporary unlock log entries. Deletions by the sub still notify the keyholder in chat logs."),
+          el("p", { className: "muted" }, "Unlock logs, locking again after an orgasm, and one-tap unlock presets."),
           lockedSettingsWrap({
             locked: !policy.you_are_dominant,
-            children: el("label", { className: "checkbox-label" }, [
-              allowDelete,
-              " Allow sub to delete temporary unlock logs",
+            children: el("div", { className: "stack" }, [
+              el("label", { className: "checkbox-label" }, [
+                allowDelete,
+                " Allow sub to delete temporary unlock logs",
+              ]),
+              el("label", { className: "checkbox-label" }, [
+                autoRelock,
+                " Lock again after an orgasm release",
+              ]),
+              el("h3", {}, "Unlock presets"),
+              presetHost,
+              el("button", {
+                type: "button",
+                className: "ghost-btn",
+                onClick: () => {
+                  addPresetRow();
+                  draft.refresh();
+                },
+              }, "Add preset"),
             ]),
           }),
           chastityStatus,
@@ -23360,26 +24040,63 @@ function renderSettings() {
         }
         stack.appendChild(chastityCard);
         draft.register({
-          isDirty: () => allowDelete.checked !== chastityBaseline,
-          needsApproval: () => isSubmissive && allowDelete.checked !== chastityBaseline,
+          isDirty: () => JSON.stringify({
+            allow: allowDelete.checked,
+            relock: autoRelock.checked,
+            presets: readPresets(),
+          }) !== chastityBaseline,
+          needsApproval: () => isSubmissive && JSON.stringify({
+            allow: allowDelete.checked,
+            relock: autoRelock.checked,
+            presets: readPresets(),
+          }) !== chastityBaseline,
           save: async () => {
             chastityError.classList.add("hidden");
+            const presets = readPresets();
             if (isSubmissive) {
-              await postSettingsChangeRequest({
-                dynamicId: initialDynamicId,
-                settingKey: "chastity.sub_can_delete_breaks",
-                settingLabel: "Allow sub to delete temporary unlock logs",
-                requestedValue: allowDelete.checked,
-              });
-              allowDelete.checked = chastityBaseline;
+              const current = JSON.parse(chastityBaseline);
+              if (allowDelete.checked !== current.allow) {
+                await postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "chastity.sub_can_delete_breaks",
+                  settingLabel: "Allow sub to delete temporary unlock logs",
+                  requestedValue: allowDelete.checked,
+                });
+              }
+              if (autoRelock.checked !== current.relock) {
+                await postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "chastity.auto_relock_after_orgasm",
+                  settingLabel: "Lock again after an orgasm release",
+                  requestedValue: autoRelock.checked,
+                });
+              }
+              if (JSON.stringify(presets) !== JSON.stringify(current.presets)) {
+                await postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "chastity.unlock_presets",
+                  settingLabel: "Chastity unlock presets",
+                  requestedValue: presets,
+                });
+              }
+              allowDelete.checked = current.allow;
+              autoRelock.checked = current.relock;
               chastityStatus.textContent = "Change request sent to keyholder.";
               return "Chastity policy request submitted";
             }
             await api(`/dynamics/${initialDynamicId}/chastity/policy`, {
               method: "PATCH",
-              body: JSON.stringify({ sub_can_delete_breaks: allowDelete.checked }),
+              body: JSON.stringify({
+                sub_can_delete_breaks: allowDelete.checked,
+                auto_relock_after_orgasm: autoRelock.checked,
+                unlock_presets: presets,
+              }),
             });
-            chastityBaseline = allowDelete.checked;
+            chastityBaseline = JSON.stringify({
+              allow: allowDelete.checked,
+              relock: autoRelock.checked,
+              presets,
+            });
             chastityStatus.textContent = "Saved.";
             return "Chastity policy saved";
           },

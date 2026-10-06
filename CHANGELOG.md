@@ -3,6 +3,23 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.14] — 2026-10-05
+
+### Added
+- Completed recurring tasks count toward orgasm and chastity goals. Each completion is kept even after the next due date moves forward
+- One Important notifications sheet, color-coded, with grouped repeats and Respond to all for several punishments
+- Chastity timeline shows orgasm entries in the same term. A granted orgasm is labeled Granted Orgasm. A cheated orgasm is labeled Cheated Orgasm and turns the term red. A gift that landed before the goal was met turns the term yellow
+- A ruined orgasm ends the lockup only when it is also tagged cheated
+- Lock again after an orgasm release, on by default, plus unlock presets (Sleep 23:00–07:00) and one-tap buttons. Past days on the chastity calendar can take a sleep unlock
+- Goals are separate cards titled with the gift type. Ruin and orgasm goals start from the last gift of that type. Each card keeps a colored completed history
+- Tasks is one screen: collapsed create, overdue / today / upcoming, acts requested by the sub, recurring groups, and a day-by-day completed timeline. Repeating tasks can be every N days, with morning, midday, and evening times. Submission is a category tag
+- Android updates can ask for install permission and open the system installer. APK **0.89.0** / versionCode **89**
+
+### Changed
+- The next occurrence of a repeating task is no longer listed as due until it is actually inside its reminder window
+- Got it clears task and late notices until that task's due time changes
+- Service worker cache `ubetra-v149`
+
 ## [1.13] — 2026-10-05
 
 ### Added

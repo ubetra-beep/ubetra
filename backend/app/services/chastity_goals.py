@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 
 from ..models import (
@@ -19,7 +20,7 @@ from ..models import (
     OrgTrackingEntry,
     PartnerRole,
     Task,
-    TaskApprovalStatus,
+    TaskCompletion,
 )
 from .tracking_events import (
     has_denial_tag,
@@ -83,8 +84,12 @@ START_MODES = {
         "hint": "Ignore prior events — tracking window begins when this goal is created or repeated.",
     },
     "rolling": {
-        "title": "Rolling (from last full orgasm)",
-        "hint": "Use current rolling metrics. By default the window starts at the last full orgasm.",
+        "title": "Since last full orgasm",
+        "hint": "Tracking window starts at the last full orgasm.",
+    },
+    "rolling_ruin": {
+        "title": "Since last ruin",
+        "hint": "Tracking window starts at the last ruined orgasm.",
     },
 }
 
@@ -151,6 +156,8 @@ def parse_goals(raw: str | None) -> dict:
                     "archived_at": g.get("archived_at") or None,
                     "archive_reason": archive_reason,
                     "repeat_count": int(g.get("repeat_count") or 0),
+                    "history": _clean_history(g.get("history")),
+                    "last_met_at": g.get("last_met_at") or None,
                 }
             )
         base["goals"] = cleaned
@@ -220,6 +227,29 @@ def _last_full_orgasm_at(db: Session, dynamic_id: str, sub_id: str) -> datetime 
     return lockup.ended_at if lockup and lockup.ended_at else None
 
 
+def _last_ruin_at(db: Session, dynamic_id: str, sub_id: str) -> datetime | None:
+    entries = (
+        db.query(OrgTrackingEntry)
+        .options(joinedload(OrgTrackingEntry.orgasms))
+        .filter(
+            OrgTrackingEntry.dynamic_id == dynamic_id,
+            OrgTrackingEntry.for_membership_id == sub_id,
+            OrgTrackingEntry.event_type.in_([OrgEventType.orgasm, OrgEventType.both]),
+        )
+        .order_by(OrgTrackingEntry.occurred_at.desc())
+        .limit(50)
+        .all()
+    )
+    for entry in entries:
+        rows = entry.orgasms or []
+        if rows:
+            if any(has_ruined_orgasm_tag(tags_to_list(r.tags)) for r in rows):
+                return entry.occurred_at
+        elif has_ruined_orgasm_tag(tags_to_list(entry.tags)):
+            return entry.occurred_at
+    return None
+
+
 def _active_or_last_lockup(db: Session, dynamic_id: str, sub_id: str) -> ChastityLockup | None:
     active = (
         db.query(ChastityLockup)
@@ -244,6 +274,26 @@ def _active_or_last_lockup(db: Session, dynamic_id: str, sub_id: str) -> Chastit
     )
 
 
+def _clean_history(raw) -> list[dict]:
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        outcome = str(item.get("outcome") or "").strip().lower()
+        if outcome not in {"met", "gift", "reset", "cheated"}:
+            continue
+        out.append(
+            {
+                "at": str(item.get("at") or ""),
+                "outcome": outcome,
+                "progress": str(item.get("progress") or "")[:200],
+            }
+        )
+    return out[-100:]
+
+
 def _count_tasks_completed(
     db: Session,
     dynamic_id: str,
@@ -252,17 +302,22 @@ def _count_tasks_completed(
     *,
     tag: str | None = None,
 ) -> int:
-    from ..models import TaskList
-    from ..services.tags import tags_to_list
-
     rows = (
-        db.query(Task)
-        .join(TaskList, Task.task_list_id == TaskList.id)
+        db.query(TaskCompletion)
+        .join(Task, TaskCompletion.task_id == Task.id)
         .filter(
-            TaskList.dynamic_id == dynamic_id,
-            Task.completed_at.isnot(None),
-            Task.completed_at >= since,
-            Task.approval_status == TaskApprovalStatus.approved,
+            TaskCompletion.dynamic_id == dynamic_id,
+            TaskCompletion.completed_at >= since,
+            or_(
+                TaskCompletion.membership_id == sub_id,
+                and_(
+                    Task.assigned_to_membership_id.is_(None),
+                    or_(
+                        Task.created_by_membership_id == sub_id,
+                        TaskCompletion.membership_id == sub_id,
+                    ),
+                ),
+            ),
         )
         .all()
     )
@@ -270,8 +325,8 @@ def _count_tasks_completed(
         return len(rows)
     needle = tag.strip().lower()
     count = 0
-    for task in rows:
-        tags = [t.lower() for t in tags_to_list(task.tags or "")]
+    for row in rows:
+        tags = [t.lower() for t in tags_to_list(row.tags or "")]
         if needle in tags:
             count += 1
     return count
@@ -463,6 +518,11 @@ def resolve_tracking_start(
     now = datetime.utcnow().replace(microsecond=0)
     if start_mode == "now" or not sub_id:
         return now, "now"
+    if start_mode == "rolling_ruin":
+        last_ruin = _last_ruin_at(db, dynamic_id, sub_id)
+        if last_ruin is None:
+            return now, "now (no prior ruin)"
+        return last_ruin.replace(microsecond=0), "last ruin"
     last = _last_full_orgasm_at(db, dynamic_id, sub_id)
     if last is None:
         return now, "now (no prior full orgasm)"
@@ -559,7 +619,117 @@ def _goal_progress_row(
         "archived_at": goal.get("archived_at"),
         "archive_reason": goal.get("archive_reason"),
         "repeat_count": int(goal.get("repeat_count") or 0),
+        "history": list(goal.get("history") or []),
+        "last_met_at": goal.get("last_met_at"),
     }
+
+
+def _progress_text(row: dict | None) -> str:
+    if not row:
+        return ""
+    return "; ".join(
+        f"{r.get('current')}/{r.get('target')}" for r in (row.get("requirements") or [])
+    )[:200]
+
+
+def _stamp_met(goal: dict, row: dict | None) -> bool:
+    if not row or not row.get("ready") or not goal.get("active", True):
+        return False
+    reset = str(goal.get("reset_at") or "")
+    last = str(goal.get("last_met_at") or "")
+    if last and (not reset or last >= reset):
+        return False
+    now = datetime.utcnow().replace(microsecond=0)
+    hist = list(goal.get("history") or [])
+    hist.append({"at": now.isoformat() + "Z", "outcome": "met", "progress": _progress_text(row)})
+    goal["history"] = hist[-100:]
+    goal["last_met_at"] = now.isoformat() + "Z"
+    return True
+
+
+def goal_unmet_for_event(db: Session, dynamic: Dynamic, sub_id: str, kind: str) -> bool:
+    """True when an active goal of the matching gift type is not ready yet."""
+    if kind not in {"full", "ruin", "cheated"}:
+        return False
+    data = parse_goals(getattr(dynamic, "chastity_goals", None))
+    subs = _sub_memberships(db, dynamic.id)
+    dom = _dominant(db, dynamic.id)
+    default_sub = subs[0].id if len(subs) == 1 else None
+    for goal in data["goals"]:
+        if not goal.get("active", True):
+            continue
+        owner = goal.get("for_membership_id") or default_sub
+        if owner and owner != sub_id:
+            continue
+        gk = goal.get("kind")
+        if kind == "full" and gk != "orgasm_grant":
+            continue
+        if kind == "ruin" and gk != "ruin_gift":
+            continue
+        if kind == "cheated" and gk not in {"orgasm_grant", "ruin_gift"}:
+            continue
+        row = _goal_progress_row(
+            db, dynamic=dynamic, goal=goal, subs=subs, dom=dom, default_sub=default_sub
+        )
+        if row and row.get("requirements") and not row.get("ready"):
+            return True
+    return False
+
+
+def note_orgasm_gift(
+    db: Session,
+    dynamic: Dynamic,
+    *,
+    sub_id: str,
+    occurred_at: datetime,
+    tags: list[str],
+) -> None:
+    """Append goal history and reset the cycle when a matching gift is logged."""
+    from .tracking_events import has_cheated_tag
+
+    cheated = has_cheated_tag(tags)
+    ruined = has_ruined_orgasm_tag(tags)
+    full = has_full_orgasm_tag(tags) and not ruined
+    if not (cheated or ruined or full):
+        return
+    data = parse_goals(getattr(dynamic, "chastity_goals", None))
+    subs = _sub_memberships(db, dynamic.id)
+    dom = _dominant(db, dynamic.id)
+    default_sub = subs[0].id if len(subs) == 1 else None
+    changed = False
+    when = (occurred_at or datetime.utcnow()).replace(microsecond=0)
+    stamp = when.isoformat() + "Z"
+    for goal in data["goals"]:
+        if not goal.get("active", True):
+            continue
+        owner = goal.get("for_membership_id") or default_sub
+        if owner and owner != sub_id:
+            continue
+        gk = goal.get("kind")
+        outcome = None
+        if cheated and gk == "orgasm_grant":
+            outcome = "cheated"
+        elif full and not cheated and gk == "orgasm_grant":
+            outcome = "pending"
+        elif ruined and gk == "ruin_gift":
+            outcome = "pending"
+        if outcome is None:
+            continue
+        row = _goal_progress_row(
+            db, dynamic=dynamic, goal=goal, subs=subs, dom=dom, default_sub=default_sub
+        )
+        if outcome == "pending":
+            outcome = "gift" if row and row.get("ready") else "reset"
+        hist = list(goal.get("history") or [])
+        hist.append({"at": stamp, "outcome": outcome, "progress": _progress_text(row)})
+        goal["history"] = hist[-100:]
+        goal["reset_at"] = stamp
+        goal["repeat_count"] = int(goal.get("repeat_count") or 0) + 1
+        goal["last_met_at"] = None
+        changed = True
+    if changed:
+        dynamic.chastity_goals = serialize_goals(data)
+        db.add(dynamic)
 
 
 def build_goals_progress(db: Session, dynamic: Dynamic) -> dict:
@@ -569,6 +739,7 @@ def build_goals_progress(db: Session, dynamic: Dynamic) -> dict:
     default_sub = subs[0].id if len(subs) == 1 else None
     active_goals = []
     archived_goals = []
+    dirty = False
     for goal in data["goals"]:
         row = _goal_progress_row(
             db,
@@ -580,10 +751,18 @@ def build_goals_progress(db: Session, dynamic: Dynamic) -> dict:
         )
         if row is None:
             continue
+        if _stamp_met(goal, row):
+            dirty = True
+            row["history"] = list(goal.get("history") or [])
+            row["last_met_at"] = goal.get("last_met_at")
         if goal.get("active", True):
             active_goals.append(row)
         else:
             archived_goals.append(row)
+    if dirty:
+        dynamic.chastity_goals = serialize_goals(data)
+        db.add(dynamic)
+        db.commit()
 
     baselines = None
     sid = default_sub or (subs[0].id if subs else None)
@@ -602,6 +781,13 @@ def build_goals_progress(db: Session, dynamic: Dynamic) -> dict:
                 sub_id=sid,
                 dominant_id=dom.id if dom else None,
                 start_mode="now",
+            ),
+            "rolling_ruin": build_metric_baselines(
+                db,
+                dynamic_id=dynamic.id,
+                sub_id=sid,
+                dominant_id=dom.id if dom else None,
+                start_mode="rolling_ruin",
             ),
         }
 

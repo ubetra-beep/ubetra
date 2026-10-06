@@ -323,6 +323,14 @@ def set_goal_as_punishment(
     }
 
 
+def _reports_confession_text(reports: list[PunishmentReport]) -> str:
+    lines = [f"{len(reports)} confession(s):"]
+    for report in reports:
+        when = report.created_at.isoformat() if report.created_at else ""
+        lines.append(f"- at {when} id={report.id}\n{(report.action_text or '').strip()[:2000]}")
+    return "\n".join(lines)
+
+
 def generate_punishment_ideas(
     db: Session,
     *,
@@ -330,6 +338,7 @@ def generate_punishment_ideas(
     membership: Membership,
     user: User,
     report: PunishmentReport,
+    reports: list[PunishmentReport] | None = None,
 ) -> dict:
     if membership.role != PartnerRole.dominant:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can ask for ideas.")
@@ -368,11 +377,11 @@ def generate_punishment_ideas(
         goals_block.append(f"- {g['title']} [{g['kind']}]: " + "; ".join(req_bits))
     goals_text = "\n".join(goals_block) if goals_block else "(no active goals)"
 
+    bundle = [r for r in (reports or [report]) if r is not None] or [report]
     context = build_dynamic_context(db, dynamic, requesting_membership_id=membership.id)
     prompt = f"""The keyholder is deciding additional punishment after a confession.
 
-Confession:
-\"\"\"{report.action_text}\"\"\"
+{_reports_confession_text(bundle)}
 
 Punishment already assigned to goals:
 {assigned_block}

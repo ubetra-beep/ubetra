@@ -337,6 +337,7 @@ class TaskCreate(BaseModel):
     visibility: TaskVisibility = TaskVisibility.visible
     tags: list[str] = Field(default_factory=list)
     recurrence: TaskRecurrence = TaskRecurrence.none
+    recurrence_interval: int | None = Field(default=None, ge=1, le=366)
     due_at: datetime | None = None
     # Relative due: amount + unit → due_at if due_at not set
     due_in_amount: int | None = Field(default=None, ge=1, le=10000)
@@ -353,6 +354,7 @@ class TaskItemCreate(BaseModel):
     visibility: TaskVisibility = TaskVisibility.visible
     tags: list[str] = Field(default_factory=list)
     recurrence: TaskRecurrence = TaskRecurrence.none
+    recurrence_interval: int | None = Field(default=None, ge=1, le=366)
     due_at: datetime | None = None
     due_in_amount: int | None = Field(default=None, ge=1, le=10000)
     due_in_unit: Literal["minutes", "hours", "days", "weeks"] | None = None
@@ -392,6 +394,18 @@ class InboxOut(BaseModel):
     items: list[InboxItemOut] = Field(default_factory=list)
 
 
+class TaskCompletionOut(BaseModel):
+    id: str
+    task_id: str
+    task_list_id: str = ""
+    membership_id: str
+    completed_at: datetime
+    tags: list[str] = Field(default_factory=list)
+    late: bool = False
+    completed_by_membership_id: str | None = None
+    content_snippet: str = ""
+
+
 class TaskOut(BaseModel):
     id: str
     position: int
@@ -403,6 +417,7 @@ class TaskOut(BaseModel):
     approval_status: TaskApprovalStatus
     source: TaskSource
     recurrence: TaskRecurrence
+    recurrence_interval: int | None = None
     due_at: UtcDateTimeOptional = None
     next_due_at: UtcDateTimeOptional = None
     act_id: str | None = None
@@ -447,6 +462,7 @@ class TaskItemUpdate(BaseModel):
     tags: list[str] | None = None
     paused: bool | None = None
     recurrence: TaskRecurrence | None = None
+    recurrence_interval: int | None = Field(default=None, ge=1, le=366)
     due_at: datetime | None = None
     due_in_amount: int | None = Field(default=None, ge=1, le=10000)
     due_in_unit: Literal["minutes", "hours", "days", "weeks"] | None = None
@@ -604,6 +620,7 @@ class TaskBulkUpdateItem(BaseModel):
     tags: list[str] | None = None
     paused: bool | None = None
     recurrence: TaskRecurrence | None = None
+    recurrence_interval: int | None = Field(default=None, ge=1, le=366)
     due_at: datetime | None = None
     due_shift_minutes: int | None = Field(default=None, ge=-(60 * 24 * 365), le=60 * 24 * 365)
     reminder_offsets: list[ReminderOffset] | None = Field(default=None, max_length=8)
@@ -702,6 +719,8 @@ class SettingsRequestResolve(BaseModel):
 class DynamicPolicyOut(BaseModel):
     you_are_dominant: bool
     chastity_sub_can_delete_breaks: bool
+    chastity_auto_relock_after_orgasm: bool = True
+    chastity_unlock_presets: list[dict] = Field(default_factory=list)
     feelings_prompt_mode: str
     feelings_require_end_of_day: bool
     feelings_prompt_after_events: bool = True
@@ -1524,6 +1543,7 @@ class OrgTrackingEntryOut(BaseModel):
     during_own_lockup: bool = False
     locked_partner_names: list[str] = Field(default_factory=list)
     session_entry_count: int = 1
+    goal_unmet: bool = False
 
 
 class OrgTrackingPrefsOut(BaseModel):
@@ -1832,6 +1852,7 @@ class ChastityLockupOut(BaseModel):
     release_notes: str
     tags: list[str] = Field(default_factory=list)
     ended_kind: str = ""
+    goal_unmet: bool = False
     timer_overdue: bool = False
     record_type: str
     status: str
@@ -1869,10 +1890,14 @@ class ChastitySettingsOut(BaseModel):
     can_enable_self: bool
     any_enabled: bool
     sub_can_delete_breaks: bool = True
+    auto_relock_after_orgasm: bool = True
+    unlock_presets: list[dict] = Field(default_factory=list)
 
 
 class ChastityPolicyUpdate(BaseModel):
     sub_can_delete_breaks: bool | None = None
+    auto_relock_after_orgasm: bool | None = None
+    unlock_presets: list[dict] | None = None
 
 
 class ChastityPartnerOverview(BaseModel):

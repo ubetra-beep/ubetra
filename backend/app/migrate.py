@@ -1634,3 +1634,196 @@ def run_migrations() -> None:
           "ON edge_guard_policy (membership_id)"
         )
       )
+
+    _migrate_1_14(conn)
+
+
+def _migrate_1_14(conn) -> None:
+  import json
+  import uuid
+
+  def cols(table: str) -> set[str]:
+    try:
+      return {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}
+    except Exception:
+      return set()
+
+  task_cols = cols("tasks")
+  if task_cols and "recurrence_interval" not in task_cols:
+    conn.execute(text("ALTER TABLE tasks ADD COLUMN recurrence_interval INTEGER"))
+  if task_cols and "occurrence_scheduled_at" not in task_cols:
+    conn.execute(text("ALTER TABLE tasks ADD COLUMN occurrence_scheduled_at DATETIME"))
+
+  membership_cols = cols("memberships")
+  if membership_cols and "inbox_task_ack_at" not in membership_cols:
+    conn.execute(text("ALTER TABLE memberships ADD COLUMN inbox_task_ack_at DATETIME"))
+  if membership_cols and "inbox_late_ack_at" not in membership_cols:
+    conn.execute(text("ALTER TABLE memberships ADD COLUMN inbox_late_ack_at DATETIME"))
+
+  dynamic_cols = cols("dynamics")
+  if dynamic_cols and "chastity_auto_relock_after_orgasm" not in dynamic_cols:
+    conn.execute(
+      text("ALTER TABLE dynamics ADD COLUMN chastity_auto_relock_after_orgasm BOOLEAN DEFAULT 1")
+    )
+  if dynamic_cols and "chastity_unlock_presets" not in dynamic_cols:
+    conn.execute(text("ALTER TABLE dynamics ADD COLUMN chastity_unlock_presets TEXT DEFAULT ''"))
+  if dynamic_cols and "task_tag_presets" in dynamic_cols:
+    rows = conn.execute(text("SELECT id, task_tag_presets FROM dynamics")).fetchall()
+    for dyn_id, raw in rows:
+      current = [part.strip() for part in (raw or "").split(",") if part.strip()]
+      if any(part.lower() == "submission" for part in current):
+        continue
+      current.append("Submission")
+      conn.execute(
+        text("UPDATE dynamics SET task_tag_presets = :presets WHERE id = :id"),
+        {"presets": ",".join(current), "id": dyn_id},
+      )
+
+  org_cols = cols("org_tracking_entries")
+  if org_cols and "goal_unmet" not in org_cols:
+    conn.execute(text("ALTER TABLE org_tracking_entries ADD COLUMN goal_unmet BOOLEAN DEFAULT 0"))
+  lock_cols = cols("chastity_lockups")
+  if lock_cols and "goal_unmet" not in lock_cols:
+    conn.execute(text("ALTER TABLE chastity_lockups ADD COLUMN goal_unmet BOOLEAN DEFAULT 0"))
+
+  tables = {
+    row[0]
+    for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+  }
+  if "task_completions" not in tables:
+    conn.execute(
+      text(
+        "CREATE TABLE task_completions ("
+        "id VARCHAR(36) PRIMARY KEY,"
+        "task_id VARCHAR(36) NOT NULL,"
+        "dynamic_id VARCHAR(36) NOT NULL,"
+        "membership_id VARCHAR(36) NOT NULL,"
+        "completed_at DATETIME,"
+        "tags VARCHAR(500) DEFAULT '',"
+        "late BOOLEAN DEFAULT 0,"
+        "completed_by_membership_id VARCHAR(36),"
+        "content_snippet VARCHAR(200) DEFAULT ''"
+        ")"
+      )
+    )
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_completions_task_id ON task_completions (task_id)"))
+    conn.execute(
+      text("CREATE INDEX IF NOT EXISTS ix_task_completions_dynamic_id ON task_completions (dynamic_id)")
+    )
+    conn.execute(
+      text("CREATE INDEX IF NOT EXISTS ix_task_completions_membership_id ON task_completions (membership_id)")
+    )
+
+  def sole_sub(dynamic_id: str, assignee: str | None, creator: str | None) -> str | None:
+    if assignee:
+      return assignee
+    subs = conn.execute(
+      text(
+        "SELECT id FROM memberships WHERE dynamic_id = :did AND role IN ('submissive', 'SUBMISSIVE')"
+      ),
+      {"did": dynamic_id},
+    ).fetchall()
+    if len(subs) == 1:
+      return subs[0][0]
+    if creator:
+      role = conn.execute(
+        text("SELECT role FROM memberships WHERE id = :id"),
+        {"id": creator},
+      ).fetchone()
+      if role and str(role[0]).lower() == "submissive":
+        return creator
+    return subs[0][0] if subs else assignee or creator
+
+  def completion_near(task_id: str, at) -> bool:
+    row = conn.execute(
+      text(
+        "SELECT 1 FROM task_completions WHERE task_id = :tid "
+        "AND abs(strftime('%s', completed_at) - strftime('%s', :at)) <= 120 LIMIT 1"
+      ),
+      {"tid": task_id, "at": at},
+    ).fetchone()
+    return row is not None
+
+  if "tasks" in tables and "task_lists" in tables:
+    done = conn.execute(
+      text(
+        "SELECT t.id, t.completed_at, t.tags, t.completed_late, t.assigned_to_membership_id, "
+        "t.created_by_membership_id, tl.dynamic_id, t.content "
+        "FROM tasks t JOIN task_lists tl ON t.task_list_id = tl.id "
+        "WHERE t.completed_at IS NOT NULL"
+      )
+    ).fetchall()
+    for task_id, completed_at, tags, late, assignee, creator, dynamic_id, content in done:
+      if completion_near(task_id, completed_at):
+        continue
+      subject = sole_sub(dynamic_id, assignee, creator) or assignee or creator or ""
+      conn.execute(
+        text(
+          "INSERT INTO task_completions (id, task_id, dynamic_id, membership_id, completed_at, "
+          "tags, late, completed_by_membership_id, content_snippet) "
+          "VALUES (:id, :task_id, :dynamic_id, :membership_id, :completed_at, :tags, :late, :by, :snippet)"
+        ),
+        {
+          "id": str(uuid.uuid4()),
+          "task_id": task_id,
+          "dynamic_id": dynamic_id,
+          "membership_id": subject,
+          "completed_at": completed_at,
+          "tags": tags or "",
+          "late": 1 if late else 0,
+          "by": creator,
+          "snippet": (content or "")[:200],
+        },
+      )
+
+  if "chat_messages" in tables and "tasks" in tables:
+    messages = conn.execute(
+      text(
+        "SELECT id, dynamic_id, body, payload_json, created_at, sender_membership_id, action "
+        "FROM chat_messages WHERE message_type IN ('system', 'SYSTEM') "
+        "AND body LIKE 'completed task:%'"
+      )
+    ).fetchall()
+    for _mid, dynamic_id, body, payload_json, created_at, sender_id, action in messages:
+      task_id = ""
+      try:
+        payload = json.loads(payload_json or "{}")
+        task_id = str((payload or {}).get("task_id") or "")
+      except (TypeError, ValueError):
+        task_id = ""
+      if not task_id:
+        continue
+      task = conn.execute(
+        text(
+          "SELECT t.tags, t.assigned_to_membership_id, t.created_by_membership_id, t.content, tl.dynamic_id "
+          "FROM tasks t JOIN task_lists tl ON t.task_list_id = tl.id WHERE t.id = :id"
+        ),
+        {"id": task_id},
+      ).fetchone()
+      if task is None:
+        continue
+      tags, assignee, creator, content, task_dynamic = task
+      if task_dynamic != dynamic_id:
+        continue
+      if completion_near(task_id, created_at):
+        continue
+      late = 1 if (action or "") == "task_completed_late" or "(late)" in (body or "").lower() else 0
+      subject = sole_sub(dynamic_id, assignee, creator) or assignee or creator or sender_id or ""
+      conn.execute(
+        text(
+          "INSERT INTO task_completions (id, task_id, dynamic_id, membership_id, completed_at, "
+          "tags, late, completed_by_membership_id, content_snippet) "
+          "VALUES (:id, :task_id, :dynamic_id, :membership_id, :completed_at, :tags, :late, :by, :snippet)"
+        ),
+        {
+          "id": str(uuid.uuid4()),
+          "task_id": task_id,
+          "dynamic_id": dynamic_id,
+          "membership_id": subject,
+          "completed_at": created_at,
+          "tags": tags or "",
+          "late": late,
+          "by": sender_id,
+          "snippet": (content or "")[:200],
+        },
+      )
