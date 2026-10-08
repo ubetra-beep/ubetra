@@ -10,7 +10,7 @@ from ..models import ActOfSubmission, ActStatus, Dynamic, Membership, PartnerRol
 from ..schemas import ActCategoryIn, ActCategoryOut, ActOfSubmissionOut, ActRequestIn, ActRespondRequest, ActToTaskCreate, ActVerifyRequest, TaskListOut
 from ..services.act_catalog import find_act_category, generate_act_catalog, maybe_generate_act_catalog, parse_act_catalog, serialize_act_catalog
 from ..services.tags import tags_to_string
-from ..services.tasks_service import task_list_out
+from ..services.tasks_service import remember_task_library, task_list_out
 from ..services.chat_events import post_system_event, task_snippet
 from ..services.context import CORE_KNOWLEDGE_FIELDS, build_dynamic_context, get_or_create_core_knowledge
 from ..services.llm import generate_act_of_submission
@@ -278,6 +278,84 @@ def respond_to_act(
     db.commit()
     db.refresh(act)
     return _act_to_out(act)
+
+
+@router.delete("/acts/{act_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_act(
+    act_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    act = db.get(ActOfSubmission, act_id)
+    if act is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Act not found")
+    membership = get_membership(act.dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant and membership.id != act.requested_by_membership_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot delete this act")
+    db.query(Task).filter(Task.act_id == act.id).update({Task.act_id: None})
+    db.delete(act)
+    db.commit()
+
+
+@router.post("/acts/{act_id}/make-task", response_model=TaskListOut)
+def make_task_from_act(
+    act_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskListOut:
+    """Turn a requested act into a normal task, then remove the act."""
+    act = db.get(ActOfSubmission, act_id)
+    if act is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Act not found")
+    membership = get_membership(act.dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can save an act as a task")
+    task_list = (
+        db.query(TaskList)
+        .filter(TaskList.dynamic_id == act.dynamic_id, TaskList.title == "From acts")
+        .first()
+    )
+    if task_list is None:
+        task_list = TaskList(
+            dynamic_id=act.dynamic_id,
+            title="From acts",
+            created_by_membership_id=membership.id,
+        )
+        db.add(task_list)
+        db.flush()
+    else:
+        task_list = (
+            db.query(TaskList)
+            .options(joinedload(TaskList.tasks))
+            .filter(TaskList.id == task_list.id)
+            .one()
+        )
+    content = (act.hint_text or act.act_type_title or "Act of submission").strip()
+    task = Task(
+        task_list_id=task_list.id,
+        position=len(task_list.tasks or []),
+        content=content,
+        visibility=TaskVisibility.visible,
+        tags="Submission",
+        approval_status=TaskApprovalStatus.approved,
+        source=TaskSource.act,
+        created_by_membership_id=membership.id,
+        recurrence=TaskRecurrence.none,
+        act_id=None,
+    )
+    db.add(task)
+    remember_task_library(db, act.dynamic_id, content, tags="Submission")
+    db.query(Task).filter(Task.act_id == act.id).update({Task.act_id: None})
+    db.delete(act)
+    post_system_event(db, act.dynamic_id, membership, f"saved act as a task: {task_snippet(content)}")
+    db.commit()
+    task_list = (
+        db.query(TaskList)
+        .options(joinedload(TaskList.tasks))
+        .filter(TaskList.id == task_list.id)
+        .one()
+    )
+    return task_list_out(task_list, membership)
 
 
 @router.post("/acts/{act_id}/convert-to-task", response_model=TaskListOut)

@@ -1428,6 +1428,8 @@ def run_migrations() -> None:
         )
     if "task_complete_notify" not in dynamic_cols:
       conn.execute(text("ALTER TABLE dynamics ADD COLUMN task_complete_notify BOOLEAN DEFAULT 1"))
+    if "task_completed_history_days" not in dynamic_cols:
+      conn.execute(text("ALTER TABLE dynamics ADD COLUMN task_completed_history_days INTEGER DEFAULT 9"))
     if "ml_censor_mode" not in dynamic_cols:
       conn.execute(text("ALTER TABLE dynamics ADD COLUMN ml_censor_mode VARCHAR(16) DEFAULT 'off'"))
     if "training_regimen_state" not in dynamic_cols:
@@ -1827,3 +1829,62 @@ def _migrate_1_14(conn) -> None:
           "snippet": (content or "")[:200],
         },
       )
+
+  library_tables = {
+    row[0]
+    for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+  }
+  if "task_library" not in library_tables:
+    conn.execute(
+      text(
+        "CREATE TABLE task_library ("
+        "id VARCHAR(36) PRIMARY KEY,"
+        "dynamic_id VARCHAR(36) NOT NULL,"
+        "content_key VARCHAR(200) DEFAULT '',"
+        "content TEXT DEFAULT '',"
+        "tags VARCHAR(500) DEFAULT '',"
+        "recurrence VARCHAR(16) DEFAULT 'none',"
+        "recurrence_interval INTEGER,"
+        "created_at DATETIME,"
+        "last_used_at DATETIME"
+        ")"
+      )
+    )
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_library_dynamic_id ON task_library (dynamic_id)"))
+    conn.execute(
+      text("CREATE UNIQUE INDEX IF NOT EXISTS uq_task_library_key ON task_library (dynamic_id, content_key)")
+    )
+
+  existing_library = {
+    (row[0], row[1])
+    for row in conn.execute(text("SELECT dynamic_id, content_key FROM task_library")).fetchall()
+  }
+  seen_library = set(existing_library)
+  task_rows = conn.execute(
+    text(
+      "SELECT tl.dynamic_id, t.content, t.tags, t.recurrence, t.recurrence_interval "
+      "FROM tasks t JOIN task_lists tl ON t.task_list_id = tl.id"
+    )
+  ).fetchall()
+  for dynamic_id, content, tags, recurrence, interval in task_rows:
+    key = " ".join((content or "").lower().split())[:200]
+    if not key or (dynamic_id, key) in seen_library:
+      continue
+    seen_library.add((dynamic_id, key))
+    conn.execute(
+      text(
+        "INSERT INTO task_library (id, dynamic_id, content_key, content, tags, recurrence, "
+        "recurrence_interval, created_at, last_used_at) "
+        "VALUES (:id, :dynamic_id, :content_key, :content, :tags, :recurrence, :interval, "
+        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+      ),
+      {
+        "id": str(uuid.uuid4()),
+        "dynamic_id": dynamic_id,
+        "content_key": key,
+        "content": (content or "").strip()[:500],
+        "tags": tags or "",
+        "recurrence": recurrence or "none",
+        "interval": interval,
+      },
+    )

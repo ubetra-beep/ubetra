@@ -14,6 +14,7 @@ from ..models import (
     PartnerRole,
     Task,
     TaskApprovalStatus,
+    TaskLibraryItem,
     TaskList,
     TaskRecurrence,
     TaskVisibility,
@@ -118,6 +119,76 @@ def advance_due_date(
     if not days:
         return current
     return current + timedelta(days=days)
+
+
+def remember_task_library(
+    db: Session,
+    dynamic_id: str,
+    content: str,
+    *,
+    tags: str = "",
+    recurrence: str = "none",
+    recurrence_interval: int | None = None,
+) -> None:
+    key = " ".join((content or "").lower().split())[:200]
+    if not key:
+        return
+    now = datetime.utcnow()
+    row = (
+        db.query(TaskLibraryItem)
+        .filter(TaskLibraryItem.dynamic_id == dynamic_id, TaskLibraryItem.content_key == key)
+        .first()
+    )
+    if row is not None:
+        row.last_used_at = now
+        if tags:
+            row.tags = tags
+        if recurrence and recurrence != "none":
+            row.recurrence = recurrence
+            row.recurrence_interval = recurrence_interval
+        return
+    db.add(
+        TaskLibraryItem(
+            dynamic_id=dynamic_id,
+            content_key=key,
+            content=(content or "").strip()[:500],
+            tags=tags or "",
+            recurrence=recurrence or "none",
+            recurrence_interval=recurrence_interval,
+            created_at=now,
+            last_used_at=now,
+        )
+    )
+
+
+DAILY_HOLD_HOURS = 18
+
+
+def is_simple_daily(task: Task) -> bool:
+    if task.recurrence != TaskRecurrence.daily:
+        return False
+    interval = getattr(task, "recurrence_interval", None)
+    try:
+        if interval is not None and int(interval) > 1:
+            return False
+    except (TypeError, ValueError):
+        pass
+    return True
+
+
+def daily_occurrence_ready(task: Task, now: datetime | None = None) -> bool:
+    """A repeating daily task stays hidden until 18 hours after it was scheduled, and no earlier than 18 hours before it is due."""
+    if not is_simple_daily(task) or task.completed_at:
+        return True
+    now = now or datetime.utcnow()
+    due = task.next_due_at or task.due_at
+    if due is None or due <= now:
+        return True
+    earliest = due - timedelta(hours=DAILY_HOLD_HOURS)
+    scheduled = getattr(task, "occurrence_scheduled_at", None)
+    if scheduled is not None:
+        earliest = max(earliest, scheduled + timedelta(hours=DAILY_HOLD_HOURS))
+    return now >= earliest
 
 
 def schedule_next_occurrence(task: Task, *, from_time: datetime | None = None) -> None:
@@ -281,6 +352,8 @@ def task_list_out(task_list: TaskList, viewer: Membership) -> TaskListOut:
     rows_src = []
     for t in tasks:
         if getattr(t, "is_private", False) and not task_visible(t, tasks, viewer):
+            continue
+        if viewer.role == PartnerRole.submissive and not daily_occurrence_ready(t):
             continue
         rows_src.append(t)
     task_rows = [task_out(task, tasks, viewer, memberships) for task in rows_src]
@@ -592,6 +665,8 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
                 continue
             if not task_visible(task, ordered, membership):
                 continue
+            if membership.role == PartnerRole.submissive and not daily_occurrence_ready(task, now):
+                continue
             due = task.next_due_at or task.due_at
             if due is None:
                 continue
@@ -670,15 +745,15 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
 
     items.sort(key=lambda i: (i.get("occurred_at") or datetime.min).isoformat(), reverse=True)
 
-    # Keyholder: pending confessions + due reminders (also via dedicated rows)
+    # Keyholder: ungranted gifts, then pending confessions (not cleared by Got it).
+    from .chastity_goals import ready_gift_inbox_items
     from .punishments import inbox_items_for_member
 
+    gift_items = ready_gift_inbox_items(db, dynamic_id, membership)
     punish_items = inbox_items_for_member(db, dynamic_id, membership)
-    if punish_items:
-        # Prefer dedicated punishment items; drop duplicate chat events of the same kind
+    if gift_items or punish_items:
         items = [i for i in items if i.get("kind") not in {"punishment_pending", "punishment_self_report"}]
-        items = [*punish_items, *items]
-        items.sort(key=lambda i: (i.get("occurred_at") or datetime.min).isoformat(), reverse=True)
+        items = [*gift_items, *punish_items, *items]
 
     missing = apply_due_auto_punish(db, dynamic_id)
     from .edge_guard import removal_inbox_items
@@ -690,10 +765,15 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
     ]
     if extra:
         items = [*extra, *items]
-        items.sort(key=lambda i: (i.get("occurred_at") or datetime.min).isoformat(), reverse=True)
         db.commit()
     elif missing is not None:
         db.commit()
+
+    gifts = [i for i in items if i.get("kind") == "goal_ready"]
+    confess = [i for i in items if str(i.get("kind") or "").startswith("punishment")]
+    rest = [i for i in items if i not in gifts and i not in confess]
+    rest.sort(key=lambda i: (i.get("occurred_at") or datetime.min).isoformat(), reverse=True)
+    items = [*gifts, *confess, *rest]
 
     return {
         "acked_at": membership.inbox_acked_at,

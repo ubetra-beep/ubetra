@@ -18,6 +18,8 @@ import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -33,7 +35,14 @@ class EdgeGuardVpnService : VpnService() {
         private const val VPN_DNS = "10.55.55.10"
         private const val VPN_ADDRESS_V6 = "fd55:5555::1"
         private const val VPN_DNS_V6 = "fd55:5555::10"
+        private const val VPN_MTU = 8192
         private const val UPSTREAM_DNS = "1.1.1.1"
+        private val DRIVE_PACKAGES = listOf(
+            "com.google.android.apps.docs",
+            "com.google.android.apps.docs.editors.docs",
+            "com.google.android.apps.docs.editors.sheets",
+            "com.google.android.apps.docs.editors.slides",
+        )
         private const val NOTIFICATION_ID = 55441
         private const val CHANNEL_ID = "ubetra_edge_guard"
         const val ACTION_START = "org.duckdns.ubeneeko.edgeguard.START"
@@ -160,7 +169,7 @@ class EdgeGuardVpnService : VpnService() {
         try {
             val builder = Builder()
                 .setSession("UBETRA Edge Guard")
-                .setMtu(1500)
+                .setMtu(VPN_MTU)
                 .addAddress(VPN_ADDRESS, 32)
                 .addDnsServer(VPN_DNS)
                 .addRoute(VPN_DNS, 32)
@@ -169,9 +178,13 @@ class EdgeGuardVpnService : VpnService() {
                 .addRoute(VPN_DNS_V6, 128)
                 .setBlocking(true)
 
-            try {
-                builder.addDisallowedApplication(packageName)
-            } catch (_: PackageManager.NameNotFoundException) {
+            // The app itself, plus Google Drive, bypass the filter so uploads are not
+            // stuck behind the DNS tunnel. The browser still uses the blocklist.
+            for (pkg in listOf(packageName) + DRIVE_PACKAGES) {
+                try {
+                    builder.addDisallowedApplication(pkg)
+                } catch (_: PackageManager.NameNotFoundException) {
+                }
             }
 
             val pfd = builder.establish()
@@ -267,14 +280,22 @@ class EdgeGuardVpnService : VpnService() {
     }
 
     private fun forwardDns(dnsQuery: ByteArray): ByteArray? {
+        val udp = queryUpstreamUdp(dnsQuery)
+        val needsTcp = udp == null || DnsPacket.isTruncated(udp) || udp.size + 48 > VPN_MTU
+        val full = if (needsTcp) queryUpstreamTcp(dnsQuery) ?: udp else udp
+        if (full == null) return null
+        return DnsPacket.fitForUdp(full, VPN_MTU - 48)
+    }
+
+    private fun queryUpstreamUdp(dnsQuery: ByteArray): ByteArray? {
         var socket: DatagramSocket? = null
         return try {
             socket = DatagramSocket()
-            protect(socket)
+            if (!protect(socket)) Log.w(TAG, "could not protect DNS socket")
             socket.soTimeout = 3000
             val upstream = InetAddress.getByName(UPSTREAM_DNS)
             socket.send(DatagramPacket(dnsQuery, dnsQuery.size, upstream, 53))
-            val buffer = ByteArray(4096)
+            val buffer = ByteArray(8192)
             val response = DatagramPacket(buffer, buffer.size)
             socket.receive(response)
             buffer.copyOf(response.length)
@@ -283,6 +304,42 @@ class EdgeGuardVpnService : VpnService() {
             null
         } finally {
             socket?.close()
+        }
+    }
+
+    private fun queryUpstreamTcp(dnsQuery: ByteArray): ByteArray? {
+        var socket: Socket? = null
+        return try {
+            socket = Socket()
+            if (!protect(socket)) Log.w(TAG, "could not protect DNS TCP socket")
+            socket.connect(InetSocketAddress(UPSTREAM_DNS, 53), 3000)
+            socket.soTimeout = 3000
+            val out = socket.getOutputStream()
+            out.write(byteArrayOf((dnsQuery.size ushr 8).toByte(), (dnsQuery.size and 0xFF).toByte()))
+            out.write(dnsQuery)
+            out.flush()
+            val input = socket.getInputStream()
+            val hi = input.read()
+            val lo = input.read()
+            if (hi < 0 || lo < 0) return null
+            val size = (hi shl 8) or lo
+            if (size <= 0 || size > 16384) return null
+            val buf = ByteArray(size)
+            var offset = 0
+            while (offset < size) {
+                val n = input.read(buf, offset, size - offset)
+                if (n < 0) return null
+                offset += n
+            }
+            buf
+        } catch (e: Exception) {
+            Log.w(TAG, "upstream TCP DNS failed", e)
+            null
+        } finally {
+            try {
+                socket?.close()
+            } catch (_: IOException) {
+            }
         }
     }
 

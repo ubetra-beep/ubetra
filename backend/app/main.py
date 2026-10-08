@@ -3,7 +3,7 @@ import json
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .catalog import ensure_data_dir, seed_catalog
@@ -174,11 +174,19 @@ def android_apk_status() -> dict:
     }
 
 
-@app.get("/apk/ubetra.apk")
-def download_android_apk() -> FileResponse:
+@app.api_route("/apk/ubetra.apk", methods=["GET", "HEAD"])
+def download_android_apk(request: Request) -> Response:
     apk = _published_apk()
     if apk is None:
         raise HTTPException(status_code=404, detail="Android APK is not published on this server.")
+    headers = {
+        "Cache-Control": "no-cache",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(apk.stat().st_size),
+        "Content-Disposition": 'attachment; filename="ubetra.apk"',
+    }
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type="application/vnd.android.package-archive", headers=headers)
     return FileResponse(
         apk,
         media_type="application/vnd.android.package-archive",

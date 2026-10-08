@@ -62,6 +62,11 @@ REQUIREMENT_TYPES = {
         "kind": "count",
         "hint": "No-orgasm (play) logs for the sub, Denied tags, plus denial unlocks.",
     },
+    "sleep_in_chastity": {
+        "title": "Sleep in chastity",
+        "kind": "duration",
+        "hint": "Hours locked since tracking started. Breaks under 20 minutes still count. A longer unlock does not. 24 hours is one full day.",
+    },
 }
 
 GOAL_KINDS = {
@@ -96,6 +101,55 @@ START_MODES = {
 
 def _defaults() -> dict:
     return {"goals": [], "header_hidden": True}
+
+
+def _clean_every_minutes(raw) -> int | None:
+    if raw in (None, "", 0, "0"):
+        return None
+    try:
+        minutes = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if minutes < 15 or minutes > 7 * 24 * 60:
+        return None
+    return minutes
+
+
+def _clean_cycle_extras(raw) -> list[dict]:
+    """One-cycle requirements tied to a confession. Cleared when the gift is granted."""
+    if not isinstance(raw, list):
+        return []
+    cleaned = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        rtype = item.get("type")
+        if rtype not in REQUIREMENT_TYPES:
+            continue
+        try:
+            value = float(item.get("value") or 0)
+        except (TypeError, ValueError):
+            continue
+        if value <= 0:
+            continue
+        extra = {"type": rtype, "value": value}
+        confession_id = str(item.get("confession_id") or "").strip()
+        if confession_id:
+            extra["confession_id"] = confession_id[:36]
+        tag = str(item.get("tag") or "").strip()
+        if tag:
+            extra["tag"] = tag[:80]
+        cleaned.append(extra)
+    return cleaned[:8]
+
+
+def _parse_optional_iso(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
 
 
 def parse_goals(raw: str | None) -> dict:
@@ -158,6 +212,11 @@ def parse_goals(raw: str | None) -> dict:
                     "repeat_count": int(g.get("repeat_count") or 0),
                     "history": _clean_history(g.get("history")),
                     "last_met_at": g.get("last_met_at") or None,
+                    "bank_spent": _clean_spent(g.get("bank_spent")),
+                    "ready_remind_at": g.get("ready_remind_at") or None,
+                    "ready_remind_every_minutes": _clean_every_minutes(g.get("ready_remind_every_minutes")),
+                    "ready_pushed_for": g.get("ready_pushed_for") or None,
+                    "cycle_extras": _clean_cycle_extras(g.get("cycle_extras")),
                 }
             )
         base["goals"] = cleaned
@@ -292,6 +351,64 @@ def _clean_history(raw) -> list[dict]:
             }
         )
     return out[-100:]
+
+
+def _clean_spent(raw) -> list[float]:
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        try:
+            out.append(max(0.0, float(item)))
+        except (TypeError, ValueError):
+            out.append(0.0)
+    return out[:20]
+
+
+_SHORT_BREAK = timedelta(minutes=20)
+
+
+def _overlap_seconds(a0: datetime, a1: datetime, b0: datetime, b1: datetime) -> float:
+    start = max(a0, b0)
+    end = min(a1, b1)
+    if end <= start:
+        return 0.0
+    return (end - start).total_seconds()
+
+
+def _locked_hours(db: Session, dynamic_id: str, sub_id: str, since: datetime) -> float:
+    """Hours locked since `since`. Breaks under 20 minutes still count as locked."""
+    now = datetime.utcnow()
+    lockups = (
+        db.query(ChastityLockup)
+        .options(joinedload(ChastityLockup.breaks))
+        .filter(
+            ChastityLockup.dynamic_id == dynamic_id,
+            ChastityLockup.for_membership_id == sub_id,
+        )
+        .all()
+    )
+    total = 0.0
+    for lockup in lockups:
+        start = lockup.started_at
+        end = lockup.ended_at or now
+        if start is None or end <= since or start >= now:
+            continue
+        window0 = max(start, since)
+        window1 = min(end, now)
+        if window1 <= window0:
+            continue
+        span = (window1 - window0).total_seconds()
+        for brk in lockup.breaks or []:
+            b0 = brk.started_at
+            b1 = brk.ended_at or now
+            if b0 is None or b1 <= b0:
+                continue
+            if (b1 - b0) < _SHORT_BREAK:
+                continue
+            span -= _overlap_seconds(window0, window1, b0, b1)
+        total += max(0.0, span)
+    return total / 3600.0
 
 
 def _count_tasks_completed(
@@ -440,6 +557,7 @@ def evaluate_requirement(
     dominant_id: str | None,
     req: dict,
     reset_at: datetime,
+    spent: float = 0.0,
 ) -> dict[str, Any]:
     rtype = req["type"]
     target = float(req["value"])
@@ -489,9 +607,22 @@ def evaluate_requirement(
         current = float(_count_ruins(db, dynamic_id, sub_id, reset_at))
     elif rtype == "denials":
         current = float(_count_denials(db, dynamic_id, sub_id, reset_at))
+    elif rtype == "sleep_in_chastity":
+        unit = "hours"
+        current = _locked_hours(db, dynamic_id, sub_id, reset_at)
+        need = target - current
+        eta_at = now + timedelta(hours=max(0, need)) if need > 0 else now
 
+    if spent:
+        current = max(0.0, current - float(spent))
     met = current >= target
+    if unit == "days" and not met:
+        eta_at = now + timedelta(days=max(0.0, target - current))
+    elif unit == "hours" and not met:
+        eta_at = now + timedelta(hours=max(0.0, target - current))
     remaining = max(0.0, target - current)
+    shown = round(current, 1) if unit in {"days", "hours"} else int(current)
+    remain_shown = round(remaining, 1) if unit in {"days", "hours"} else int(remaining)
     return {
         "type": rtype,
         "title": meta["title"],
@@ -499,11 +630,11 @@ def evaluate_requirement(
         "hint": meta["hint"],
         "tag": (req.get("tag") or "").strip(),
         "target": target,
-        "current": round(current, 2) if unit == "days" else int(current),
-        "remaining": round(remaining, 2) if unit == "days" else int(remaining),
+        "current": shown,
+        "remaining": remain_shown,
         "met": met,
         "unit": unit,
-        "eta_at": eta_at.isoformat() + "Z" if eta_at and not met and unit == "days" else None,
+        "eta_at": eta_at.isoformat() + "Z" if eta_at and not met and unit in {"days", "hours"} else None,
     }
 
 
@@ -581,17 +712,35 @@ def _goal_progress_row(
     if not sub_id:
         return None
     reset_at = _parse_reset(goal.get("reset_at"))
-    reqs = [
-        evaluate_requirement(
+    spent_list = goal.get("bank_spent") or []
+    reqs = []
+    for index, req in enumerate(goal.get("requirements") or []):
+        spent = float(spent_list[index]) if index < len(spent_list) else 0.0
+        reqs.append(
+            evaluate_requirement(
+                db,
+                dynamic_id=dynamic.id,
+                sub_id=sub_id,
+                dominant_id=dom.id if dom else None,
+                req=req,
+                reset_at=reset_at,
+                spent=spent,
+            )
+        )
+    for extra in goal.get("cycle_extras") or []:
+        evaluated = evaluate_requirement(
             db,
             dynamic_id=dynamic.id,
             sub_id=sub_id,
             dominant_id=dom.id if dom else None,
-            req=r,
+            req=extra,
             reset_at=reset_at,
+            spent=0.0,
         )
-        for r in goal.get("requirements") or []
-    ]
+        evaluated["temporary"] = True
+        evaluated["confession_id"] = extra.get("confession_id")
+        evaluated["title"] = f"This time · {evaluated['title']}"
+        reqs.append(evaluated)
     all_met = bool(reqs) and all(r["met"] for r in reqs)
     unmet_etas = [
         datetime.fromisoformat(r["eta_at"].replace("Z", ""))
@@ -609,6 +758,7 @@ def _goal_progress_row(
         "for_display_name": next((s.display_name for s in subs if s.id == sub_id), "Sub"),
         "requirements": reqs,
         "ready": all_met and bool(goal.get("active", True)),
+        "grants_ready": _grants_ready(reqs) if goal.get("active", True) else 0,
         "countdown_at": (countdown_at.isoformat() + "Z") if countdown_at and not all_met else None,
         "requirement_count": len(reqs),
         "complex": len(reqs) > DEFAULT_MAX_SOFT,
@@ -621,7 +771,76 @@ def _goal_progress_row(
         "repeat_count": int(goal.get("repeat_count") or 0),
         "history": list(goal.get("history") or []),
         "last_met_at": goal.get("last_met_at"),
+        "ready_remind_at": goal.get("ready_remind_at"),
+        "cycle_extras": list(goal.get("cycle_extras") or []),
     }
+
+
+def _grants_ready(reqs: list[dict]) -> int:
+    floors = []
+    for req in reqs:
+        target = float(req.get("target") or 0)
+        if target <= 0:
+            continue
+        floors.append(int(float(req.get("current") or 0) // target))
+    return min(floors) if floors else 0
+
+
+def _consume_grant(goal: dict) -> None:
+    reqs = goal.get("requirements") or []
+    spent = [float(n) for n in (goal.get("bank_spent") or [])]
+    while len(spent) < len(reqs):
+        spent.append(0.0)
+    for index, req in enumerate(reqs):
+        spent[index] += float(req.get("value") or 0)
+    goal["bank_spent"] = spent
+    goal["last_met_at"] = None
+    goal["ready_remind_at"] = None
+    goal["ready_remind_every_minutes"] = None
+    goal["ready_pushed_for"] = None
+    goal["cycle_extras"] = []
+
+
+def _notify_goals_ready(
+    db: Session,
+    dynamic: Dynamic,
+    ready_rows: list[dict],
+    all_rows: list[dict],
+    *,
+    reminder: bool = False,
+) -> None:
+    from .push import notify_task_push
+
+    if not ready_rows:
+        return
+    lines = []
+    for row in all_rows:
+        if not row.get("active", True):
+            continue
+        bits = ", ".join(
+            f"{req.get('title')} {req.get('current')}/{req.get('target')}"
+            for req in (row.get("requirements") or [])
+        )
+        state = "ready" if row.get("ready") else "working towards"
+        lines.append(f"{row.get('title')}: {bits} ({state})")
+    first = ready_rows[0]
+    grants = int(first.get("grants_ready") or 1)
+    head = f"{first.get('title') or 'Goal'} is ready"
+    if grants > 1:
+        head += f" ({grants} gifts)"
+    if len(ready_rows) > 1:
+        head = f"{len(ready_rows)} gifts are ready"
+    stamp = str(first.get("last_met_at") or "")[-6:]
+    prefix = "wait" if reminder else "earn"
+    notify_task_push(
+        db,
+        dynamic_id=dynamic.id,
+        title="Gift still waiting" if reminder else "Gift earned",
+        body=(head + "\n" + "\n".join(lines[:8]))[:500],
+        url=f"/dynamic/{dynamic.id}/tasks?goal={first.get('id')}",
+        tag=f"{prefix}-{str(first.get('id') or '')[:12]}-{stamp}"[:32],
+        keyholders_only=True,
+    )
 
 
 def _progress_text(row: dict | None) -> str:
@@ -683,14 +902,23 @@ def note_orgasm_gift(
     sub_id: str,
     occurred_at: datetime,
     tags: list[str],
+    orgasm_counts: dict | None = None,
 ) -> None:
-    """Append goal history and reset the cycle when a matching gift is logged."""
+    """Append goal history and consume one ready gift per matching orgasm on the log."""
     from .tracking_events import has_cheated_tag
 
-    cheated = has_cheated_tag(tags)
-    ruined = has_ruined_orgasm_tag(tags)
-    full = has_full_orgasm_tag(tags) and not ruined
-    if not (cheated or ruined or full):
+    counts = orgasm_counts or {}
+    cheated_n = int(counts.get("cheated") or 0)
+    ruin_n = int(counts.get("ruin") or 0)
+    full_n = int(counts.get("full") or 0)
+    if orgasm_counts is None:
+        cheated = has_cheated_tag(tags)
+        ruined = has_ruined_orgasm_tag(tags)
+        full = has_full_orgasm_tag(tags) and not ruined
+        cheated_n = 1 if cheated else 0
+        ruin_n = 1 if ruined and not cheated else 0
+        full_n = 1 if full else 0
+    if cheated_n + ruin_n + full_n <= 0:
         return
     data = parse_goals(getattr(dynamic, "chastity_goals", None))
     subs = _sub_memberships(db, dynamic.id)
@@ -706,26 +934,38 @@ def note_orgasm_gift(
         if owner and owner != sub_id:
             continue
         gk = goal.get("kind")
+        applicable = 0
         outcome = None
-        if cheated and gk == "orgasm_grant":
+        if cheated_n and gk == "orgasm_grant":
             outcome = "cheated"
-        elif full and not cheated and gk == "orgasm_grant":
+        elif full_n and gk == "orgasm_grant":
+            applicable = full_n
             outcome = "pending"
-        elif ruined and gk == "ruin_gift":
+        elif ruin_n and gk == "ruin_gift":
+            applicable = ruin_n
             outcome = "pending"
         if outcome is None:
             continue
         row = _goal_progress_row(
             db, dynamic=dynamic, goal=goal, subs=subs, dom=dom, default_sub=default_sub
         )
+        taken = 0
         if outcome == "pending":
-            outcome = "gift" if row and row.get("ready") else "reset"
+            ready_n = int(row.get("grants_ready") or 0) if row and row.get("ready") else 0
+            taken = min(applicable, ready_n)
+            if taken:
+                for _ in range(taken):
+                    _consume_grant(goal)
+                row = _goal_progress_row(
+                    db, dynamic=dynamic, goal=goal, subs=subs, dom=dom, default_sub=default_sub
+                )
+                outcome = "gift"
+            else:
+                outcome = "reset"
         hist = list(goal.get("history") or [])
         hist.append({"at": stamp, "outcome": outcome, "progress": _progress_text(row)})
         goal["history"] = hist[-100:]
-        goal["reset_at"] = stamp
-        goal["repeat_count"] = int(goal.get("repeat_count") or 0) + 1
-        goal["last_met_at"] = None
+        goal["repeat_count"] = int(goal.get("repeat_count") or 0) + (taken or 1)
         changed = True
     if changed:
         dynamic.chastity_goals = serialize_goals(data)
@@ -739,6 +979,7 @@ def build_goals_progress(db: Session, dynamic: Dynamic) -> dict:
     default_sub = subs[0].id if len(subs) == 1 else None
     active_goals = []
     archived_goals = []
+    newly_ready = []
     dirty = False
     for goal in data["goals"]:
         row = _goal_progress_row(
@@ -755,11 +996,21 @@ def build_goals_progress(db: Session, dynamic: Dynamic) -> dict:
             dirty = True
             row["history"] = list(goal.get("history") or [])
             row["last_met_at"] = goal.get("last_met_at")
+            newly_ready.append(row)
         if goal.get("active", True):
             active_goals.append(row)
         else:
             archived_goals.append(row)
     if dirty:
+        ready_ids = {row["id"] for row in newly_ready}
+        for goal in data["goals"]:
+            if goal["id"] in ready_ids:
+                goal["ready_pushed_for"] = goal.get("last_met_at")
+        dynamic.chastity_goals = serialize_goals(data)
+        db.add(dynamic)
+        db.commit()
+        _notify_goals_ready(db, dynamic, newly_ready, active_goals)
+    if _sync_goal_reminders(db, dynamic, data, active_goals):
         dynamic.chastity_goals = serialize_goals(data)
         db.add(dynamic)
         db.commit()
@@ -814,3 +1065,184 @@ def build_goals_progress(db: Session, dynamic: Dynamic) -> dict:
         "baselines": baselines,
         "config": data,
     }
+
+
+def _sync_goal_reminders(
+    db: Session,
+    dynamic: Dynamic,
+    data: dict,
+    active_goals: list[dict],
+) -> bool:
+    """Push once per earned cycle, then again at the keyholder's reminder time."""
+    now = datetime.utcnow().replace(microsecond=0)
+    changed = False
+    by_id = {row["id"]: row for row in active_goals}
+    catchup: list[dict] = []
+    due: list[dict] = []
+    for goal in data["goals"]:
+        if not goal.get("active", True):
+            continue
+        row = by_id.get(goal["id"])
+        ready = bool(row and row.get("ready"))
+        if not ready:
+            if goal.get("ready_remind_at") or goal.get("ready_remind_every_minutes") or goal.get("ready_pushed_for"):
+                goal["ready_remind_at"] = None
+                goal["ready_remind_every_minutes"] = None
+                goal["ready_pushed_for"] = None
+                changed = True
+            continue
+        last = str(goal.get("last_met_at") or "")
+        if last and str(goal.get("ready_pushed_for") or "") != last:
+            catchup.append(row)
+            goal["ready_pushed_for"] = last
+            changed = True
+        remind_at = _parse_optional_iso(goal.get("ready_remind_at"))
+        if remind_at is None or remind_at > now:
+            continue
+        due.append(row)
+        every = int(goal.get("ready_remind_every_minutes") or 0)
+        if every > 0:
+            goal["ready_remind_at"] = (now + timedelta(minutes=every)).isoformat() + "Z"
+        else:
+            goal["ready_remind_at"] = None
+            goal["ready_remind_every_minutes"] = None
+        changed = True
+    if catchup:
+        _notify_goals_ready(db, dynamic, catchup, active_goals)
+    if due:
+        _notify_goals_ready(db, dynamic, due, active_goals, reminder=True)
+    return changed
+
+
+def set_goal_reminder(
+    db: Session,
+    dynamic: Dynamic,
+    goal_id: str,
+    *,
+    remind_at: datetime | None,
+    every_minutes: int | None,
+) -> dict:
+    from fastapi import HTTPException, status
+
+    data = parse_goals(getattr(dynamic, "chastity_goals", None))
+    goal = next((item for item in data["goals"] if item["id"] == goal_id), None)
+    if goal is None or not goal.get("active", True):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+    every = _clean_every_minutes(every_minutes) if every_minutes else None
+    if every_minutes and every is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pick an interval between 15 minutes and 7 days")
+    now = datetime.utcnow().replace(microsecond=0)
+    when = remind_at.replace(tzinfo=None) if remind_at and remind_at.tzinfo else remind_at
+    if when is None and every:
+        when = now + timedelta(minutes=every)
+    if when is not None and when <= now:
+        when = now + timedelta(minutes=1)
+    goal["ready_remind_at"] = (when.isoformat() + "Z") if when else None
+    goal["ready_remind_every_minutes"] = every
+    dynamic.chastity_goals = serialize_goals(data)
+    db.add(dynamic)
+    db.commit()
+    return {
+        "ok": True,
+        "ready_remind_at": goal["ready_remind_at"],
+        "ready_remind_every_minutes": goal["ready_remind_every_minutes"],
+    }
+
+
+def set_cycle_extra(
+    db: Session,
+    dynamic: Dynamic,
+    goal_id: str,
+    *,
+    confession_id: str | None,
+    req_type: str,
+    value: float,
+    tag: str | None = None,
+    remove_index: int | None = None,
+) -> dict:
+    from fastapi import HTTPException, status
+
+    data = parse_goals(getattr(dynamic, "chastity_goals", None))
+    goal = next((item for item in data["goals"] if item["id"] == goal_id and item.get("active", True)), None)
+    if goal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+    extras = list(goal.get("cycle_extras") or [])
+    if remove_index is not None:
+        if remove_index < 0 or remove_index >= len(extras):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That extra requirement is gone")
+        extras.pop(remove_index)
+    else:
+        if req_type not in REQUIREMENT_TYPES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pick a requirement")
+        if value <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Requirement needs a number above 0")
+        extra = {"type": req_type, "value": float(value)}
+        if confession_id:
+            extra["confession_id"] = str(confession_id)[:36]
+        if tag and str(tag).strip():
+            extra["tag"] = str(tag).strip()[:80]
+        replaced = False
+        for index, existing in enumerate(extras):
+            if existing.get("confession_id") == extra.get("confession_id") and existing.get("type") == extra["type"] and existing.get("tag") == extra.get("tag"):
+                extras[index] = extra
+                replaced = True
+                break
+        if not replaced:
+            extras.append(extra)
+        extras = extras[:8]
+    goal["cycle_extras"] = extras
+    dynamic.chastity_goals = serialize_goals(data)
+    db.add(dynamic)
+    db.commit()
+    progress = build_goals_progress(db, dynamic)
+    progress["you_are_dominant"] = True
+    return progress
+
+
+def ready_gift_inbox_items(db: Session, dynamic_id: str, membership: Membership) -> list[dict]:
+    """Ungranted gifts for the keyholder. These stay until the gift is recorded."""
+    if membership.role != PartnerRole.dominant:
+        return []
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        return []
+    progress = build_goals_progress(db, dynamic)
+    items: list[dict] = []
+    for row in progress.get("goals") or []:
+        if not row.get("active", True) or not row.get("ready"):
+            continue
+        remind_at = _parse_optional_iso(row.get("ready_remind_at"))
+        if remind_at is not None and remind_at > datetime.utcnow():
+            continue
+        grants = int(row.get("grants_ready") or 1)
+        bits = ", ".join(
+            f"{req.get('title')} {req.get('current')}/{req.get('target')}"
+            for req in (row.get("requirements") or [])
+        )
+        name = row.get("title") or "Goal"
+        body = f"{name} — {bits}" if bits else name
+        items.append(
+            {
+                "id": f"goal-ready-{row.get('id')}",
+                "kind": "goal_ready",
+                "title": "Gift earned" if grants <= 1 else f"{grants} gifts earned",
+                "body": body[:200],
+                "occurred_at": _parse_optional_iso(row.get("last_met_at")) or datetime.utcnow(),
+                "path": f"/dynamic/{dynamic_id}/tasks?goal={row.get('id')}",
+                "goal_id": row.get("id"),
+            }
+        )
+    return items
+
+
+def poll_goal_progress(db: Session) -> None:
+    """Stamp newly-ready goals and push the keyholder. Safe to call from the task loop."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    dynamics = db.query(Dynamic).filter(Dynamic.chastity_goals != "").all()
+    for dynamic in dynamics:
+        try:
+            build_goals_progress(db, dynamic)
+        except Exception:
+            log.exception("goal progress check failed for %s", dynamic.id)

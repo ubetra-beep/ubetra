@@ -533,7 +533,7 @@ def inbox_items_for_member(db: Session, dynamic_id: str, membership: Membership)
             {
                 "id": f"punish-{report.id}",
                 "kind": "punishment_pending",
-                "title": "Punishment needed",
+                "title": "Confession waiting",
                 "body": (report.action_text or "")[:200],
                 "occurred_at": report.created_at,
                 "path": f"/dynamic/{dynamic_id}/punishment/{report.id}",
@@ -556,7 +556,7 @@ def inbox_items_for_member(db: Session, dynamic_id: str, membership: Membership)
             {
                 "id": f"punish-remind-{report.id}",
                 "kind": "punishment_remind",
-                "title": "Punishment reminder",
+                "title": "Confession reminder",
                 "body": (report.action_text or "")[:200],
                 "occurred_at": report.remind_at or report.created_at,
                 "path": f"/dynamic/{dynamic_id}/punishment/{report.id}",

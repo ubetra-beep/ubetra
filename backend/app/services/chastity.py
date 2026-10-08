@@ -100,6 +100,25 @@ EMERGENCY_BREAK_TYPES = {
 }
 
 
+def sub_may_log_break(
+    *,
+    is_dominant_member: bool,
+    is_subject: bool,
+    break_type: ChastityBreakType,
+    reason: str = "",
+    tags: list[str] | None = None,
+) -> bool:
+    """Keyholder can log any unlock. The locked sub can log emergencies and sleep."""
+    if is_dominant_member:
+        return True
+    if not is_subject:
+        return False
+    if break_type in EMERGENCY_BREAK_TYPES or break_type == ChastityBreakType.authorized_sleep:
+        return True
+    haystack = " ".join([reason or "", *(tags or [])]).lower()
+    return "sleep" in haystack
+
+
 def chastity_subs(memberships: list[Membership]) -> list[Membership]:
     return [
         m
@@ -287,6 +306,86 @@ def assert_no_lockup_overlap(
                     "Adjust the times so periods do not overlap."
                 ),
             )
+
+
+def is_sleep_break(break_type, reason: str = "", tags: list[str] | None = None) -> bool:
+    value = getattr(break_type, "value", break_type)
+    if "sleep" in str(value or "").lower():
+        return True
+    hay = " ".join([reason or "", *(tags or [])]).lower()
+    return "sleep" in hay
+
+
+def clip_break_to_lockup(
+    lockup: ChastityLockup,
+    started_at: datetime,
+    ended_at: datetime | None,
+) -> tuple[datetime, datetime | None]:
+    """Keep a break inside the lockup. Used for sleep unlocks punched into a locked day."""
+    started_at = as_naive_utc(started_at) or started_at
+    ended_at = as_naive_utc(ended_at)
+    lock_start = as_naive_utc(lockup.started_at) or lockup.started_at
+    lock_end = as_naive_utc(lockup.ended_at)
+    if started_at < lock_start:
+        started_at = lock_start
+    if ended_at is not None and lock_end is not None and ended_at > lock_end:
+        ended_at = lock_end
+    return started_at, ended_at
+
+
+def next_logged_orgasm(db: Session, dynamic_id: str, membership_id: str, after: datetime):
+    """Earliest logged orgasm for this sub after `after`. Returns (entry, label) or None."""
+    from sqlalchemy import exists, or_
+    from sqlalchemy.orm import selectinload
+
+    from ..models import OrgEventType, OrgTrackingEntry, OrgTrackingOrgasm
+    from .tracking_events import (
+        has_cheated_tag,
+        has_denial_tag,
+        has_full_orgasm_tag,
+        has_milking_tag,
+        has_ruined_orgasm_tag,
+        is_orgasm_event,
+    )
+
+    after = as_naive_utc(after) or after
+    has_orgasm_row = exists().where(OrgTrackingOrgasm.entry_id == OrgTrackingEntry.id)
+    entries = (
+        db.query(OrgTrackingEntry)
+        .options(selectinload(OrgTrackingEntry.orgasms))
+        .filter(
+            OrgTrackingEntry.dynamic_id == dynamic_id,
+            OrgTrackingEntry.for_membership_id == membership_id,
+            OrgTrackingEntry.occurred_at > after,
+            or_(
+                OrgTrackingEntry.event_type.in_([OrgEventType.orgasm, OrgEventType.both]),
+                has_orgasm_row,
+            ),
+        )
+        .order_by(OrgTrackingEntry.occurred_at.asc())
+        .limit(40)
+        .all()
+    )
+    for entry in entries:
+        tags = tags_to_list(entry.tags)
+        for row in entry.orgasms or []:
+            tags.extend(tags_to_list(row.tags))
+        if not is_orgasm_event(entry.event_type):
+            if not (has_full_orgasm_tag(tags) or has_ruined_orgasm_tag(tags) or has_cheated_tag(tags)):
+                if has_denial_tag(tags) or has_milking_tag(tags):
+                    continue
+                if not list(entry.orgasms or []):
+                    continue
+        if has_cheated_tag(tags):
+            label = "Cheated orgasm"
+        elif has_ruined_orgasm_tag(tags):
+            label = "Ruined orgasm"
+        elif has_full_orgasm_tag(tags):
+            label = "Full orgasm"
+        else:
+            label = "Orgasm"
+        return entry, label
+    return None
 
 
 def validate_break_times(

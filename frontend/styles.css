@@ -118,6 +118,37 @@ textarea {
   align-items: center;
 }
 
+.confession-warning-btn {
+  flex-shrink: 0;
+  border: 1px solid #e85d6c;
+  background: rgba(232, 93, 108, 0.16);
+  color: #ff8d98;
+  border-radius: 999px;
+  height: 2.5rem;
+  padding: 0 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.confession-warning-btn.hidden { display: none; }
+.confession-warning-panel {
+  position: fixed;
+  top: calc(4.4rem + env(safe-area-inset-top, 0px));
+  right: 0.75rem;
+  width: min(24rem, calc(100vw - 1.5rem));
+  max-height: min(72vh, 34rem);
+  overflow: auto;
+  z-index: 45;
+  padding: 0.9rem 1rem;
+}
+.confession-warning-head { justify-content: space-between; align-items: center; }
+.confession-warning-item {
+  padding: 0.55rem 0;
+  border-top: 1px solid var(--border);
+}
+
 .top-settings-btn {
   flex-shrink: 0;
   border: 1px solid var(--border);
@@ -3403,6 +3434,9 @@ details[open] summary {
 .inbox-log-item.tone-blue { border-left-color: #5b9bd5; }
 .inbox-log-item.tone-purple { border-left-color: #b07be0; }
 .inbox-log-item.tone-green { border-left-color: #5dae78; }
+.inbox-log-item.goal_ready { cursor: default; }
+.inbox-log-item.goal_ready input,
+.inbox-log-item.goal_ready select { flex: 1 1 8rem; }
 .inbox-log-item.tone-grey { border-left-color: #8a8f98; }
 
 .inbox-tone-chip {
@@ -5095,6 +5129,43 @@ details[open] summary {
 .task-chip-late { color: var(--danger); border-color: var(--danger); }
 .task-chip-pending { color: var(--accent); }
 .task-goal-chip { cursor: pointer; color: var(--text); }
+.goals-section > summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--text);
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+.goals-section > summary::-webkit-details-marker { display: none; }
+.goals-section > summary::before {
+  content: "▸ ";
+  color: var(--muted);
+  font-weight: 500;
+}
+.goals-section[open] > summary::before { content: "▾ "; }
+.goal-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.goal-help-btn {
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.goal-status-ready { border-color: #6fbf7a; }
+.goal-status-working { border-color: #5b9fd4; }
+.goal-status-idle { border-color: var(--border); }
 .goal-fold > summary {
   cursor: pointer;
   font-weight: 600;

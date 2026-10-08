@@ -3,6 +3,21 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.15] — 2026-10-06
+
+### Added
+- Completed tasks on the Tasks screen show the last 9 days. Change that length in Settings → Tasks & notifications
+- Tasks created keeps every task so it can be assigned again or made daily. Removing it does not delete completion logs
+- Requested acts sit in the task list and can be deleted or saved as a normal task
+- Goal cards are colored: green when ready, blue while working towards the gift, grey when not running
+- The keyholder gets one push when a goal becomes ready, with a summary of the other goals
+- Extra progress banks up. Six tasks against a target of three means two gifts are ready. Granting one subtracts one target and leaves the rest
+- Goals can require sleep in chastity: locked hours since tracking started, and breaks under 20 minutes still count. 24 hours is one day
+
+### Changed
+- Acts of submission and the Goals button are no longer separate menus. Goals stay on the Tasks screen
+- Service worker cache `ubetra-v150`
+
 ## [1.14] — 2026-10-05
 
 ### Added

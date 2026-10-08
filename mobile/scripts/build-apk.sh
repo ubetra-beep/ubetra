@@ -34,21 +34,25 @@ if [[ -n "$JAVA_MAIN" ]]; then
   cat > "$JAVA_MAIN" <<'JAVA'
 package org.duckdns.ubeneeko.app;
 
-import android.app.DownloadManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
+import android.content.Intent;
 import android.media.AudioAttributes;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
-import android.webkit.CookieManager;
-import android.webkit.URLUtil;
 import android.widget.Toast;
+import androidx.core.content.FileProvider;
 import com.getcapacitor.BridgeActivity;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import org.duckdns.ubeneeko.appupdater.UbetraAppUpdaterPlugin;
 import org.duckdns.ubeneeko.edgeguard.UbetraEdgeGuardPlugin;
 import org.duckdns.ubeneeko.healthconnect.UbetraHealthConnectPlugin;
@@ -74,34 +78,54 @@ public class MainActivity extends BridgeActivity {
   private void attachDownloadListener() {
     if (getBridge() == null || getBridge().getWebView() == null) return;
     getBridge().getWebView().setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
-      try {
-        DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-        String mime = (mimeType == null || mimeType.isEmpty())
-          ? "application/vnd.android.package-archive"
-          : mimeType;
-        request.setMimeType(mime);
-        String cookies = CookieManager.getInstance().getCookie(url);
-        if (cookies != null) request.addRequestHeader("cookie", cookies);
-        request.addRequestHeader("User-Agent", userAgent);
-        request.setDescription("UBETRA update");
-        String name = URLUtil.guessFileName(url, contentDisposition, mime);
-        if (name == null || !name.toLowerCase().endsWith(".apk")) name = "ubetra.apk";
-        request.setTitle(name);
-        request.allowScanningByMediaScanner();
-        request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-        request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
-        DownloadManager manager = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-        if (manager == null) throw new IllegalStateException("No download manager");
-        manager.enqueue(request);
-        Toast.makeText(
-          this,
-          "Saved to Downloads/ubetra.apk. Tap the download notification to install.",
-          Toast.LENGTH_LONG
-        ).show();
-      } catch (Exception err) {
-        Toast.makeText(this, "Could not start download: " + err.getMessage(), Toast.LENGTH_LONG).show();
-      }
+      Toast.makeText(this, "Downloading update…", Toast.LENGTH_SHORT).show();
+      new Thread(() -> {
+        File tmp = null;
+        HttpURLConnection conn = null;
+        try {
+          File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+          if (dir == null) throw new IllegalStateException("No download directory");
+          if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("No download directory");
+          tmp = new File(dir, "ubetra.apk.part");
+          if (tmp.exists()) tmp.delete();
+          File apk = new File(dir, "ubetra.apk");
+          conn = (HttpURLConnection) new URL(url).openConnection();
+          conn.setInstanceFollowRedirects(true);
+          conn.setConnectTimeout(20000);
+          conn.setReadTimeout(120000);
+          conn.setRequestProperty("Accept-Encoding", "identity");
+          int code = conn.getResponseCode();
+          if (code != HttpURLConnection.HTTP_OK) throw new IllegalStateException("Download failed (" + code + ")");
+          try (InputStream in = conn.getInputStream(); FileOutputStream out = new FileOutputStream(tmp)) {
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
+          }
+          if (tmp.length() < 100000L) throw new IllegalStateException("Download failed");
+          if (apk.exists()) apk.delete();
+          if (!tmp.renameTo(apk)) throw new IllegalStateException("Could not save the APK");
+          tmp = null;
+          runOnUiThread(() -> openDownloadedApk(apk));
+        } catch (Exception err) {
+          if (tmp != null) tmp.delete();
+          runOnUiThread(() -> Toast.makeText(this, "Could not start download: " + err.getMessage(), Toast.LENGTH_LONG).show());
+        } finally {
+          if (conn != null) conn.disconnect();
+        }
+      }).start();
     });
+  }
+
+  private void openDownloadedApk(File apk) {
+    try {
+      Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", apk);
+      Intent view = new Intent(Intent.ACTION_VIEW);
+      view.setDataAndType(uri, "application/vnd.android.package-archive");
+      view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+      startActivity(view);
+    } catch (Exception err) {
+      Toast.makeText(this, "Could not open installer: " + err.getMessage(), Toast.LENGTH_LONG).show();
+    }
   }
 
   private void createChannels() {

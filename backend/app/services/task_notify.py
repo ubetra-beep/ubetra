@@ -12,6 +12,7 @@ from ..models import Dynamic, Membership, PartnerRole, Task, TaskApprovalStatus,
 from ..timeutil import as_naive_utc
 from .push import notify_task_push
 from .tasks_service import (
+    daily_occurrence_ready,
     default_reminder_offsets,
     parse_reminder_offsets,
     relative_delta,
@@ -247,6 +248,8 @@ def process_task_notifications(db: Session) -> None:
                 continue
             if viewer and not getattr(task, "is_private", False) and not task_visible(task, ordered, viewer):
                 continue
+            if not daily_occurrence_ready(task, now):
+                continue
             due = task.next_due_at or task.due_at
             user_ids = assignee_user_ids(db, task, task_list.dynamic_id)
             snippet = _snippet(task)
@@ -300,6 +303,9 @@ def process_task_notifications(db: Session) -> None:
                 dirty = True
     if dirty:
         db.commit()
+    from .chastity_goals import poll_goal_progress
+
+    poll_goal_progress(db)
 
 
 def start_task_notify_loop() -> None:

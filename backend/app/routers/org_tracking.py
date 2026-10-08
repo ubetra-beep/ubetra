@@ -594,13 +594,24 @@ def log_tracking_entry(
 
     if gift_kind and dynamic_row is not None:
         from ..services.chastity_goals import note_orgasm_gift
+        from ..services.tracking_events import has_cheated_tag, has_full_orgasm_tag, has_ruined_orgasm_tag
 
+        sources = [tags_to_list(row.tags) for row in (entry.orgasms or [])] or [tags_to_list(entry.tags)]
+        orgasm_counts = {"full": 0, "ruin": 0, "cheated": 0}
+        for row_tags in sources:
+            if has_cheated_tag(row_tags):
+                orgasm_counts["cheated"] += 1
+            elif has_ruined_orgasm_tag(row_tags):
+                orgasm_counts["ruin"] += 1
+            elif has_full_orgasm_tag(row_tags):
+                orgasm_counts["full"] += 1
         note_orgasm_gift(
             db,
             dynamic_row,
             sub_id=target.id,
             occurred_at=entry.occurred_at,
             tags=orgasm_tags,
+            orgasm_counts=orgasm_counts,
         )
 
     db.commit()

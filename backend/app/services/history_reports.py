@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from ..models import (
@@ -21,6 +22,7 @@ from .chastity_calendar import (
 )
 from .sleep_nights import group_sleep_nights_by_subject, merged_sleep_intervals
 from .tags import entry_all_tags, entry_matches_selected_tags, tags_to_list
+from ..timeutil import as_naive_utc
 from .tracking_events import (
     has_denial_tag,
     has_full_orgasm_tag,
@@ -81,18 +83,53 @@ def _month_keys(period_start: date, period_end: date) -> list[str]:
     return keys
 
 
+def _chastity_days_bounds(
+    db: Session,
+    dynamic_id: str,
+    membership_ids: list[str],
+    year: int,
+    since_first: bool,
+    now: datetime,
+) -> tuple[datetime, datetime, int, bool, str]:
+    if since_first and membership_ids:
+        first = (
+            db.query(func.min(ChastityLockup.started_at))
+            .filter(
+                ChastityLockup.dynamic_id == dynamic_id,
+                ChastityLockup.for_membership_id.in_(membership_ids),
+            )
+            .scalar()
+        )
+        if isinstance(first, str):
+            first = datetime.fromisoformat(first.replace("Z", "+00:00"))
+        first = as_naive_utc(first)
+        if first is not None:
+            start = datetime(first.year, first.month, first.day)
+            return start, now, first.year, True, start.date().isoformat()
+    start, end = _year_bounds(year)
+    if end > now:
+        end = now
+    return start, end, year, False, start.date().isoformat()
+
+
 def build_chastity_days_report(
     db: Session,
     dynamic_id: str,
     memberships: list[Membership],
     *,
     year: int,
+    since_first: bool = False,
 ) -> dict:
-    period_start, period_end = _year_bounds(year)
     now = datetime.utcnow()
-    if period_end > now:
-        period_end = now
     tracked_subs = chastity_subs(memberships)
+    period_start, period_end, year, since_first, range_start = _chastity_days_bounds(
+        db,
+        dynamic_id,
+        [s.id for s in tracked_subs],
+        year,
+        since_first,
+        now,
+    )
     lockups = (
         db.query(ChastityLockup)
         .options(joinedload(ChastityLockup.breaks))
@@ -205,7 +242,13 @@ def build_chastity_days_report(
             }
         )
 
-    return {"year": year, "partners": partners, "any_enabled": bool(tracked_subs)}
+    return {
+        "year": year,
+        "since_first": since_first,
+        "range_start": range_start,
+        "partners": partners,
+        "any_enabled": bool(tracked_subs),
+    }
 
 
 def build_orgasm_report(

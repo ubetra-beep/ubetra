@@ -1,6 +1,6 @@
 # UBETRA
 
-**Version:** `1.11` (beta)
+**Version:** `1.15` (beta)
 
 Self-hosted private planner for consensual adult relationship dynamics. Runs as a Progressive Web App (PWA) on your own hardware — **not** a hosted SaaS.
 
@@ -131,8 +131,10 @@ This is a **beta (`0.x`)**. Features and APIs may change before `1.0.0`.
 
 ---
 
-## License / usage
+## License
 
-Self-host freely. Do not expect the maintainer to run a public multi-tenant cloud for you.
+UBETRA is licensed under the [GNU General Public License v3.0](LICENSE) (GPL-3.0-only). You can run, study, change, and share it, including for your own self-hosted server. Changes you distribute must stay under GPL-3.0.
+
+This is not a hosted service. Do not expect the maintainer to run a public multi-tenant cloud for you.
 
 Tips welcome: **[ko-fi.com/ubetradev](https://ko-fi.com/ubetradev)**

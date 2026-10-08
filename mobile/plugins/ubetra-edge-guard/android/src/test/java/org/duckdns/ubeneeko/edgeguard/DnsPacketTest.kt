@@ -31,4 +31,18 @@ class DnsPacketTest {
         assertEquals(0x81.toByte(), nx[2])
         assertEquals(0x83.toByte(), nx[3])
     }
+
+    @Test
+    fun fitForUdp_clearsTruncatedBitWhenTheAnswerFits() {
+        val message = byteArrayOf(
+            0x12, 0x34,
+            0x83.toByte(), 0x80.toByte(),
+            0x00, 0x01,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0,
+        )
+        val fitted = DnsPacket.fitForUdp(message, 512)
+        assertTrue(fitted.size <= 512)
+        assertEquals(0, fitted[2].toInt() and 0x02)
+    }
 }

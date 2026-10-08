@@ -104,10 +104,17 @@ def history_chastity_days_report(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     year: int | None = Query(default=None, ge=2020, le=2100),
+    since: str = Query(default=""),
 ) -> HistoryChastityDaysOut:
     get_membership(dynamic_id, user, db)
     y = year or datetime.utcnow().year
-    payload = build_chastity_days_report(db, dynamic_id, _memberships(db, dynamic_id), year=y)
+    payload = build_chastity_days_report(
+        db,
+        dynamic_id,
+        _memberships(db, dynamic_id),
+        year=y,
+        since_first=since.strip().lower() == "first",
+    )
     return HistoryChastityDaysOut(**payload)
 
 

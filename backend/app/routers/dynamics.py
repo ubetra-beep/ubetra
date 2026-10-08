@@ -378,6 +378,7 @@ def get_dynamic_policy(
         task_push_enabled=snap.get("task_push_enabled", True),
         task_reminder_offsets=snap.get("task_reminder_offsets", [15]),
         task_complete_notify=snap.get("task_complete_notify", True),
+        task_completed_history_days=int(snap.get("task_completed_history_days", 9) or 9),
         ml_censor_mode=snap.get("ml_censor_mode", "off"),
     )
 
@@ -404,6 +405,13 @@ def update_dynamic_policy(
         apply_setting(db, dynamic, setting_key="tasks.reminder_offsets", value=payload.task_reminder_offsets)
     if payload.task_complete_notify is not None:
         apply_setting(db, dynamic, setting_key="tasks.complete_notify", value=payload.task_complete_notify)
+    if payload.task_completed_history_days is not None:
+        apply_setting(
+            db,
+            dynamic,
+            setting_key="tasks.completed_history_days",
+            value=payload.task_completed_history_days,
+        )
     if payload.ml_censor_mode is not None:
         apply_setting(db, dynamic, setting_key="video.ml_censor_mode", value=payload.ml_censor_mode)
     db.commit()

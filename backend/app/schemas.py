@@ -387,11 +387,27 @@ class InboxItemOut(BaseModel):
     task_id: str | None = None
     task_list_id: str | None = None
     edge_guard_domain_id: str | None = None
+    goal_id: str | None = None
 
 
 class InboxOut(BaseModel):
     acked_at: datetime | None = None
     items: list[InboxItemOut] = Field(default_factory=list)
+
+
+class TaskLibraryOut(BaseModel):
+    id: str
+    content: str
+    tags: list[str] = Field(default_factory=list)
+    recurrence: str = "none"
+    recurrence_interval: int | None = None
+    created_at: datetime
+    last_used_at: datetime
+
+
+class TaskLibraryUseIn(BaseModel):
+    recurrence: str = "none"
+    recurrence_interval: int | None = None
 
 
 class TaskCompletionOut(BaseModel):
@@ -732,6 +748,7 @@ class DynamicPolicyOut(BaseModel):
     task_push_enabled: bool = True
     task_reminder_offsets: list[int] = Field(default_factory=lambda: [15])
     task_complete_notify: bool = True
+    task_completed_history_days: int = 9
     ml_censor_mode: str = "off"
 
 
@@ -739,6 +756,7 @@ class DynamicPolicyUpdate(BaseModel):
     task_push_enabled: bool | None = None
     task_reminder_offsets: list[ReminderOffset] | None = Field(default=None, max_length=8)
     task_complete_notify: bool | None = None
+    task_completed_history_days: int | None = None
     ml_censor_mode: str | None = None
 
 
@@ -1619,6 +1637,8 @@ class HistoryChastityDaysPartnerOut(BaseModel):
 
 class HistoryChastityDaysOut(BaseModel):
     year: int
+    since_first: bool = False
+    range_start: str = ""
     partners: list[HistoryChastityDaysPartnerOut]
     any_enabled: bool
 
@@ -1751,6 +1771,13 @@ class ChastityHistoricalCreate(BaseModel):
     ended_at: datetime
     note: str = Field(default="", max_length=500)
     tags: list[str] = Field(default_factory=list)
+    ended_kind: Literal["unlocked", "released_orgasm", "released_timer", "historical", "cheated_orgasm"] = "historical"
+
+
+class NextOrgasmOut(BaseModel):
+    entry_id: str
+    occurred_at: datetime
+    label: str = ""
 
 
 class ChastityLockupNoteUpdate(BaseModel):

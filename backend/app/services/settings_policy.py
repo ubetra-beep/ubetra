@@ -204,6 +204,14 @@ def apply_setting(
             else "turned off task completion notifications"
         )
 
+    if setting_key == "tasks.completed_history_days":
+        try:
+            days = int(value)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid history length") from exc
+        dynamic.task_completed_history_days = max(1, min(90, days))
+        return f"show the last {dynamic.task_completed_history_days} days of completed tasks"
+
     if setting_key == "video.ml_censor_mode":
         mode = str(value or "off").strip().lower()
         if mode not in ("off", "auto", "client", "cuda"):
@@ -294,5 +302,6 @@ def policy_snapshot(dynamic: Dynamic) -> dict:
         "task_push_enabled": bool(getattr(dynamic, "task_push_enabled", True)),
         "task_reminder_offsets": default_reminder_offsets(dynamic),
         "task_complete_notify": bool(getattr(dynamic, "task_complete_notify", True)),
+        "task_completed_history_days": int(getattr(dynamic, "task_completed_history_days", 9) or 9),
         "ml_censor_mode": (getattr(dynamic, "ml_censor_mode", None) or "off"),
     }

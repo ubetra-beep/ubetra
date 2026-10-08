@@ -1,11 +1,12 @@
 import csv
 import io
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_current_user, get_membership
@@ -32,6 +33,7 @@ from ..schemas import (
     ChastityBulkIn,
     ChastityBulkOut,
     ChastityHistoricalCreate,
+    NextOrgasmOut,
     ChastityLimitProposalCreate,
     ChastityLimitProposalOut,
     ChastityLockupEnd,
@@ -57,6 +59,7 @@ from ..services.chastity_release import effective_unlock_presets, serialize_unlo
 from ..services.chastity import (
     BREAK_TYPE_LABELS,
     EMERGENCY_BREAK_TYPES,
+    sub_may_log_break,
     MAX_LOCK_PRESETS,
     active_break,
     active_lockup,
@@ -75,6 +78,8 @@ from ..services.chastity_goals import (
     parse_goals,
     resolve_tracking_start,
     serialize_goals,
+    set_cycle_extra,
+    set_goal_reminder,
     _sub_memberships,
 )
 
@@ -524,6 +529,11 @@ def put_chastity_goals(
     prev_by_id = {g["id"]: g for g in previous["goals"]}
     data = parse_goals(json.dumps(raw))
     raw_goals = raw.get("goals") if isinstance(raw.get("goals"), list) else []
+    raw_by_id = {
+        str(item.get("id")): item
+        for item in raw_goals
+        if isinstance(item, dict) and item.get("id") is not None
+    }
     resolve_flags = {
         str(g.get("id")): bool(g.get("resolve_reset"))
         for g in raw_goals
@@ -538,6 +548,15 @@ def put_chastity_goals(
         old = prev_by_id.get(goal["id"])
         if old and len(old.get("history") or []) > len(goal.get("history") or []):
             goal["history"] = list(old.get("history") or [])
+        raw_goal = raw_by_id.get(str(goal["id"]), {})
+        if old and "ready_remind_at" not in raw_goal:
+            goal["ready_remind_at"] = old.get("ready_remind_at")
+        if old and "ready_remind_every_minutes" not in raw_goal:
+            goal["ready_remind_every_minutes"] = old.get("ready_remind_every_minutes")
+        if old and "ready_pushed_for" not in raw_goal:
+            goal["ready_pushed_for"] = old.get("ready_pushed_for")
+        if old and "cycle_extras" not in raw_goal:
+            goal["cycle_extras"] = old.get("cycle_extras") or []
         if old and not goal.get("last_met_at"):
             goal["last_met_at"] = old.get("last_met_at")
         if not goal.get("for_membership_id") and default_sub:
@@ -549,6 +568,11 @@ def put_chastity_goals(
                 hist.append({"at": now_iso, "outcome": "reset", "progress": ""})
                 goal["history"] = hist[-100:]
                 goal["last_met_at"] = None
+                goal["bank_spent"] = []
+                goal["ready_remind_at"] = None
+                goal["ready_remind_every_minutes"] = None
+                goal["ready_pushed_for"] = None
+                goal["cycle_extras"] = []
         if not goal.get("created_at"):
             goal["created_at"] = now_iso
         if not goal.get("active", True):
@@ -573,6 +597,71 @@ def put_chastity_goals(
     progress = build_goals_progress(db, dynamic)
     progress["you_are_dominant"] = True
     return progress
+
+
+@router.post("/{dynamic_id}/chastity-goals/{goal_id}/remind")
+def post_goal_remind(
+    dynamic_id: str,
+    goal_id: str,
+    payload: dict,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    require_chastity_feature(db, dynamic_id)
+    membership = get_membership(dynamic_id, user, db)
+    if not is_dominant(membership):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can set gift reminders")
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    raw = payload if isinstance(payload, dict) else {}
+    remind_at = None
+    if raw.get("remind_at"):
+        try:
+            remind_at = datetime.fromisoformat(str(raw["remind_at"]).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Reminder time is not valid") from exc
+    every = raw.get("every_minutes")
+    return set_goal_reminder(
+        db,
+        dynamic,
+        goal_id,
+        remind_at=remind_at,
+        every_minutes=int(every) if every else None,
+    )
+
+
+@router.post("/{dynamic_id}/chastity-goals/{goal_id}/cycle-extra")
+def post_goal_cycle_extra(
+    dynamic_id: str,
+    goal_id: str,
+    payload: dict,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    require_chastity_feature(db, dynamic_id)
+    membership = get_membership(dynamic_id, user, db)
+    if not is_dominant(membership):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can change this gift")
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    raw = payload if isinstance(payload, dict) else {}
+    remove_index = raw.get("remove_index")
+    try:
+        value = float(raw.get("value") or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return set_cycle_extra(
+        db,
+        dynamic,
+        goal_id,
+        confession_id=raw.get("confession_id") or None,
+        req_type=str(raw.get("type") or ""),
+        value=value,
+        tag=raw.get("tag") or None,
+        remove_index=int(remove_index) if remove_index is not None and remove_index != "" else None,
+    )
 
 
 @router.get("/{dynamic_id}/chastity/stats", response_model=ChastityStatsOut)
@@ -603,6 +692,7 @@ def list_lockups(
     dynamic_id: str,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    on: str = Query(default=""),
 ) -> list[ChastityLockupOut]:
     require_chastity_feature(db, dynamic_id)
     get_membership(dynamic_id, user, db)
@@ -613,20 +703,62 @@ def list_lockups(
     enabled_sub_ids = {
         m.id for m in memberships.values() if m.role == PartnerRole.submissive and m.chastity_enabled
     }
-    lockups = (
+    query = (
         db.query(ChastityLockup)
         .options(joinedload(ChastityLockup.breaks))
         .filter(
             ChastityLockup.dynamic_id == dynamic_id,
             ChastityLockup.for_membership_id.in_(enabled_sub_ids or [""]),
         )
-        .order_by(ChastityLockup.started_at.desc())
-        .limit(100)
-        .all()
     )
+    day_key = (on or "").strip()
+    if day_key:
+        try:
+            day = datetime.fromisoformat(day_key).date()
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date") from exc
+        window_start = datetime.combine(day, datetime.min.time()) - timedelta(days=1)
+        window_end = window_start + timedelta(days=3)
+        query = query.filter(
+            ChastityLockup.started_at < window_end,
+            or_(ChastityLockup.ended_at.is_(None), ChastityLockup.ended_at > window_start),
+        )
+    query = query.order_by(ChastityLockup.started_at.desc())
+    if not day_key:
+        query = query.limit(100)
+    lockups = query.all()
     if not enabled_sub_ids:
         return []
-    return [_lockup_out(lockup, memberships) for lockup in lockups]
+    seen = set()
+    unique = []
+    for lockup in lockups:
+        if lockup.id in seen:
+            continue
+        seen.add(lockup.id)
+        unique.append(lockup)
+    return [_lockup_out(lockup, memberships) for lockup in unique]
+
+
+@router.get("/{dynamic_id}/chastity/next-orgasm", response_model=NextOrgasmOut)
+def next_orgasm_after(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    for_membership_id: str = Query(),
+    after: datetime = Query(),
+) -> NextOrgasmOut:
+    require_chastity_feature(db, dynamic_id)
+    get_membership(dynamic_id, user, db)
+    from ..services.chastity import next_logged_orgasm
+
+    found = next_logged_orgasm(db, dynamic_id, for_membership_id, after)
+    if found is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No orgasm is logged after that start.",
+        )
+    entry, label = found
+    return NextOrgasmOut(entry_id=entry.id, occurred_at=entry.occurred_at, label=label)
 
 
 @router.post(
@@ -731,6 +863,11 @@ def create_historical_lockup(
     if target is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid partner")
     require_chastity_sub(target)
+    if not is_dominant(membership) and membership.id != target.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant or that submissive can log a past lockup.",
+        )
 
     from ..services.chastity import as_naive_utc, assert_no_lockup_overlap
 
@@ -756,7 +893,7 @@ def create_historical_lockup(
         device_notes=payload.note.strip(),
         status=LockupStatus.ended,
         record_type=ChastityRecordType.historical,
-        ended_kind=ChastityEndedKind.historical.value,
+        ended_kind=payload.ended_kind or ChastityEndedKind.historical.value,
         tags=tags_to_string(payload.tags),
     )
     db.add(lockup)
@@ -1249,6 +1386,19 @@ def update_lockup_note(
     return _lockup_out(lockup, _membership_map(db, dynamic_id))
 
 
+def _clip_sleep_or_reject(lockup: ChastityLockup, started_at: datetime, ended_at: datetime | None):
+    from ..services.chastity import as_naive_utc, clip_break_to_lockup
+
+    started, ended = clip_break_to_lockup(lockup, started_at, ended_at)
+    if ended is not None and started is not None and ended <= started:
+        lock_end = as_naive_utc(lockup.ended_at)
+        detail = "This sleep window is outside the lockup."
+        if lock_end is not None:
+            detail = f"This sleep window is outside the lockup, which ended at {lock_end.isoformat()}Z."
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+    return started, ended
+
+
 @router.post(
     "/{dynamic_id}/chastity/{lockup_id}/break",
     response_model=ChastityLockupOut,
@@ -1274,22 +1424,26 @@ def create_break(
     if target is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid partner")
 
-    if break_type in EMERGENCY_BREAK_TYPES:
-        if not is_dominant(membership) and membership.id != target.id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to start this break")
-    elif not is_dominant(membership):
+    reason = payload.break_reason.strip() or BREAK_TYPE_LABELS.get(break_type.value, break_type.value)
+    tag_list = [t for t in (payload.tags or []) if str(t).strip()]
+    if not sub_may_log_break(
+        is_dominant_member=is_dominant(membership),
+        is_subject=membership.id == target.id,
+        break_type=break_type,
+        reason=reason,
+        tags=tag_list,
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the dominant can authorize a temporary unlock.",
+            detail="Only the keyholder can authorize this unlock. Sleep unlocks can be logged by the locked sub.",
         )
-
-    reason = payload.break_reason.strip() or BREAK_TYPE_LABELS.get(break_type.value, break_type.value)
     started_at = payload.started_at or datetime.utcnow()
-    from ..services.chastity import validate_break_times
+    ended_at = payload.ended_at
+    from ..services.chastity import is_sleep_break, validate_break_times
 
-    validate_break_times(lockup, started_at=started_at, ended_at=payload.ended_at)
-    # Reasons are tags — always include the reason label as a tag.
-    tag_list = [t for t in (payload.tags or []) if str(t).strip()]
+    if is_sleep_break(break_type, reason, tag_list):
+        started_at, ended_at = _clip_sleep_or_reject(lockup, started_at, ended_at)
+    validate_break_times(lockup, started_at=started_at, ended_at=ended_at)
     if reason and reason not in tag_list:
         tag_list = [reason, *tag_list]
     brk = ChastityBreak(
@@ -1297,7 +1451,7 @@ def create_break(
         break_type=break_type,
         break_reason=reason,
         started_at=started_at,
-        ended_at=payload.ended_at,
+        ended_at=ended_at,
         note=payload.note.strip(),
         tags=tags_to_string(tag_list),
         created_by_membership_id=membership.id,
@@ -1342,27 +1496,34 @@ def create_historical_break(
     target = db.get(Membership, lockup.for_membership_id)
     if target is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid partner")
-    if break_type in EMERGENCY_BREAK_TYPES:
-        if not is_dominant(membership) and membership.id != target.id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to log this break")
-    elif not is_dominant(membership):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the dominant can authorize a temporary unlock.",
-        )
-    from ..services.chastity import validate_break_times
-
-    validate_break_times(lockup, started_at=payload.started_at, ended_at=payload.ended_at)
     reason = payload.break_reason.strip() or BREAK_TYPE_LABELS.get(break_type.value, break_type.value)
     tag_list = [t for t in (payload.tags or []) if str(t).strip()]
+    if not sub_may_log_break(
+        is_dominant_member=is_dominant(membership),
+        is_subject=membership.id == target.id,
+        break_type=break_type,
+        reason=reason,
+        tags=tag_list,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the keyholder can authorize this unlock. Sleep unlocks can be logged by the locked sub.",
+        )
+    from ..services.chastity import is_sleep_break, validate_break_times
+
+    started_at = payload.started_at
+    ended_at = payload.ended_at
+    if is_sleep_break(break_type, reason, tag_list):
+        started_at, ended_at = _clip_sleep_or_reject(lockup, started_at, ended_at)
+    validate_break_times(lockup, started_at=started_at, ended_at=ended_at)
     if reason and reason not in tag_list:
         tag_list = [reason, *tag_list]
     brk = ChastityBreak(
         lockup_id=lockup.id,
         break_type=break_type,
         break_reason=reason,
-        started_at=payload.started_at,
-        ended_at=payload.ended_at,
+        started_at=started_at,
+        ended_at=ended_at,
         note=payload.note.strip(),
         tags=tags_to_string(tag_list),
         created_by_membership_id=membership.id,

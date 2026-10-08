@@ -16,6 +16,7 @@ from ..models import (
     Task,
     TaskApprovalStatus,
     TaskCompletion,
+    TaskLibraryItem,
     TaskList,
     TaskRecurrence,
     TaskSource,
@@ -38,6 +39,8 @@ from ..schemas import (
     TaskBulkUpdateIn,
     TaskCalendarItem,
     TaskCalendarOut,
+    TaskLibraryOut,
+    TaskLibraryUseIn,
     TaskCompletionOut,
     TaskChangeRequestIn,
     TaskChangeReviewIn,
@@ -60,9 +63,11 @@ from ..services.tasks_service import (
     apply_due_auto_punish,
     build_inbox,
     can_complete_task,
+    daily_occurrence_ready,
     clear_makeup,
     parse_auto_punish_rules,
     record_task_completion,
+    remember_task_library,
     reset_due_reminders,
     resolve_due_at,
     schedule_next_occurrence,
@@ -272,6 +277,116 @@ def post_inbox_ack(
     return InboxOut(**build_inbox(db, dynamic_id, membership))
 
 
+def _library_out(row: TaskLibraryItem) -> TaskLibraryOut:
+    return TaskLibraryOut(
+        id=row.id,
+        content=row.content,
+        tags=tags_to_list(row.tags or ""),
+        recurrence=row.recurrence or "none",
+        recurrence_interval=row.recurrence_interval,
+        created_at=row.created_at,
+        last_used_at=row.last_used_at,
+    )
+
+
+@router.get("/dynamics/{dynamic_id}/task-library", response_model=list[TaskLibraryOut])
+def list_task_library(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[TaskLibraryOut]:
+    get_membership(dynamic_id, user, db)
+    rows = (
+        db.query(TaskLibraryItem)
+        .filter(TaskLibraryItem.dynamic_id == dynamic_id)
+        .order_by(TaskLibraryItem.last_used_at.desc())
+        .all()
+    )
+    return [_library_out(row) for row in rows]
+
+
+@router.delete("/dynamics/{dynamic_id}/task-library/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_task_library_item(
+    dynamic_id: str,
+    item_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    membership = get_membership(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can remove saved tasks")
+    row = db.get(TaskLibraryItem, item_id)
+    if row is None or row.dynamic_id != dynamic_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Saved task not found")
+    db.delete(row)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/dynamics/{dynamic_id}/task-library/{item_id}/use", response_model=TaskListOut)
+def use_task_library_item(
+    dynamic_id: str,
+    item_id: str,
+    payload: TaskLibraryUseIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskListOut:
+    membership = get_membership(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the keyholder can assign saved tasks")
+    row = db.get(TaskLibraryItem, item_id)
+    if row is None or row.dynamic_id != dynamic_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Saved task not found")
+    try:
+        recurrence = TaskRecurrence(payload.recurrence or "none")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid recurrence") from exc
+    interval = payload.recurrence_interval
+    if recurrence == TaskRecurrence.daily and interval and int(interval) > 1:
+        interval = int(interval)
+    elif recurrence != TaskRecurrence.daily:
+        interval = None
+    assignee = _sole_sub_id(db, dynamic_id)
+    task_list = (
+        db.query(TaskList)
+        .filter(TaskList.dynamic_id == dynamic_id, TaskList.title == "Saved tasks")
+        .first()
+    )
+    if task_list is None:
+        task_list = TaskList(
+            dynamic_id=dynamic_id,
+            title="Saved tasks",
+            created_by_membership_id=membership.id,
+        )
+        db.add(task_list)
+        db.flush()
+    else:
+        task_list = _task_list_query(db, task_list.id)
+    due = datetime.utcnow() if recurrence != TaskRecurrence.none else None
+    task = Task(
+        task_list_id=task_list.id,
+        position=len(task_list.tasks or []),
+        content=row.content,
+        tags=row.tags or "",
+        approval_status=TaskApprovalStatus.approved,
+        source=TaskSource.dom,
+        created_by_membership_id=membership.id,
+        recurrence=recurrence,
+        recurrence_interval=interval,
+        due_at=due,
+        next_due_at=due,
+        assigned_to_membership_id=assignee,
+    )
+    db.add(task)
+    row.last_used_at = datetime.utcnow()
+    row.recurrence = recurrence.value
+    row.recurrence_interval = interval
+    post_system_event(db, dynamic_id, membership, f"assigned saved task: {task_snippet(row.content)}")
+    db.commit()
+    task_list = _task_list_query(db, task_list.id)
+    return task_list_out(task_list, membership)
+
+
 @router.get("/dynamics/{dynamic_id}/task-completions", response_model=list[TaskCompletionOut])
 def list_task_completions(
     dynamic_id: str,
@@ -473,6 +588,14 @@ def create_task_list(
         )
         db.add(task)
         created_tasks.append(task)
+        remember_task_library(
+            db,
+            dynamic_id,
+            task.content,
+            tags=task.tags or "",
+            recurrence=task.recurrence.value if hasattr(task.recurrence, "value") else str(task.recurrence),
+            recurrence_interval=task.recurrence_interval,
+        )
 
     post_system_event(
         db,
@@ -571,6 +694,14 @@ def add_task_item(
             ),
         )
     db.add(task)
+    remember_task_library(
+        db,
+        dynamic_id,
+        task.content,
+        tags=task.tags or "",
+        recurrence=task.recurrence.value if hasattr(task.recurrence, "value") else str(task.recurrence),
+        recurrence_interval=task.recurrence_interval,
+    )
     post_system_event(db, dynamic_id, membership, event_text)
     db.flush()
     if approval == TaskApprovalStatus.approved:
@@ -786,6 +917,11 @@ def _perform_task_complete(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You are not assigned to complete this task",
+        )
+    if membership.role == PartnerRole.submissive and not daily_occurrence_ready(task):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This daily task isn't available yet.",
         )
     tasks = sorted(task_list.tasks, key=lambda t: t.position)
     if not task_visible(task, tasks, membership):

@@ -20,9 +20,18 @@ from app.models import (
 )
 from app.routers.tasks import _perform_task_complete
 from app.services.chastity import validate_break_times
-from app.services.chastity_goals import _count_tasks_completed, note_orgasm_gift, parse_goals, serialize_goals
+from app.models import ChastityBreak, ChastityBreakType
+from app.services.chastity_goals import (
+    _consume_grant,
+    _count_tasks_completed,
+    _locked_hours,
+    evaluate_requirement,
+    note_orgasm_gift,
+    parse_goals,
+    serialize_goals,
+)
 from app.services.chastity_release import maybe_relock_after_orgasm, orgasm_end_kind
-from app.services.tasks_service import advance_due_date, build_inbox
+from app.services.tasks_service import advance_due_date, build_inbox, daily_occurrence_ready
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -96,6 +105,33 @@ def test_recurring_completion_counts_for_goal():
     assert task.next_due_at and task.next_due_at > datetime.utcnow()
     since = datetime.utcnow() - timedelta(days=2)
     assert _count_tasks_completed(db, dynamic.id, sub.id, since, tag="domestic") == 1
+
+
+def test_daily_repeat_waits_18_hours():
+    db = _session()
+    dynamic, dom, sub, sub_user = _couple(db)
+    due = datetime.utcnow() + timedelta(hours=20)
+    task_list, task = _task(
+        db, dynamic, dom, sub, content="Coffee", recurrence=TaskRecurrence.daily, due=due, interval=1
+    )
+    task.next_due_at = due
+    task.occurrence_scheduled_at = datetime.utcnow()
+    db.commit()
+    assert daily_occurrence_ready(task) is False
+    inbox = build_inbox(db, dynamic.id, sub)
+    assert all(item.get("task_id") != task.id for item in inbox.get("items") or [])
+    try:
+        _perform_task_complete(db, task_list, task, sub, sub_user, datetime.utcnow())
+        refused = False
+    except HTTPException as exc:
+        refused = exc.status_code == 400
+    assert refused
+    task.occurrence_scheduled_at = datetime.utcnow() - timedelta(hours=19)
+    task.next_due_at = datetime.utcnow() + timedelta(hours=10)
+    assert daily_occurrence_ready(task) is True
+    task.next_due_at = datetime.utcnow() - timedelta(minutes=5)
+    task.occurrence_scheduled_at = datetime.utcnow()
+    assert daily_occurrence_ready(task) is True
 
 
 def test_inbox_skips_next_day_beyond_reminder():
@@ -207,12 +243,110 @@ def test_advance_due_every_n_days():
     assert weekly == datetime(2026, 10, 8, 8, 0)
 
 
+def test_bank_subtracts_one_gift():
+    goal = {"requirements": [{"type": "tasks_completed", "value": 3}], "bank_spent": []}
+    _consume_grant(goal)
+    assert goal["bank_spent"] == [3.0]
+    assert goal["last_met_at"] is None
+
+
+def test_two_ruins_on_one_log_consume_two_gifts():
+    db = _session()
+    dynamic, dom, sub, sub_user = _couple(db)
+    due = datetime.utcnow() - timedelta(hours=2)
+    task_list, task = _task(
+        db, dynamic, dom, sub, content="Coffee", recurrence=TaskRecurrence.daily, due=due, interval=1
+    )
+    for _ in range(6):
+        _perform_task_complete(db, task_list, task, dom, sub_user, datetime.utcnow())
+    db.commit()
+    dynamic.chastity_goals = serialize_goals({
+        "goals": [{
+            "id": "g1",
+            "kind": "ruin_gift",
+            "title": "Earned Ruin",
+            "for_membership_id": sub.id,
+            "requirements": [{"type": "tasks_completed", "value": 3}],
+            "start_mode": "now",
+            "reset_at": (datetime.utcnow() - timedelta(days=1)).isoformat() + "Z",
+            "active": True,
+            "repeat_count": 0,
+            "history": [],
+            "bank_spent": [],
+        }]
+    })
+    db.add(dynamic)
+    db.commit()
+    note_orgasm_gift(
+        db,
+        dynamic,
+        sub_id=sub.id,
+        occurred_at=datetime.utcnow(),
+        tags=["ruined orgasm"],
+        orgasm_counts={"ruin": 2, "full": 0, "cheated": 0},
+    )
+    db.commit()
+    db.refresh(dynamic)
+    goal = parse_goals(dynamic.chastity_goals)["goals"][0]
+    assert goal["bank_spent"] == [6.0]
+    assert goal["history"][-1]["outcome"] == "gift"
+    assert goal["repeat_count"] == 2
+
+
+def test_short_break_still_counts_as_locked():
+    db = _session()
+    dynamic, dom, sub, _user = _couple(db)
+    start = datetime.utcnow() - timedelta(hours=30)
+    lockup = ChastityLockup(
+        dynamic_id=dynamic.id,
+        for_membership_id=sub.id,
+        started_by_membership_id=dom.id,
+        started_at=start,
+        status=LockupStatus.active,
+        ended_kind="",
+    )
+    db.add(lockup)
+    db.flush()
+    db.add(ChastityBreak(
+        lockup_id=lockup.id,
+        break_type=ChastityBreakType.authorized_hygiene,
+        started_at=start + timedelta(hours=5),
+        ended_at=start + timedelta(hours=5, minutes=10),
+        created_by_membership_id=dom.id,
+    ))
+    db.add(ChastityBreak(
+        lockup_id=lockup.id,
+        break_type=ChastityBreakType.authorized_sleep,
+        started_at=start + timedelta(hours=10),
+        ended_at=start + timedelta(hours=12),
+        created_by_membership_id=dom.id,
+    ))
+    db.commit()
+    hours = _locked_hours(db, dynamic.id, sub.id, start)
+    assert 27.5 < hours < 28.5, hours
+    row = evaluate_requirement(
+        db,
+        dynamic_id=dynamic.id,
+        sub_id=sub.id,
+        dominant_id=None,
+        req={"type": "sleep_in_chastity", "value": 24},
+        reset_at=start,
+        spent=24,
+    )
+    assert row["met"] is False
+    assert row["current"] < 5
+
+
 if __name__ == "__main__":
     test_recurring_completion_counts_for_goal()
+    test_daily_repeat_waits_18_hours()
     test_inbox_skips_next_day_beyond_reminder()
     test_ruined_does_not_end_cheated_does()
     test_auto_relock_creates_active_lockup()
     test_historical_break_rejected_outside_window()
     test_goal_history_yellow_when_gift_unmet()
     test_advance_due_every_n_days()
+    test_bank_subtracts_one_gift()
+    test_two_ruins_on_one_log_consume_two_gifts()
+    test_short_break_still_counts_as_locked()
     print("test_1_14 ok")

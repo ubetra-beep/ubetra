@@ -21,4 +21,16 @@ class DomainMatcherTest {
         assertFalse(DomainMatcher.isBlocked("reddit.org", blocked))
         assertFalse(DomainMatcher.isBlocked("notreddit.com", blocked))
     }
+
+    @Test
+    fun driveUploadsStayOpenEvenIfGoogleIsBlocked() {
+        val blocked = setOf("google.com", "reddit.com")
+        assertFalse(DomainMatcher.isBlocked("www.googleapis.com", blocked))
+        assertFalse(DomainMatcher.isBlocked("oauth2.googleapis.com", blocked))
+        assertFalse(DomainMatcher.isBlocked("drive.google.com", blocked))
+        assertFalse(DomainMatcher.isBlocked("docs.google.com", blocked))
+        assertFalse(DomainMatcher.isBlocked("accounts.google.com", blocked))
+        assertTrue(DomainMatcher.isBlocked("www.google.com", blocked))
+        assertTrue(DomainMatcher.isBlocked("old.reddit.com", blocked))
+    }
 }

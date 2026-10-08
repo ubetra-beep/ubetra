@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v143";
+const CLIENT_SW_CACHE = "ubetra-v157";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -548,6 +548,8 @@ function navigate(path, { skipInbox = false } = {}) {
   if (location.hash !== `#${path}`) location.hash = path;
   else renderRoute();
   updateBottomNav();
+  closeConfessionWarning();
+  refreshConfessionWarning();
   const parts = String(path || "").split("?")[0].split("/").filter(Boolean);
   if (!skipInbox && parts[0] === "dynamic" && parts[1]) {
     maybeShowInbox(parts[1]);
@@ -556,6 +558,137 @@ function navigate(path, { skipInbox = false } = {}) {
 }
 
 const inboxCheckedDynamics = new Set();
+const confessionWarningBtn = document.getElementById("confession-warning-btn");
+
+function quietUntilTwoPm() {
+  const target = new Date();
+  target.setHours(14, 0, 0, 0);
+  if (Date.now() >= target.getTime()) return null;
+  return target.toISOString();
+}
+
+function closeConfessionWarning() {
+  document.getElementById("confession-warning-panel")?.remove();
+}
+
+function unresolvedConfessions(data) {
+  return (data?.open || data?.reports || []).filter((report) => report.status === "pending" || report.status === "remind");
+}
+
+async function refreshConfessionWarning() {
+  if (!confessionWarningBtn || !state.token) return;
+  const { parts } = parseRoute();
+  const dynamicId = parts[0] === "dynamic" && parts[1] ? parts[1] : (state.dynamics?.[0]?.id || "");
+  if (!dynamicId) {
+    confessionWarningBtn.classList.add("hidden");
+    return;
+  }
+  confessionWarningBtn.dataset.dynamicId = dynamicId;
+  try {
+    const data = await api(`/dynamics/${dynamicId}/punishments`);
+    const open = data?.you_are_dominant ? unresolvedConfessions(data) : [];
+    confessionWarningBtn.classList.toggle("hidden", !open.length);
+    confessionWarningBtn.textContent = open.length > 1 ? `Warning ${open.length}` : "Warning";
+  } catch {
+    confessionWarningBtn.classList.add("hidden");
+  }
+}
+
+async function showConfessionWarning(dynamicId) {
+  closeConfessionWarning();
+  const panel = el("div", { id: "confession-warning-panel", className: "card stack confession-warning-panel" }, [
+    el("p", { className: "muted" }, "Loading…"),
+  ]);
+  document.body.appendChild(panel);
+  let reports;
+  let goals;
+  try {
+    [reports, goals] = await Promise.all([
+      api(`/dynamics/${dynamicId}/punishments`),
+      api(`/dynamics/${dynamicId}/chastity-goals`),
+    ]);
+  } catch (err) {
+    panel.replaceChildren(el("p", { className: "error" }, err.message || "Could not load this."));
+    return;
+  }
+  const open = unresolvedConfessions(reports);
+  const catalog = goals?.requirement_catalog || [];
+  const active = (goals?.goals || []).filter((goal) => goal.active !== false);
+  const body = [
+    el("div", { className: "row wrap confession-warning-head" }, [
+      el("strong", {}, "Open confessions"),
+      el("button", { type: "button", className: "ghost-btn", onClick: () => closeConfessionWarning() }, "Close"),
+    ]),
+  ];
+  if (!open.length) {
+    body.push(el("p", { className: "muted" }, "No confession is waiting."));
+  }
+  open.forEach((report) => {
+    body.push(el("div", { className: "stack confession-warning-item" }, [
+      el("p", {}, report.action_text || "Confession"),
+      el("p", { className: "muted" }, report.status === "remind" ? "Snoozed, still open" : "Waiting"),
+    ]));
+  });
+  body.push(el("strong", {}, "Current goals"));
+  body.push(el("p", { className: "muted" }, "An extra requirement applies only until this gift is granted. The goal then returns to its original setup."));
+  if (!active.length) body.push(el("p", { className: "muted" }, "No active goals."));
+  active.forEach((goal) => {
+    const lines = (goal.requirements || []).map((req) => `${req.title}: ${req.current}/${req.target}${req.met ? " ✓" : ""}`);
+    const confessionSel = el("select");
+    open.forEach((report) => {
+      const label = (report.action_text || "Confession").slice(0, 48);
+      confessionSel.appendChild(el("option", { value: report.id }, label));
+    });
+    const typeSel = el("select");
+    catalog.forEach((item) => typeSel.appendChild(el("option", { value: item.id }, item.title)));
+    const valueInput = el("input", { type: "number", min: "1", step: "1", value: "1" });
+    const extras = goal.cycle_extras || [];
+    const extraRows = extras.map((extra, index) => el("div", { className: "row wrap" }, [
+      el("span", {}, `This time · ${catalog.find((item) => item.id === extra.type)?.title || extra.type} ${extra.value}`),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          await api(`/dynamics/${dynamicId}/chastity-goals/${goal.id}/cycle-extra`, {
+            method: "POST",
+            body: JSON.stringify({ remove_index: index }),
+          });
+          showConfessionWarning(dynamicId);
+        },
+      }, "Remove"),
+    ]));
+    body.push(el("div", { className: "stack confession-warning-item" }, [
+      el("strong", {}, `${goal.title || "Goal"} — ${goal.kind === "ruin_gift" ? "Ruin" : goal.kind === "misc_gift" ? "Other" : "Orgasm"}`),
+      lines.length ? el("p", { className: "muted" }, lines.join(" · ")) : null,
+      ...extraRows,
+      open.length
+        ? el("div", { className: "stack" }, [
+          confessionSel,
+          el("div", { className: "row wrap" }, [
+            typeSel,
+            valueInput,
+            el("button", {
+              type: "button",
+              className: "primary-btn",
+              onClick: async () => {
+                await api(`/dynamics/${dynamicId}/chastity-goals/${goal.id}/cycle-extra`, {
+                  method: "POST",
+                  body: JSON.stringify({
+                    confession_id: confessionSel.value,
+                    type: typeSel.value,
+                    value: Number(valueInput.value) || 1,
+                  }),
+                });
+                showConfessionWarning(dynamicId);
+              },
+            }, "Add for this gift"),
+          ]),
+        ])
+        : null,
+    ]));
+  });
+  panel.replaceChildren(...body.filter(Boolean));
+}
 
 async function maybeShowInbox(dynamicId) {
   if (!state.token || !dynamicId) return;
@@ -592,6 +725,7 @@ function inboxToneClass(kind) {
   if (k.startsWith("punishment") || k.includes("confession")) return "tone-red";
   if (k === "task_overdue" || k === "task_completed_late") return "tone-amber";
   if (k === "task_due_soon") return "tone-blue";
+  if (k === "goal_ready") return "tone-green";
   if (k.startsWith("lockup") || k.includes("chastity") || k === "orgasm_logged") return "tone-purple";
   if (k === "edge_guard_removal" || k.includes("approval")) return "tone-green";
   return "tone-grey";
@@ -604,6 +738,7 @@ function groupInboxItems(items) {
     const special =
       item.kind === "task_completed_late" ||
       item.kind === "edge_guard_removal" ||
+      item.kind === "goal_ready" ||
       isPunishmentInboxItem(item);
     const key = special ? `one:${item.id}` : `${item.kind}|${item.title || ""}`;
     const existing = index.get(key);
@@ -734,6 +869,24 @@ function showInboxOverlay(dynamicId, items) {
       log.appendChild(row);
       return;
     }
+    if (item.kind === "goal_ready" && item.goal_id) {
+      const row = el("div", { className: `inbox-log-item ${inboxToneClass(item.kind)} goal_ready` }, [
+        el("div", { className: `inbox-tone-chip ${inboxToneClass(item.kind)}` }, "gift"),
+        el("div", { className: "inbox-log-title" }, item.title || "Gift earned"),
+        item.body ? el("div", { className: "inbox-log-body" }, item.body) : null,
+        when ? el("div", { className: "inbox-log-when" }, when) : null,
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: async () => {
+            await dismiss();
+            navigate(item.path || `/dynamic/${dynamicId}/tasks?goal=${item.goal_id}`);
+          },
+        }, "Open goal"),
+      ]);
+      log.appendChild(row);
+      return;
+    }
     const titleText = item.count > 1 ? `${item.title || "Update"} x${item.count}` : (item.title || "Update");
     const row = el("button", {
       type: "button",
@@ -751,6 +904,47 @@ function showInboxOverlay(dynamicId, items) {
     log.appendChild(row);
   });
 
+  const giftItems = items.filter((item) => item.kind === "goal_ready");
+  const remindHost = el("div", { className: "stack hidden" });
+  const whenInput = el("input", { type: "datetime-local", "aria-label": "Remind me at" });
+  const snoozeGifts = async (remindAt) => {
+    for (const item of giftItems) {
+      if (!item.goal_id) continue;
+      await api(`/dynamics/${dynamicId}/chastity-goals/${item.goal_id}/remind`, {
+        method: "POST",
+        body: JSON.stringify({ remind_at: remindAt, every_minutes: null }),
+      });
+    }
+  };
+  remindHost.append(
+    whenInput,
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: async () => {
+        error.classList.add("hidden");
+        if (!whenInput.value) {
+          error.textContent = "Pick a time for the reminder.";
+          error.classList.remove("hidden");
+          return;
+        }
+        const parsed = new Date(whenInput.value);
+        if (Number.isNaN(parsed.getTime())) {
+          error.textContent = "That reminder time is not valid.";
+          error.classList.remove("hidden");
+          return;
+        }
+        try {
+          await snoozeGifts(parsed.toISOString());
+        } catch (err) {
+          error.textContent = err.message || "Could not set the reminder.";
+          error.classList.remove("hidden");
+          return;
+        }
+        await dismiss();
+      },
+    }, "Set reminder"),
+  );
   const actions = el("div", { className: "stack" }, [
     error,
     punishItems.length >= 2
@@ -764,25 +958,48 @@ function showInboxOverlay(dynamicId, items) {
         },
       }, "Respond to all")
       : null,
-    punishItems.length
+    giftItems.length
       ? el("button", {
         className: "ghost-btn",
         type: "button",
-        onClick: () => dismiss({ snoozePunishments: true }),
-      }, "Remind me tomorrow")
+        onClick: () => remindHost.classList.toggle("hidden"),
+      }, "Remind me later")
       : null,
+    remindHost,
     el("button", {
       className: "primary-btn",
       type: "button",
-      onClick: () => dismiss(),
+      onClick: async () => {
+        error.classList.add("hidden");
+        const until = giftItems.length ? quietUntilTwoPm() : null;
+        if (until) {
+          try {
+            await snoozeGifts(until);
+          } catch (err) {
+            error.textContent = err.message || "Could not snooze this gift.";
+            error.classList.remove("hidden");
+            return;
+          }
+        }
+        await dismiss();
+      },
     }, "Got it"),
+    giftItems.length && quietUntilTwoPm()
+      ? el("p", { className: "muted" }, "Got it keeps this quiet until 2 PM.")
+      : null,
   ]);
 
+  let inboxBlurb = "Activity and tasks that need your eye.";
+  if (giftItems.length && punishItems.length) {
+    inboxBlurb = "A gift is earned, and a confession is waiting.";
+  } else if (giftItems.length) {
+    inboxBlurb = "A gift is earned.";
+  } else if (punishItems.length) {
+    inboxBlurb = "A confession is waiting.";
+  }
   const panel = el("div", { className: "inbox-panel" }, [
     el("h2", {}, "Important notifications"),
-    el("p", { className: "muted" }, punishItems.length
-      ? "Tap an item to handle it. Snooze punishments until tomorrow if you are not ready."
-      : "Activity and tasks that need your eye."),
+    el("p", { className: "muted" }, inboxBlurb),
     log,
     actions,
   ]);
@@ -2142,6 +2359,78 @@ function formatTimeOfDay(value) {
   return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
+function isSleepUnlockRecord(brk) {
+  const type = String(brk?.break_type || "");
+  if (type.includes("sleep")) return true;
+  const blob = [brk?.break_reason, ...(brk?.tags || [])].join(" ").toLowerCase();
+  return blob.includes("sleep");
+}
+
+function isSleepPreset(preset) {
+  return String(preset?.break_type || "").includes("sleep") || String(preset?.name || "").toLowerCase().includes("sleep");
+}
+
+function localMinutesOf(iso) {
+  const d = parseServerDate(iso);
+  if (!d || Number.isNaN(d.getTime())) return null;
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+function circularMeanMinutes(minutes) {
+  if (!minutes.length) return null;
+  let x = 0;
+  let y = 0;
+  minutes.forEach((m) => {
+    const ang = (m / 1440) * Math.PI * 2;
+    x += Math.cos(ang);
+    y += Math.sin(ang);
+  });
+  if (x === 0 && y === 0) return minutes[0];
+  let mean = Math.round((Math.atan2(y, x) / (Math.PI * 2)) * 1440);
+  mean %= 1440;
+  if (mean < 0) mean += 1440;
+  return mean;
+}
+
+function minutesToTimeOfDay(mins) {
+  const h = Math.floor(mins / 60) % 24;
+  const m = mins % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function averageSleepUnlockTimes(lockups, membershipId) {
+  const starts = [];
+  const ends = [];
+  (lockups || []).forEach((lockup) => {
+    if (membershipId && lockup.for_membership_id !== membershipId) return;
+    (lockup.breaks || []).forEach((brk) => {
+      if (!brk.ended_at || !isSleepUnlockRecord(brk)) return;
+      const start = localMinutesOf(brk.started_at);
+      const end = localMinutesOf(brk.ended_at);
+      if (start == null || end == null) return;
+      starts.push(start);
+      ends.push(end);
+    });
+  });
+  if (!starts.length) return null;
+  return {
+    start: minutesToTimeOfDay(circularMeanMinutes(starts)),
+    end: minutesToTimeOfDay(circularMeanMinutes(ends)),
+    count: starts.length,
+  };
+}
+
+function sleepPresetWithAverage(preset, lockups, membershipId) {
+  const base = preset || { name: "Sleep", break_type: "authorized_sleep", start: "23:00", end: "07:00" };
+  if (!isSleepPreset(base)) return { preset: base, average: null };
+  const average = averageSleepUnlockTimes(lockups, membershipId);
+  if (!average) return { preset: base, average: null };
+  return {
+    preset: { ...base, start: average.start, end: average.end },
+    average,
+  };
+}
+
 function presetWindowForDate(day, preset) {
   const start = parseTimeOfDay(preset?.start || "23:00");
   const end = parseTimeOfDay(preset?.end || "07:00");
@@ -2152,6 +2441,51 @@ function presetWindowForDate(day, preset) {
   const ended = new Date(base.getFullYear(), base.getMonth(), base.getDate(), end.h, end.min, 0, 0);
   if (ended <= started) ended.setDate(ended.getDate() + 1);
   return { started_at: started.toISOString(), ended_at: ended.toISOString() };
+}
+
+function previousDateStr(dateStr) {
+  const d = new Date(`${dateStr}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  d.setDate(d.getDate() - 1);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function clipBreakToLockup(span, lockup) {
+  const lockStart = parseServerDate(lockup?.started_at);
+  const lockEnd = lockup?.ended_at ? parseServerDate(lockup.ended_at) : null;
+  const rawStart = parseServerDate(span?.started_at);
+  const rawEnd = parseServerDate(span?.ended_at);
+  if (!lockStart || !rawStart || !rawEnd) return null;
+  const start = rawStart < lockStart ? new Date(lockStart) : new Date(rawStart);
+  const end = lockEnd && rawEnd > lockEnd ? new Date(lockEnd) : new Date(rawEnd);
+  if (end <= start) {
+    const ended = lockEnd ? formatLocalDateTime(lockEnd) : "the lockup bounds";
+    return { error: `This sleep window is outside the lockup, which ended at ${ended}.` };
+  }
+  return {
+    started_at: start.toISOString(),
+    ended_at: end.toISOString(),
+    clipped: start.getTime() !== rawStart.getTime() || end.getTime() !== rawEnd.getTime(),
+  };
+}
+
+function sleepSpanForDay(dateStr, preset, lockup) {
+  const dayStart = new Date(`${dateStr}T00:00:00`).getTime();
+  const dayEnd = new Date(`${dateStr}T23:59:59.999`).getTime();
+  const candidates = [
+    presetWindowForDate(previousDateStr(dateStr), preset),
+    presetWindowForDate(dateStr, preset),
+  ].filter(Boolean);
+  for (const span of candidates) {
+    const clipped = clipBreakToLockup(span, lockup);
+    if (!clipped || clipped.error) continue;
+    const start = parseServerDate(clipped.started_at).getTime();
+    const end = parseServerDate(clipped.ended_at).getTime();
+    const overlap = Math.min(end, dayEnd) - Math.max(start, dayStart);
+    if (overlap > 0) return { ...clipped, overlap };
+  }
+  return null;
 }
 
 function dueIsoFromTimeOfDay(value, fallback = "20:00") {
@@ -2267,7 +2601,7 @@ function buildBreakTypePicker(settings, { selectedId, isDominant, allowUndecided
     if (!type?.id || !type?.label) return false;
     if (type.id === "authorized_undecided" && !allowUndecided) return false;
     const isEmerg = emergency.has(type.id);
-    if (!isDominant && !isEmerg) return false;
+    if (!isDominant && !isEmerg && type.id !== "authorized_sleep") return false;
     return true;
   });
   const byLabel = new Map();
@@ -3243,25 +3577,71 @@ async function getInstalledApkInfo() {
   }
 }
 
+let pendingApkShare = null;
+
+function apkDownloadStatus(result) {
+  if (result === "cancelled") return "Download cancelled.";
+  if (result === "share-ready") return "The APK is ready. Tap Share APK.";
+  if (result === "installed") return "The installer should be open. Play Protect may warn — tap Install anyway.";
+  if (result === "shared") return "Open ubetra.apk from the app you picked. Play Protect may warn — tap Install anyway.";
+  return "Check your downloads for ubetra.apk.";
+}
+
+async function downloadNativeApk(abs) {
+  const info = await getInstalledApkInfo();
+  const code = Number(info?.build || 0);
+  if (code >= 91 && window.Capacitor?.nativePromise) {
+    try {
+      const can = window.Capacitor.isPluginAvailable?.("UbetraAppUpdater")
+        ? await window.Capacitor.nativePromise("UbetraAppUpdater", "canInstall")
+        : { canInstall: true };
+      if (can && can.canInstall === false) {
+        await window.Capacitor.nativePromise("UbetraAppUpdater", "openInstallPermission");
+      }
+      await window.Capacitor.nativePromise("UbetraAppUpdater", "downloadAndInstall", { url: abs });
+      return "installed";
+    } catch {
+      /* 0.89's downloader never finishes. The share sheet below still works. */
+    }
+  }
+  if (!pendingApkShare || pendingApkShare.url !== abs) {
+    const res = await fetch(abs, { cache: "no-store" });
+    if (!res.ok) throw new Error("Could not download the APK");
+    const blob = await res.blob();
+    if (!blob.size) throw new Error("The APK download was empty");
+    pendingApkShare = {
+      url: abs,
+      file: new File([blob], "ubetra.apk", { type: "application/vnd.android.package-archive" }),
+    };
+  }
+  const file = pendingApkShare.file;
+  let canShareFile = false;
+  try {
+    canShareFile = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  } catch {
+    canShareFile = false;
+  }
+  if (!canShareFile) {
+    throw new Error("Open ubeneeko.duckdns.org in Chrome and download the APK there.");
+  }
+  try {
+    await navigator.share({ files: [file], title: "ubetra.apk" });
+    return "shared";
+  } catch (err) {
+    if (err && err.name === "AbortError") return "cancelled";
+    if (err && (err.name === "NotAllowedError" || err.name === "InvalidStateError")) return "share-ready";
+    throw err;
+  }
+}
+
 async function openAndroidApkDownload(url) {
   const abs = new URL(url || "/apk/ubetra.apk", window.location.origin).href;
-  const updater = nativePlugin("UbetraAppUpdater");
-  if (updater && typeof updater.downloadAndInstall === "function") {
-    const can = typeof updater.canInstall === "function" ? await updater.canInstall() : { canInstall: true };
-    if (can && can.canInstall === false && typeof updater.openInstallPermission === "function") {
-      await updater.openInstallPermission();
-    }
-    await updater.downloadAndInstall({ url: abs });
-    return;
-  }
-  if (isNativeApp()) {
-    window.location.assign(abs);
-    return;
-  }
+  if (isNativeApp()) return downloadNativeApk(abs);
   const link = el("a", { href: abs, download: "ubetra.apk", rel: "noopener" });
   document.body.appendChild(link);
   link.click();
   link.remove();
+  return "browser";
 }
 
 function appendAndroidAppCard(stack, androidApp) {
@@ -3274,7 +3654,7 @@ function appendAndroidAppCard(stack, androidApp) {
       : "The Android APK is not published on this server yet.";
   } else if (native) {
     status.textContent =
-      "Saved to Downloads/ubetra.apk. Tap the download notification to install. Play Protect may warn because this is a sideloaded app — tap Install anyway.";
+      "Download update opens the share sheet. Choose the installer, or save ubetra.apk and open it. Play Protect may warn — tap Install anyway.";
   } else {
     status.textContent = `Android APK ${androidApp.version || ""} — more reliable notifications than the browser PWA. Play Protect may warn on sideload; tap Install anyway. If install fails, uninstall the old UBETRA once, then install this file.`;
   }
@@ -3285,14 +3665,15 @@ function appendAndroidAppCard(stack, androidApp) {
     onClick: async () => {
       if (!available) return;
       try {
-        status.textContent = nativePlugin("UbetraAppUpdater")
-          ? "Downloading update…"
-          : (native
-            ? "Saved to Downloads/ubetra.apk. Tap the download notification to install."
-            : "Downloading APK…");
-        await openAndroidApkDownload(androidApp.url || "/apk/ubetra.apk");
+        btn.disabled = true;
+        status.textContent = native ? "Downloading update…" : "Downloading APK…";
+        const result = await openAndroidApkDownload(androidApp.url || "/apk/ubetra.apk");
+        if (result === "share-ready") btn.textContent = "Share APK";
+        status.textContent = result === "browser" ? "Downloading APK…" : apkDownloadStatus(result);
       } catch (err) {
         status.textContent = err.message || "Could not start download.";
+      } finally {
+        btn.disabled = false;
       }
     },
   }, native ? "Download update" : "Download Android app");
@@ -3822,7 +4203,7 @@ function buildEdgeGuardCard(dynamicId) {
       "p",
       { className: "muted" },
       native
-        ? "Local DNS filter that blocks sites system-wide — including Microsoft Edge’s long-press Preview. The VPN stays on this phone. The blocklist is saved here so a keyholder can lock it."
+        ? "Local DNS filter that blocks sites system-wide — including Microsoft Edge’s long-press Preview. Google Drive uploads stay available. The VPN stays on this phone. The blocklist is saved here so a keyholder can lock it."
         : "Website blocking runs in the UBETRA Android app. Install the APK from this Settings page. A locked list can still be viewed here."
     ),
     status,
@@ -4113,9 +4494,25 @@ function showUpdatePopover() {
       el("button", {
         type: "button",
         className: "primary-btn",
-        onClick: async () => {
-          hideUpdatePopover();
-          await openAndroidApkDownload(android.url || "/apk/ubetra.apk");
+        onClick: async (ev) => {
+          const button = ev.currentTarget;
+          button.disabled = true;
+          const previous = button.textContent;
+          button.textContent = "Downloading update…";
+          try {
+            const result = await openAndroidApkDownload(android.url || "/apk/ubetra.apk");
+            if (result === "share-ready") {
+              button.disabled = false;
+              button.textContent = "Share APK";
+              return;
+            }
+            hideUpdatePopover();
+            if (result !== "browser") showToast(apkDownloadStatus(result));
+          } catch (err) {
+            button.disabled = false;
+            button.textContent = previous;
+            showToast(err.message || "Could not start download.");
+          }
         },
       }, "Download APK")
     );
@@ -4153,18 +4550,33 @@ function showApkUpdatePopup(android) {
   const backdrop = el("div", { className: "modal-backdrop" });
   const card = el("div", { className: "card stack modal-card" }, [
     el("h3", {}, "Android app update"),
-    el("p", {}, `Version ${android.version || code} is ready on the server. Downloading update… The system installer opens when it finishes. Older apps save Downloads/ubetra.apk — tap the download notification to install.`),
+    el("p", {}, `Version ${android.version || code} is ready. Download update saves the APK, then opens the share sheet so you can install it. Play Protect may warn — tap Install anyway.`),
     el("button", {
       type: "button",
       className: "primary-btn",
-      onClick: async () => {
+      onClick: async (ev) => {
+        const button = ev.currentTarget;
+        button.disabled = true;
+        button.textContent = "Downloading update…";
         try {
-          localStorage.setItem(apkUpdateSeenKey(code), "1");
-        } catch {
-          /* ignore */
+          const result = await openAndroidApkDownload(android.url || "/apk/ubetra.apk");
+          if (result === "share-ready") {
+            button.disabled = false;
+            button.textContent = "Share APK";
+            return;
+          }
+          try {
+            localStorage.setItem(apkUpdateSeenKey(code), "1");
+          } catch {
+            /* ignore */
+          }
+          backdrop.remove();
+          if (result !== "browser") showToast(apkDownloadStatus(result));
+        } catch (err) {
+          button.disabled = false;
+          button.textContent = "Download update";
+          showToast(err.message || "Could not start download.");
         }
-        backdrop.remove();
-        await openAndroidApkDownload(android.url || "/apk/ubetra.apk");
       },
     }, "Download update"),
     el("button", {
@@ -5245,6 +5657,20 @@ async function bootstrap() {
     return;
   }
   settingsBtn.addEventListener("click", () => navigate("/settings"));
+  confessionWarningBtn?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (document.getElementById("confession-warning-panel")) {
+      closeConfessionWarning();
+      return;
+    }
+    const dynamicId = confessionWarningBtn.dataset.dynamicId || "";
+    if (dynamicId) showConfessionWarning(dynamicId);
+  });
+  document.addEventListener("click", (event) => {
+    const panel = document.getElementById("confession-warning-panel");
+    if (!panel || panel.contains(event.target) || event.target === confessionWarningBtn) return;
+    closeConfessionWarning();
+  });
   if (updateBadgeBtn) {
     updateBadgeBtn.addEventListener("click", (ev) => {
       ev.preventDefault();
@@ -5359,6 +5785,12 @@ async function bootstrap() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !state.token) return;
     refreshAppUpdates().catch(() => {});
+    if (!document.getElementById("inbox-overlay")) {
+      inboxCheckedDynamics.clear();
+      const { parts } = parseRoute();
+      if (parts[0] === "dynamic" && parts[1]) maybeShowInbox(parts[1]);
+    }
+    refreshConfessionWarning();
     maybeShowPunishmentReminders();
     syncEdgeGuardFromServer().catch(() => {});
   });
@@ -6115,6 +6547,24 @@ function historyReportShell(dynamicId, title, bodyNodes, { onBack } = {}) {
   return stack;
 }
 
+function buildChastityDaysSpanPicker(year, sinceFirst, onChange) {
+  const select = el("select");
+  const sinceOpt = el("option", { value: "since_first" }, "Since first lockup");
+  if (sinceFirst) sinceOpt.selected = true;
+  select.appendChild(sinceOpt);
+  const current = new Date().getFullYear();
+  for (let y = current; y >= current - 8; y -= 1) {
+    const opt = el("option", { value: String(y) }, String(y));
+    if (!sinceFirst && y === year) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.addEventListener("change", () => {
+    if (select.value === "since_first") onChange({ sinceFirst: true, year });
+    else onChange({ sinceFirst: false, year: parseInt(select.value, 10) });
+  });
+  return el("label", {}, ["Show", select]);
+}
+
 function buildYearPicker(year, onChange) {
   const select = el("select");
   const current = new Date().getFullYear();
@@ -6171,13 +6621,20 @@ function sleepRingDash(hours, locked) {
 
 function lockupCoversLocalDay(lockup, dateStr) {
   const start = new Date(`${dateStr}T00:00:00`);
-  const end = new Date(`${dateStr}T23:59:59`);
-  const lockStart = new Date(lockup.started_at).getTime();
-  const lockEnd = lockup.ended_at ? new Date(lockup.ended_at).getTime() : Date.now();
-  return lockEnd >= start.getTime() && lockStart <= end.getTime();
+  const end = new Date(`${dateStr}T23:59:59.999`);
+  const lockStart = parseServerDate(lockup.started_at);
+  const lockEnd = lockup.ended_at ? parseServerDate(lockup.ended_at) : new Date();
+  if (!lockStart || !lockEnd) return false;
+  return lockEnd.getTime() >= start.getTime() && lockStart.getTime() <= end.getTime();
 }
 
-async function openChastityDaySheet(dynamicId, day) {
+function chastityDayStatusLine(status) {
+  if (status === "full") return "Full day locked. Add a sleep unlock so this day is not counted as fully locked.";
+  if (status === "partial") return "Partly locked.";
+  return "Free. No lockup covers this day.";
+}
+
+async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChanged } = {}) {
   const backdrop = el("div", { className: "modal-backdrop" });
   const card = el("div", { className: "card stack modal-card" }, [
     el("h3", {}, day.date || "Day"),
@@ -6189,71 +6646,111 @@ async function openChastityDaySheet(dynamicId, day) {
   });
   document.body.appendChild(backdrop);
   try {
-    const [lockups, settings] = await Promise.all([
+    const [lockups, coveringRaw, settings] = await Promise.all([
       api(`/dynamics/${dynamicId}/chastity`),
+      api(`/dynamics/${dynamicId}/chastity?on=${encodeURIComponent(day.date || "")}`),
       api(`/dynamics/${dynamicId}/chastity/settings`).catch(() => ({ unlock_presets: [] })),
     ]);
-    const covering = (lockups || []).filter((lockup) => lockupCoversLocalDay(lockup, day.date));
-    const sleep = (settings.unlock_presets || []).find((preset) =>
-      String(preset.break_type || "").includes("sleep") || String(preset.name || "").toLowerCase() === "sleep"
-    ) || { name: "Sleep", break_type: "authorized_sleep", start: "23:00", end: "07:00" };
+    const covering = (coveringRaw || []).filter((lockup) => {
+      if (membershipId && lockup.for_membership_id !== membershipId) return false;
+      return lockupCoversLocalDay(lockup, day.date);
+    });
+    const configuredSleep = (settings.unlock_presets || []).find((preset) => isSleepPreset(preset))
+      || { name: "Sleep", break_type: "authorized_sleep", start: "23:00", end: "07:00" };
+    const memberId = membershipId || covering[0]?.for_membership_id || "";
+    const { preset: sleep, average: sleepAverage } = sleepPresetWithAverage(configuredSleep, lockups, memberId);
     const startInput = el("input", { type: "datetime-local" });
     const endInput = el("input", { type: "datetime-local" });
-    const window = presetWindowForDate(day.date, sleep);
-    if (window) {
-      startInput.value = toLocalDatetimeValue(new Date(window.started_at));
-      endInput.value = toLocalDatetimeValue(new Date(window.ended_at));
-    }
     const lockupSelect = el("select");
     covering.forEach((lockup) => {
       lockupSelect.appendChild(el("option", { value: lockup.id }, `${formatLocalDateTime(lockup.started_at)} · ${lockup.status}`));
     });
+    const clipNote = el("p", { className: "muted" });
     const err = el("p", { className: "error hidden" });
+
+    function chosenLockup() {
+      return covering.find((lockup) => lockup.id === lockupSelect.value) || null;
+    }
+
+    function applySleepWindow() {
+      const chosen = chosenLockup();
+      if (!chosen) return null;
+      const next = sleepPresetWithAverage(configuredSleep, lockups, chosen.for_membership_id || memberId);
+      const span = sleepSpanForDay(day.date, next.preset, chosen);
+      if (!span) {
+        clipNote.textContent = "The usual sleep window does not fall inside this lockup on this day.";
+        return null;
+      }
+      startInput.value = toLocalDatetimeValue(span.started_at);
+      endInput.value = toLocalDatetimeValue(span.ended_at);
+      const shortOnDay = span.overlap < 20 * 60 * 1000;
+      clipNote.textContent = span.clipped
+        ? `Trimmed to this lockup: unlock ${formatLocalDateTime(span.started_at)}, locked again ${formatLocalDateTime(span.ended_at)}.`
+        : `Unlock ${formatLocalDateTime(span.started_at)}, locked again ${formatLocalDateTime(span.ended_at)}.`;
+      if (shortOnDay) {
+        clipNote.textContent += " Less than 20 minutes of this unlock falls on this calendar day, so the day can still count as fully locked.";
+      }
+      return span;
+    }
+
     async function postBreak(startedAt, endedAt) {
-      const lockupId = lockupSelect.value;
-      if (!lockupId) {
+      const chosen = chosenLockup();
+      if (!chosen) {
         err.textContent = "No lockup covers this day.";
         err.classList.remove("hidden");
         return;
       }
+      const clipped = clipBreakToLockup({ started_at: startedAt, ended_at: endedAt }, chosen);
+      if (!clipped || clipped.error) {
+        err.textContent = clipped?.error || "That sleep window is outside this lockup.";
+        err.classList.remove("hidden");
+        return;
+      }
       err.classList.add("hidden");
-      await api(`/dynamics/${dynamicId}/chastity/${lockupId}/breaks/historical`, {
+      await api(`/dynamics/${dynamicId}/chastity/${chosen.id}/breaks/historical`, {
         method: "POST",
         body: JSON.stringify({
           break_type: sleep.break_type || "authorized_sleep",
           break_reason: sleep.name || "Sleep",
-          started_at: startedAt,
-          ended_at: endedAt,
+          started_at: clipped.started_at,
+          ended_at: clipped.ended_at,
           note: sleep.name || "Sleep",
           tags: [sleep.name || "Sleep"],
         }),
       });
       backdrop.remove();
-      showToast("Sleep unlock added.");
+      onChanged?.();
+      showToast(clipped.clipped ? "Sleep unlock added, trimmed to this lockup." : "Sleep unlock added.");
     }
-    card.replaceChildren(
-      el("h3", {}, day.date || "Day"),
-      covering.length
-        ? el("div", { className: "stack" }, covering.map((lockup) => el("p", {}, `${lockup.status} · ${formatLocalDateTime(lockup.started_at)} – ${lockup.ended_at ? formatLocalDateTime(lockup.ended_at) : "ongoing"}`)))
-        : el("p", { className: "muted" }, "No lockup covers this day."),
-      covering.length ? el("label", { className: "stack" }, ["Lockup", lockupSelect]) : null,
-      covering.length ? el("button", {
+
+    const lockedNodes = covering.length ? [
+      el("div", { className: "stack" }, covering.map((lockup) => el("p", {}, `${lockup.status} · ${formatLocalDateTime(lockup.started_at)} – ${lockup.ended_at ? formatLocalDateTime(lockup.ended_at) : "ongoing"}`))),
+      covering.length > 1 ? el("label", { className: "stack" }, ["Lockup", lockupSelect]) : null,
+      sleepAverage
+        ? el("p", { className: "muted" }, `Sleep times are the average of ${sleepAverage.count} past Sleep unlock${sleepAverage.count === 1 ? "" : "s"}: unlock ${formatTimeOfDay(sleepAverage.start)}, locked again ${formatTimeOfDay(sleepAverage.end)}.`)
+        : null,
+      clipNote,
+      el("button", {
         type: "button",
         className: "primary-btn",
         onClick: async () => {
           try {
-            const span = presetWindowForDate(day.date, sleep);
-            if (!span) return;
+            const span = applySleepWindow();
+            if (!span) {
+              err.textContent = clipNote.textContent || "That sleep window is outside this lockup.";
+              err.classList.remove("hidden");
+              return;
+            }
             await postBreak(span.started_at, span.ended_at);
           } catch (ex) {
             err.textContent = ex.message;
             err.classList.remove("hidden");
           }
         },
-      }, "Add sleep unlock") : null,
-      covering.length ? el("label", { className: "stack" }, ["Custom start", startInput]) : null,
-      covering.length ? el("label", { className: "stack" }, ["Custom end", endInput]) : null,
-      covering.length ? el("button", {
+      }, "Add sleep unlock"),
+      el("label", { className: "stack" }, ["Custom start", startInput]),
+      el("label", { className: "stack" }, ["Custom end", endInput]),
+      el("button", {
         type: "button",
         className: "ghost-btn",
         onClick: async () => {
@@ -6264,16 +6761,94 @@ async function openChastityDaySheet(dynamicId, day) {
             err.classList.remove("hidden");
           }
         },
-      }, "Add custom unlock") : null,
+      }, "Add custom unlock"),
+    ] : [];
+
+    const freeNodes = [];
+    if (!covering.length && memberId) {
+      const lockStartInput = el("input", { type: "datetime-local", value: `${day.date}T00:00` });
+      const orgasmLine = el("p", { className: "muted" }, "Looking up the next orgasm…");
+      let nextOrgasm = null;
+      async function refreshNextOrgasm() {
+        const iso = datetimeLocalToIso(lockStartInput.value);
+        nextOrgasm = null;
+        if (!iso) {
+          orgasmLine.textContent = "Set when the lockup started.";
+          return;
+        }
+        try {
+          const params = new URLSearchParams({ for_membership_id: memberId, after: iso });
+          nextOrgasm = await api(`/dynamics/${dynamicId}/chastity/next-orgasm?${params}`);
+          orgasmLine.textContent = `Ends at the next orgasm: ${nextOrgasm.label} · ${formatLocalDateTime(nextOrgasm.occurred_at)}`;
+        } catch (ex) {
+          orgasmLine.textContent = ex.message || "No orgasm is logged after that start.";
+        }
+      }
+      lockStartInput.addEventListener("change", () => {
+        refreshNextOrgasm().catch(() => {});
+      });
+      freeNodes.push(
+        el("p", {}, "Set when this lockup started. It ends at the next logged orgasm."),
+        el("label", { className: "stack" }, ["Lockup started", lockStartInput]),
+        orgasmLine,
+        el("button", {
+          type: "button",
+          className: "primary-btn",
+          onClick: async () => {
+            try {
+              if (!nextOrgasm?.occurred_at) {
+                await refreshNextOrgasm();
+              }
+              if (!nextOrgasm?.occurred_at) {
+                err.textContent = orgasmLine.textContent || "No orgasm is logged after that start.";
+                err.classList.remove("hidden");
+                return;
+              }
+              const startedAt = datetimeLocalToIso(lockStartInput.value);
+              const endedKind = String(nextOrgasm.label || "").toLowerCase().includes("cheat")
+                ? "cheated_orgasm"
+                : "released_orgasm";
+              err.classList.add("hidden");
+              await api(`/dynamics/${dynamicId}/chastity/historical`, {
+                method: "POST",
+                body: JSON.stringify({
+                  for_membership_id: memberId,
+                  started_at: startedAt,
+                  ended_at: nextOrgasm.occurred_at,
+                  note: `Filled from the calendar. Ends at ${nextOrgasm.label || "the next orgasm"}.`,
+                  tags: ["backfill"],
+                  ended_kind: endedKind,
+                }),
+              });
+              backdrop.remove();
+              onChanged?.();
+              showToast("Lockup saved through the next orgasm.");
+            } catch (ex) {
+              err.textContent = ex.message;
+              err.classList.remove("hidden");
+            }
+          },
+        }, "Save lockup until that orgasm"),
+      );
+      refreshNextOrgasm().catch(() => {});
+    }
+
+    applySleepWindow();
+    card.replaceChildren(...[
+      el("h3", {}, day.date || "Day"),
+      el("p", {}, chastityDayStatusLine(day.status)),
+      ...lockedNodes,
+      ...freeNodes,
+      !covering.length && !memberId ? el("p", { className: "muted" }, "No lockup covers this day.") : null,
       err,
       el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Close"),
-    );
+    ].filter(Boolean));
   } catch (ex) {
     card.replaceChildren(el("p", { className: "error" }, ex.message || "Could not load this day."));
   }
 }
 
-function renderChastityDayCell(day, { dynamicId = "" } = {}) {
+function renderChastityDayCell(day, { dynamicId = "", membershipId = "", onChanged } = {}) {
   const dayNum = String(new Date(`${day.date}T12:00:00`).getDate());
   const hours = day.sleep_hours;
   const hasSleep = hours != null && Number(hours) > 0;
@@ -6286,7 +6861,7 @@ function renderChastityDayCell(day, { dynamicId = "" } = {}) {
     className: "chastity-day",
     title: title.join(" · "),
     onClick: () => {
-      if (dynamicId) openChastityDaySheet(dynamicId, day);
+      if (dynamicId) openChastityDaySheet(dynamicId, day, { membershipId, onChanged });
     },
   });
   if (hasSleep) {
@@ -6313,7 +6888,7 @@ function renderChastityDayCell(day, { dynamicId = "" } = {}) {
   return host;
 }
 
-function renderChastityCalendar(days, { dynamicId = "" } = {}) {
+function renderChastityCalendar(days, { dynamicId = "", membershipId = "", onChanged } = {}) {
   const byMonth = {};
   days.forEach((d) => {
     const key = d.date.slice(0, 7);
@@ -6327,7 +6902,7 @@ function renderChastityCalendar(days, { dynamicId = "" } = {}) {
     ]);
     const grid = el("div", { className: "chastity-day-grid" });
     byMonth[monthKey].forEach((day) => {
-      grid.appendChild(renderChastityDayCell(day, { dynamicId }));
+      grid.appendChild(renderChastityDayCell(day, { dynamicId, membershipId, onChanged }));
     });
     monthEl.appendChild(grid);
     wrap.appendChild(monthEl);
@@ -6482,6 +7057,7 @@ function renderHistoryReport(dynamicId, reportId) {
   }
   state.activeDynamicId = id;
   let year = new Date().getFullYear();
+  let sinceFirstLockup = false;
   let days = report.id === "chastity-log" ? 365 : 90;
   let selectedTags = [];
 
@@ -6572,9 +7148,19 @@ function renderHistoryReport(dynamicId, reportId) {
   }
 
   function paintChastityDays() {
-    api(`/dynamics/${id}/history/reports/chastity-days?year=${year}`)
+    const sinceQuery = sinceFirstLockup ? "&since=first" : "";
+    api(`/dynamics/${id}/history/reports/chastity-days?year=${year}${sinceQuery}`)
       .then((data) => {
-        const nodes = [buildYearPicker(year, (y) => { year = y; paintChastityDays(); })];
+        const nodes = [
+          buildChastityDaysSpanPicker(year, sinceFirstLockup, (next) => {
+            year = next.year;
+            sinceFirstLockup = next.sinceFirst;
+            paintChastityDays();
+          }),
+        ];
+        if (data.since_first && data.range_start) {
+          nodes.push(el("p", { className: "muted" }, `From ${data.range_start} through today.`));
+        }
         if (!data.partners.length) {
           nodes.push(el("p", { className: "muted" }, "Chastity not enabled."));
         }
@@ -6586,7 +7172,11 @@ function renderHistoryReport(dynamicId, reportId) {
               { label: "Partial days", value: partner.partial_days },
               { label: "Free days", value: partner.free_days },
             ]),
-            renderChastityCalendar(partner.days, { dynamicId: id }),
+            renderChastityCalendar(partner.days, {
+              dynamicId: id,
+              membershipId: partner.membership_id,
+              onChanged: () => paintChastityDays(),
+            }),
           ]));
         });
         historyReportShell(id, report.title, nodes);
@@ -8217,24 +8807,6 @@ function renderTasksActsSwitcher(dynamicId, active) {
       "button",
       {
         type: "button",
-        className: active === "acts" ? "primary-btn" : "ghost-btn",
-        onClick: () => navigate(`/dynamic/${dynamicId}/acts`),
-      },
-      "Acts of submission"
-    ),
-    el(
-      "button",
-      {
-        type: "button",
-        className: active === "goals" ? "primary-btn" : "ghost-btn",
-        onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=goals`),
-      },
-      "Goals"
-    ),
-    el(
-      "button",
-      {
-        type: "button",
         className: `ai-only ${active === "regimen" ? "primary-btn" : "ghost-btn"}`,
         "data-ai-label": "Training regimen drafts task lists with your shared AI context.",
         onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=regimen`),
@@ -8842,8 +9414,9 @@ function renderTasks(dynamicId) {
     api(`/dynamics/${dynamicId}/chastity-goals`).catch(() => null),
     api(`/dynamics/${dynamicId}/acts`).catch(() => []),
     api(`/dynamics/${dynamicId}/task-completions`).catch(() => []),
+    api(`/dynamics/${dynamicId}/task-library`).catch(() => []),
   ])
-    .then(([, tagData, punishPayload, policy, goalsData, acts, completions]) => {
+    .then(([, tagData, punishPayload, policy, goalsData, acts, completions, library]) => {
       const dynamic = state.currentDynamic;
       const you = dynamic.partners.find((p) => p.is_you);
       const isDom = you?.role === "dominant";
@@ -8872,11 +9445,6 @@ function renderTasks(dynamicId) {
             "data-ai-label": "Training regimen drafts task lists with your shared AI context.",
             onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=regimen`),
           }, "Build training regimen"),
-          el("button", {
-            type: "button",
-            className: "ghost-btn",
-            onClick: () => navigate(`/dynamic/${dynamicId}/acts`),
-          }, "Acts page"),
         ]),
         el("p", { className: "muted" }, confession
           ? "Assign a punishment task for this confession."
@@ -9580,7 +10148,7 @@ function renderTasks(dynamicId) {
               className: "tag-chip task-goal-chip",
               onClick: (ev) => {
                 ev.stopPropagation();
-                navigate(`/dynamic/${dynamicId}/tasks?tab=goals&goal=${encodeURIComponent(goal.id)}`);
+                navigate(`/dynamic/${dynamicId}/tasks?goal=${encodeURIComponent(goal.id)}`);
               },
             }, goal.title || "Goal")
             : null,
@@ -9598,8 +10166,12 @@ function renderTasks(dynamicId) {
           el("span", { className: "task-timeline-count" }, String(rows.length)),
         ]));
         section.addEventListener("toggle", () => rememberTaskSection(storageId, section.open));
-        if (!rows.length) section.appendChild(el("p", { className: "muted" }, "None"));
+        const requested = id === "none"
+          ? (Array.isArray(acts) ? acts : []).filter((act) => act.status === "active" || act.status === "completed")
+          : [];
+        if (!rows.length && !requested.length) section.appendChild(el("p", { className: "muted" }, "None"));
         else rows.forEach(({ list, task }) => section.appendChild(renderCompactTaskRow(list, task)));
+        requested.forEach((act) => section.appendChild(paintActRow(act)));
         return section;
       }
 
@@ -9643,22 +10215,42 @@ function renderTasks(dynamicId) {
         }
       }
 
-      function paintActsSection() {
-        const section = el("section", { className: "card stack" }, [
-          el("h2", {}, "Requested by sub"),
-        ]);
-        const list = Array.isArray(acts) ? acts : [];
-        if (!list.length) section.appendChild(el("p", { className: "muted" }, "No acts of submission yet."));
-        else {
-          list.slice(0, 20).forEach((act) => {
-            section.appendChild(el("button", {
-              type: "button",
-              className: "ghost-btn",
-              onClick: () => navigate(`/dynamic/${dynamicId}/acts`),
-            }, `${act.act_type_title || act.hint_text || "Act"} · ${act.status || "requested"}`));
-          });
+      function paintActRow(act) {
+        const row = el("div", { className: "task-compact-row" });
+        row.append(
+          el("span", { className: "task-chip task-chip-pending" }, "Requested by sub"),
+          el("span", { className: "task-compact-title" }, act.hint_text || act.act_type_title || "Act"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: async (ev) => {
+              ev.stopPropagation();
+              if (!confirm("Delete this requested act? It will not remove task completion logs.")) return;
+              try {
+                await api(`/acts/${act.id}`, { method: "DELETE" });
+                renderTasks(dynamicId);
+              } catch (ex) {
+                showError(ex.message);
+              }
+            },
+          }, "Delete"),
+        );
+        if (isDom) {
+          row.appendChild(el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: async (ev) => {
+              ev.stopPropagation();
+              try {
+                await api(`/acts/${act.id}/make-task`, { method: "POST" });
+                renderTasks(dynamicId);
+              } catch (ex) {
+                showError(ex.message);
+              }
+            },
+          }, "Save as task"));
         }
-        return section;
+        return row;
       }
 
       function paintRecurring() {
@@ -9689,12 +10281,84 @@ function renderTasks(dynamicId) {
         return section;
       }
 
+      function paintTaskLibrary() {
+        const rows = Array.isArray(library) ? library : [];
+        const section = el("details", { className: "task-timeline-section stack" });
+        section.open = taskSectionIsOpen(`${dynamicId}:task-library`, false);
+        section.appendChild(el("summary", {}, [
+          el("span", {}, "Tasks created"),
+          el("span", { className: "task-timeline-count" }, String(rows.length)),
+        ]));
+        section.addEventListener("toggle", () => rememberTaskSection(`${dynamicId}:task-library`, section.open));
+        section.appendChild(el("p", { className: "muted" }, "Every task you create is kept here so you can assign it again. Deleting one does not erase completion logs."));
+        if (!rows.length) {
+          section.appendChild(el("p", { className: "muted" }, "None yet."));
+          return section;
+        }
+        rows.forEach((item) => {
+          const row = el("div", { className: "task-compact-row" });
+          row.append(
+            el("span", { className: "task-compact-title" }, item.content),
+            isDom ? el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: async () => {
+                try {
+                  await api(`/dynamics/${dynamicId}/task-library/${item.id}/use`, {
+                    method: "POST",
+                    body: JSON.stringify({ recurrence: "none" }),
+                  });
+                  renderTasks(dynamicId);
+                } catch (ex) {
+                  showError(ex.message);
+                }
+              },
+            }, "Use again") : null,
+            isDom ? el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: async () => {
+                try {
+                  await api(`/dynamics/${dynamicId}/task-library/${item.id}/use`, {
+                    method: "POST",
+                    body: JSON.stringify({ recurrence: "daily" }),
+                  });
+                  renderTasks(dynamicId);
+                } catch (ex) {
+                  showError(ex.message);
+                }
+              },
+            }, "Make daily") : null,
+            isDom ? el("button", {
+              type: "button",
+              className: "ghost-btn",
+              onClick: async () => {
+                if (!confirm("Remove this from Tasks created? Completion logs stay.")) return;
+                try {
+                  await api(`/dynamics/${dynamicId}/task-library/${item.id}`, { method: "DELETE" });
+                  renderTasks(dynamicId);
+                } catch (ex) {
+                  showError(ex.message);
+                }
+              },
+            }, "Delete") : null,
+          );
+          section.appendChild(row);
+        });
+        return section;
+      }
+
       function paintCompletions() {
-        const rows = Array.isArray(completions) ? completions : [];
+        const historyDays = Math.max(1, Math.min(90, Number(policy?.task_completed_history_days || 9)));
+        const cutoff = Date.now() - historyDays * 24 * 60 * 60 * 1000;
+        const rows = (Array.isArray(completions) ? completions : []).filter((row) => {
+          const at = new Date(row.completed_at).getTime();
+          return !Number.isNaN(at) && at >= cutoff;
+        });
         const section = el("details", { className: "task-timeline-section stack chastity-timeline" });
         section.open = taskSectionIsOpen(`${dynamicId}:completed-log`, false);
         section.appendChild(el("summary", {}, [
-          el("span", {}, "Completed"),
+          el("span", {}, `Completed · last ${historyDays} days`),
           el("span", { className: "task-timeline-count" }, String(rows.length)),
         ]));
         section.addEventListener("toggle", () => rememberTaskSection(`${dynamicId}:completed-log`, section.open));
@@ -9746,8 +10410,8 @@ function renderTasks(dynamicId) {
         stack.appendChild(paintTaskGroup("none", "No due date", grouped.none, grouped.none.length > 0));
         if (isDom) stack.appendChild(bulkBar);
       }
-      stack.appendChild(paintActsSection());
       stack.appendChild(paintRecurring());
+      stack.appendChild(paintTaskLibrary());
       stack.appendChild(paintCompletions());
       if (goalsData && you?.role === "dominant") {
         stack.appendChild(renderChastityGoalsCard(dynamicId, goalsData, {
@@ -15505,10 +16169,46 @@ function renderGoalLinkedItems(dynamicId, goal, tasks, acts) {
     box.appendChild(el("button", {
       type: "button",
       className: "sheet-cell-btn",
-      onClick: () => navigate(`/dynamic/${dynamicId}/acts`),
+      onClick: () => navigate(`/dynamic/${dynamicId}/tasks`),
     }, act.hint_text || act.act_type_title || "Act"));
   });
   return box;
+}
+
+function goalWasEverMet(goal, progress) {
+  if (progress?.ready || progress?.last_met_at || goal?.last_met_at) return true;
+  const hist = [...(goal?.history || []), ...(progress?.history || [])];
+  return hist.some((entry) => entry?.outcome === "met" || entry?.outcome === "gift");
+}
+
+function showGoalSectionHelp(dynamicId) {
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const body = [
+    el("h3", {}, "Orgasm and Chastity goals"),
+    el("p", {}, "Each goal is its own card. Orgasm and Ruin start from the last gift of that type. Other starts now."),
+  ];
+  if (isAiEnabled() && dynamicId) {
+    body.push(el("p", { className: "muted" }, "Ask the assistant if you want more detail on how a goal is counted."));
+    body.push(el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => {
+        backdrop.remove();
+        navigate(`/dynamic/${dynamicId}/assistant/chat`);
+      },
+    }, "Ask the assistant"));
+  }
+  body.push(el("button", {
+    type: "button",
+    className: "ghost-btn",
+    onClick: () => backdrop.remove(),
+  }, "Close"));
+  const card = el("div", { className: "card stack modal-card" }, body);
+  backdrop.appendChild(card);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
 }
 
 function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, tasks = [], acts = [], focusGoalId = "" } = {}) {
@@ -15530,16 +16230,24 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
   const error = el("div", { className: "error hidden" });
   const giftLabel = (kind) => ({ orgasm_grant: "Orgasm", ruin_gift: "Ruin", misc_gift: "Other" }[kind] || "Other");
   const subs = (partners || []).filter((p) => p.role === "submissive");
-  const host = el("section", { className: "card stack goals-section", id: "orgasm-chastity-goals" }, [
-    el("h2", {}, "Orgasm and Chastity goals"),
-    el("p", { className: "muted" }, "Each goal is its own card. Orgasm and Ruin start from the last gift of that type. Other starts now."),
-  ]);
-
-  const headerHidden = el("input", { type: "checkbox" });
-  headerHidden.checked = config.header_hidden !== false;
-  host.appendChild(el("label", { className: "checkbox-label" }, [
-    headerHidden,
-    " Start header meters collapsed (click chips to reveal)",
+  const summaryCount = el("span", { className: "task-timeline-count" }, "");
+  const helpBtn = el("button", {
+    type: "button",
+    className: "goal-help-btn",
+    title: "About these goals",
+    onClick: (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      showGoalSectionHelp(dynamicId);
+    },
+  }, "?");
+  const host = el("details", { className: "card stack goals-section", id: "orgasm-chastity-goals" });
+  host.appendChild(el("summary", {}, [
+    el("span", { className: "goal-section-title" }, [
+      "Orgasm and Chastity goals",
+      helpBtn,
+    ]),
+    summaryCount,
   ]));
 
   const summary = el("p", { className: "muted" });
@@ -15755,18 +16463,31 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
           paintGoals();
         },
       }, "Repeat (reset to now)"));
-      actions.appendChild(el("button", {
-        type: "button",
-        className: "ghost-btn",
-        onClick: () => {
-          const reason = askArchiveReason();
-          if (!reason) return;
-          goal.active = false;
-          goal.archive_reason = reason;
-          goal.archived_at = new Date().toISOString();
-          paintGoals();
-        },
-      }, "Archive"));
+      if (goalWasEverMet(goal, progress)) {
+        actions.appendChild(el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => {
+            const reason = askArchiveReason();
+            if (!reason) return;
+            goal.active = false;
+            goal.archive_reason = reason;
+            goal.archived_at = new Date().toISOString();
+            paintGoals();
+          },
+        }, "Archive"));
+      } else {
+        actions.appendChild(el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => {
+            if (!confirm("Delete this goal? It has never been met.")) return;
+            const idx = config.goals.indexOf(goal);
+            if (idx >= 0) config.goals.splice(idx, 1);
+            paintGoals();
+          },
+        }, "Delete"));
+      }
     } else {
       actions.appendChild(el("button", {
         type: "button",
@@ -15793,11 +16514,17 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       }, "Delete permanently"));
     }
 
+    const grantsReady = Number(progress?.grants_ready || 0);
+    const goalStatus = archived || progress?.active === false
+      ? { cls: "goal-status-idle", label: "Not running" }
+      : (progress?.ready || grantsReady >= 1)
+        ? { cls: "goal-status-ready", label: grantsReady > 1 ? `Ready · ${grantsReady} gifts` : "Ready" }
+        : { cls: "goal-status-working", label: "Working towards" };
     const historyRows = (goal.history || progress?.history || []).map((entry) => el("div", {
       className: `goal-history-item goal-history-${entry.outcome || "reset"}`,
     }, [entry.outcome || "reset", entry.at ? ` · ${formatGoalStamp(entry.at)}` : "", entry.progress ? ` · ${entry.progress}` : ""].join("")));
     const fold = el("details", {
-      className: `card stack goal-fold${archived ? " goal-archived" : ""}`,
+      className: `card stack goal-fold ${goalStatus.cls}${archived ? " goal-archived" : ""}`,
       id: `goal-${goal.id}`,
       open: focusGoalId === goal.id,
     });
@@ -15805,7 +16532,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
     [
       el("summary", {}, [
         el("span", {}, `${goal.title || "Goal"} — ${giftLabel(goal.kind)}`),
-        el("span", { className: "task-timeline-count" }, progressBits || (archived ? "Archived" : "Goal")),
+        el("span", { className: "task-timeline-count" }, goalStatus.label),
       ]),
       el("label", {}, ["Title", title]),
       el("label", {}, ["Gift type", kindSelect]),
@@ -15820,7 +16547,9 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       progress?.countdown_at && !archived
         ? el("p", { className: "muted" }, `Countdown: ${formatGoalCountdown(progress.countdown_at)}`)
         : null,
-      progress?.ready && !archived ? el("p", { className: "pill ok" }, "Ready to grant") : null,
+      progress?.ready && !archived
+        ? el("p", { className: "pill ok" }, grantsReady > 1 ? `${grantsReady} gifts ready` : "Ready to grant")
+        : null,
       el("details", { className: "goal-history" }, [
         el("summary", {}, "Completed"),
         historyRows.length ? null : el("p", { className: "muted" }, "No completed cycles yet."),
@@ -15836,74 +16565,29 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
     const active = (config.goals || []).filter((g) => g.active !== false);
     const archived = (config.goals || []).filter((g) => g.active === false);
     summary.textContent = `${active.length} currently active · ${archived.length} archived`;
-    activeHost.replaceChildren(
-      el("h3", {}, "Currently active"),
-      active.length
-        ? null
-        : el("p", { className: "muted" }, "No active goals. Add one below."),
-      ...active.map((g) => paintGoalCard(g, { archived: false }))
-    );
-    archivedHost.replaceChildren(
-      el("h3", {}, "Archived"),
-      archived.length
-        ? null
-        : el("p", { className: "muted" }, "No archived goals yet."),
-      ...archived.map((g) => paintGoalCard(g, { archived: true }))
-    );
-    const linkedIds = new Set();
-    const linkedActIds = new Set();
-    active.forEach((goal) => {
-      const tags = goalRequirementTags(goal);
-      (tasks || []).forEach(({ task }) => {
-        if (!tags.length) return;
-        if ((task.tags || []).some((tag) => tags.includes(String(tag).trim().toLowerCase()))) {
-          linkedIds.add(task.id);
-          if (task.act_id) linkedActIds.add(task.act_id);
-        }
-      });
-    });
-    const unTasks = (tasks || []).filter(({ task }) => !linkedIds.has(task.id));
-    const unActs = (acts || []).filter((act) => !linkedActIds.has(act.id));
-    const unassigned = el("details", { className: "card stack goal-fold", id: "goal-unassigned" });
-    unassigned.open = focusGoalId === "unassigned" || (!active.length && (unTasks.length || unActs.length));
-    unassigned.append(
-      el("summary", {}, [
-        el("span", {}, "Unassigned"),
-        el("span", { className: "task-timeline-count" }, String(unTasks.length + unActs.length)),
-      ]),
-    );
-    if (!unTasks.length && !unActs.length) {
-      unassigned.appendChild(el("p", { className: "muted" }, "Every task and act is linked to a goal."));
+    const readyCount = active.filter((g) => progressById[g.id]?.ready).length;
+    summaryCount.textContent = readyCount
+      ? `${readyCount} ready`
+      : `${active.length} active`;
+    if (!host.dataset.openedOnce) {
+      host.open = readyCount > 0 || !!focusGoalId;
+      host.dataset.openedOnce = "1";
     }
-    unTasks.forEach(({ task }) => {
-      unassigned.appendChild(el("button", {
-        type: "button",
-        className: "sheet-cell-btn",
-        onClick: () => navigate(`/dynamic/${dynamicId}/tasks?task=${encodeURIComponent(task.id)}`),
-      }, task.content));
-    });
-    unActs.forEach((act) => {
-      unassigned.appendChild(el("button", {
-        type: "button",
-        className: "sheet-cell-btn",
-        onClick: () => navigate(`/dynamic/${dynamicId}/acts`),
-      }, act.hint_text || act.act_type_title || "Act"));
-    });
-    activeHost.appendChild(unassigned);
+    const activeNodes = active.map((g) => paintGoalCard(g, { archived: false }));
+    if (!activeNodes.length) activeNodes.push(el("p", { className: "muted" }, "No active goals."));
+    activeHost.replaceChildren(...activeNodes);
+    archivedHost.replaceChildren(
+      ...(archived.length ? [el("h3", {}, "Archived")] : []),
+      ...archived.map((g) => paintGoalCard(g, { archived: true })),
+    );
     if (focusGoalId) {
       queueMicrotask(() => document.getElementById(`goal-${focusGoalId}`)?.scrollIntoView({ block: "start" }));
     }
   }
-  paintGoals();
-
-  host.appendChild(summary);
-  host.appendChild(activeHost);
-  host.appendChild(archivedHost);
-  host.appendChild(el("button", {
+  const addGoalBtn = el("button", {
     type: "button",
     className: "ghost-btn",
     onClick: () => {
-      const startMode = "rolling";
       config.goals.push({
         id: `goal-${Date.now()}`,
         kind: "orgasm_grant",
@@ -15923,9 +16607,15 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
         archive_reason: null,
         repeat_count: 0,
       });
+      host.open = true;
       paintGoals();
     },
-  }, "+ Add goal"));
+  }, "+ Add goal");
+  paintGoals();
+  host.appendChild(addGoalBtn);
+  host.appendChild(summary);
+  host.appendChild(activeHost);
+  host.appendChild(archivedHost);
   host.appendChild(error);
   host.appendChild(el("button", {
     type: "button",
@@ -15933,7 +16623,6 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
     onClick: async () => {
       error.classList.add("hidden");
       try {
-        config.header_hidden = headerHidden.checked;
         await api(`/dynamics/${dynamicId}/chastity-goals`, {
           method: "PUT",
           body: JSON.stringify(config),
@@ -16418,23 +17107,31 @@ function renderChastity(dynamicId) {
             type: "button",
             onClick: () => showUnlockDisambiguation(),
           }, "Temporary unlock"));
+          const sleepAverage = averageSleepUnlockTimes(lockups, partner.membership_id);
+          if (sleepAverage) {
+            actions.appendChild(el("p", { className: "muted" }, `Sleep uses the average of ${sleepAverage.count} past Sleep unlock${sleepAverage.count === 1 ? "" : "s"}: unlock ${formatTimeOfDay(sleepAverage.start)}, locked again ${formatTimeOfDay(sleepAverage.end)}.`));
+          }
           (settings.unlock_presets || []).forEach((preset) => {
+            const applied = sleepPresetWithAverage(preset, lockups, partner.membership_id);
+            const label = applied.average
+              ? `${preset.name || "Sleep"} · ${formatTimeOfDay(applied.average.start)}–${formatTimeOfDay(applied.average.end)}`
+              : (preset.name || "Unlock");
             actions.appendChild(el("button", {
               className: "ghost-btn",
               type: "button",
               onClick: async () => {
-                const window = presetWindowForDate(new Date(), preset);
+                const window = presetWindowForDate(new Date(), applied.preset);
                 if (!window || !partner.active_lockup_id) return;
                 try {
                   await api(`/dynamics/${dynamicId}/chastity/${partner.active_lockup_id}/break`, {
                     method: "POST",
                     body: JSON.stringify({
-                      break_type: preset.break_type,
-                      break_reason: preset.name,
+                      break_type: applied.preset.break_type,
+                      break_reason: applied.preset.name,
                       started_at: window.started_at,
                       ended_at: window.ended_at,
-                      note: preset.name,
-                      tags: [preset.name],
+                      note: applied.preset.name,
+                      tags: [applied.preset.name],
                     }),
                   });
                   renderChastity(dynamicId);
@@ -16443,7 +17140,7 @@ function renderChastity(dynamicId) {
                   error.classList.remove("hidden");
                 }
               },
-            }, preset.name || "Unlock"));
+            }, label));
           });
         }
 
@@ -23369,6 +24066,12 @@ function renderSettings() {
         const reminderValue = () => JSON.stringify(reminderChips.getOffsets());
         const completeNotify = el("input", { type: "checkbox" });
         completeNotify.checked = policy.task_complete_notify !== false;
+        const historyDays = el("input", {
+          type: "number",
+          min: "1",
+          max: "90",
+          value: String(policy.task_completed_history_days || 9),
+        });
         const censorMode = el("select");
         [
           ["off", "Off"],
@@ -23396,6 +24099,8 @@ function renderSettings() {
               el("p", { className: "muted" }, "Remind the sub before tasks are due (pick any; none turns due reminders off). Tasks can override this."),
               reminderChips.row,
               el("label", { className: "checkbox-label" }, [completeNotify, " Push the keyholder whenever a task is completed"]),
+              el("label", {}, ["Completed history (days)", historyDays]),
+              el("p", { className: "muted" }, "The Tasks screen lists completions from this many days. Older logs stay saved."),
               el("p", { className: "muted" }, "Android uses a separate Tasks notification channel (you can pick a different sound in system settings)."),
             ]),
           }),
@@ -23416,12 +24121,14 @@ function renderSettings() {
           push: taskPush.checked,
           reminders: reminderValue(),
           complete: completeNotify.checked,
+          days: String(historyDays.value || "9"),
           censor: censorMode.value,
         };
         const playChanged = () => (
           taskPush.checked !== playBaseline.push
           || reminderValue() !== playBaseline.reminders
           || completeNotify.checked !== playBaseline.complete
+          || String(historyDays.value || "9") !== playBaseline.days
           || censorMode.value !== playBaseline.censor
         );
         draft.register({
@@ -23455,6 +24162,14 @@ function renderSettings() {
                   requestedValue: completeNotify.checked,
                 }));
               }
+              if (String(historyDays.value || "9") !== playBaseline.days) {
+                requests.push(postSettingsChangeRequest({
+                  dynamicId: initialDynamicId,
+                  settingKey: "tasks.completed_history_days",
+                  settingLabel: "Completed task history length",
+                  requestedValue: Number(historyDays.value || 9),
+                }));
+              }
               if (censorMode.value !== playBaseline.censor) {
                 requests.push(postSettingsChangeRequest({
                   dynamicId: initialDynamicId,
@@ -23473,6 +24188,7 @@ function renderSettings() {
                 task_push_enabled: taskPush.checked,
                 task_reminder_offsets: reminderChips.getOffsets(),
                 task_complete_notify: completeNotify.checked,
+                task_completed_history_days: Number(historyDays.value || 9),
                 ml_censor_mode: censorMode.value,
               }),
             });
@@ -23480,6 +24196,7 @@ function renderSettings() {
               push: taskPush.checked,
               reminders: reminderValue(),
               complete: completeNotify.checked,
+              days: String(historyDays.value || "9"),
               censor: censorMode.value,
             };
             playStatus.textContent = "Task notifications saved.";
@@ -23954,6 +24671,15 @@ function renderSettings() {
         allowDelete.checked = policy.chastity_sub_can_delete_breaks !== false;
         const autoRelock = el("input", { type: "checkbox" });
         autoRelock.checked = policy.chastity_auto_relock_after_orgasm !== false;
+        const headerMeters = el("input", { type: "checkbox" });
+        headerMeters.checked = true;
+        let goalsConfig = null;
+        api(`/dynamics/${initialDynamicId}/chastity-goals`).then((data) => {
+          goalsConfig = data?.config || { goals: [], header_hidden: true };
+          headerMeters.checked = goalsConfig.header_hidden !== false;
+          chastityBaseline = chastitySnapshot();
+          draft.refresh();
+        }).catch(() => {});
         const presetRows = [];
         const presetHost = el("div", { className: "stack" });
         const seedPresets = (policy.chastity_unlock_presets && policy.chastity_unlock_presets.length)
@@ -23999,11 +24725,15 @@ function renderSettings() {
           presetHost.appendChild(line);
         }
         seedPresets.forEach((preset) => addPresetRow(preset));
-        let chastityBaseline = JSON.stringify({
-          allow: allowDelete.checked,
-          relock: autoRelock.checked,
-          presets: readPresets(),
-        });
+        function chastitySnapshot() {
+          return JSON.stringify({
+            allow: allowDelete.checked,
+            relock: autoRelock.checked,
+            meters: headerMeters.checked,
+            presets: readPresets(),
+          });
+        }
+        let chastityBaseline = chastitySnapshot();
         const chastityStatus = el("p", { className: "muted" });
         const chastityError = el("div", { className: "error hidden" });
         const chastityCard = el("div", { className: "card stack" }, [
@@ -24019,6 +24749,10 @@ function renderSettings() {
               el("label", { className: "checkbox-label" }, [
                 autoRelock,
                 " Lock again after an orgasm release",
+              ]),
+              el("label", { className: "checkbox-label" }, [
+                headerMeters,
+                " Start header meters collapsed (click chips to reveal)",
               ]),
               el("h3", {}, "Unlock presets"),
               presetHost,
@@ -24040,16 +24774,8 @@ function renderSettings() {
         }
         stack.appendChild(chastityCard);
         draft.register({
-          isDirty: () => JSON.stringify({
-            allow: allowDelete.checked,
-            relock: autoRelock.checked,
-            presets: readPresets(),
-          }) !== chastityBaseline,
-          needsApproval: () => isSubmissive && JSON.stringify({
-            allow: allowDelete.checked,
-            relock: autoRelock.checked,
-            presets: readPresets(),
-          }) !== chastityBaseline,
+          isDirty: () => chastitySnapshot() !== chastityBaseline,
+          needsApproval: () => isSubmissive && chastitySnapshot() !== chastityBaseline,
           save: async () => {
             chastityError.classList.add("hidden");
             const presets = readPresets();
@@ -24081,6 +24807,7 @@ function renderSettings() {
               }
               allowDelete.checked = current.allow;
               autoRelock.checked = current.relock;
+              headerMeters.checked = current.meters !== false;
               chastityStatus.textContent = "Change request sent to keyholder.";
               return "Chastity policy request submitted";
             }
@@ -24092,11 +24819,14 @@ function renderSettings() {
                 unlock_presets: presets,
               }),
             });
-            chastityBaseline = JSON.stringify({
-              allow: allowDelete.checked,
-              relock: autoRelock.checked,
-              presets,
-            });
+            if (goalsConfig) {
+              goalsConfig.header_hidden = headerMeters.checked;
+              await api(`/dynamics/${initialDynamicId}/chastity-goals`, {
+                method: "PUT",
+                body: JSON.stringify(goalsConfig),
+              });
+            }
+            chastityBaseline = chastitySnapshot();
             chastityStatus.textContent = "Saved.";
             return "Chastity policy saved";
           },
@@ -24420,7 +25150,7 @@ async function renderRoute() {
       if (parts[3] === "history") return renderChastityPriorHistory(dynamicId);
       return renderChastity(dynamicId);
     }
-    if (parts[2] === "acts") return renderActs(dynamicId);
+    if (parts[2] === "acts") return renderTasks(dynamicId);
     if (parts[2] === "gear") return renderGear(dynamicId);
     if (parts[2] === "vault") return renderVault(dynamicId);
     if (parts[2] === "features") return renderFeatureSettings(dynamicId);

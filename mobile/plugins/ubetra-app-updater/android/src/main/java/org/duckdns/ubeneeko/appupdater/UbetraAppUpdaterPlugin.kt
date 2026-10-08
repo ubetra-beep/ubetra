@@ -1,10 +1,6 @@
 package org.duckdns.ubeneeko.appupdater
 
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -18,6 +14,9 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
 import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 
 @CapacitorPlugin(name = "UbetraAppUpdater")
 class UbetraAppUpdaterPlugin : Plugin() {
@@ -63,54 +62,52 @@ class UbetraAppUpdaterPlugin : Plugin() {
         }
         if (!dir.exists()) dir.mkdirs()
         val apk = File(dir, "ubetra.apk")
-        if (apk.exists()) apk.delete()
-
-        val request = DownloadManager.Request(Uri.parse(url))
-        request.setMimeType("application/vnd.android.package-archive")
-        request.setTitle("ubetra.apk")
-        request.setDescription("UBETRA update")
-        request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-        request.setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "ubetra.apk")
-        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val downloadId = manager.enqueue(request)
-        call.setKeepAlive(true)
-        val started = JSObject()
-        started.put("status", "started")
-        notifyListeners("progress", started)
-
-        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                val done = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-                if (done != downloadId) return
-                try {
-                    context.unregisterReceiver(this)
-                } catch (_: Exception) {
-                }
-                val cursor = manager.query(DownloadManager.Query().setFilterById(downloadId))
-                var success = false
-                if (cursor != null && cursor.moveToFirst()) {
-                    val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                    success = statusIdx >= 0 && cursor.getInt(statusIdx) == DownloadManager.STATUS_SUCCESSFUL
-                }
-                cursor?.close()
-                if (!success || !apk.exists()) {
-                    call.reject("Download failed")
-                    return
-                }
-                val finished = JSObject()
-                finished.put("status", "complete")
-                notifyListeners("progress", finished)
-                openInstaller(apk)
-                val ret = JSObject()
-                ret.put("installed", true)
-                call.resolve(ret)
+        val tmp = File(dir, "ubetra.apk.part")
+        if (tmp.exists()) tmp.delete()
+        var conn: HttpURLConnection? = null
+        try {
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true
+                connectTimeout = 20000
+                readTimeout = 120000
+                setRequestProperty("Accept-Encoding", "identity")
+                setRequestProperty("User-Agent", "UBETRA-updater")
             }
-        }
-        if (Build.VERSION.SDK_INT >= 33) {
-            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            context.registerReceiver(receiver, filter)
+            val code = conn.responseCode
+            if (code != HttpURLConnection.HTTP_OK) {
+                call.reject("Download failed ($code)")
+                return
+            }
+            conn.inputStream.use { input ->
+                FileOutputStream(tmp).use { output ->
+                    val buf = ByteArray(65536)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        output.write(buf, 0, n)
+                    }
+                }
+            }
+            if (tmp.length() < 100000L) {
+                tmp.delete()
+                call.reject("Download failed")
+                return
+            }
+            if (apk.exists()) apk.delete()
+            if (!tmp.renameTo(apk)) {
+                tmp.copyTo(apk, overwrite = true)
+                tmp.delete()
+            }
+            val host = activity
+            if (host != null) host.runOnUiThread { openInstaller(apk) } else openInstaller(apk)
+            val ret = JSObject()
+            ret.put("installed", true)
+            call.resolve(ret)
+        } catch (err: Exception) {
+            tmp.delete()
+            call.reject(err.message ?: "Download failed")
+        } finally {
+            conn?.disconnect()
         }
     }
 

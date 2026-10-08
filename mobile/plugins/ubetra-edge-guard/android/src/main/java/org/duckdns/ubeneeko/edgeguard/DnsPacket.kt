@@ -69,4 +69,92 @@ object DnsPacket {
         for (i in 4..11) out[i] = 0
         return out
     }
+
+    /** True when the DNS header says the UDP answer was truncated. */
+    fun isTruncated(message: ByteArray): Boolean {
+        if (message.size < 3) return false
+        return (message[2].toInt() and 0x02) != 0
+    }
+
+    /**
+     * Fit a DNS answer into one UDP packet and clear the truncated bit.
+     * Clients otherwise open TCP to the VPN DNS address, which this filter does not serve.
+     */
+    fun fitForUdp(message: ByteArray, maxSize: Int): ByteArray {
+        if (message.size < 12 || maxSize < 12) return message
+        if (message.size <= maxSize && !isTruncated(message)) return message
+
+        val questionEnd = endOfQuestions(message) ?: return clearTruncated(message.copyOf(minOf(message.size, maxSize)))
+        if (questionEnd > maxSize) return clearTruncated(message.copyOf(maxSize))
+
+        val answerCount = u16(message, 6)
+        var offset = questionEnd
+        var kept = 0
+        var end = questionEnd
+        for (i in 0 until answerCount) {
+            val next = skipRecord(message, offset) ?: break
+            if (next > maxSize) break
+            offset = next
+            end = next
+            kept++
+        }
+        val out = clearTruncated(message.copyOf(end))
+        putU16(out, 6, kept)
+        putU16(out, 8, 0)
+        putU16(out, 10, 0)
+        return out
+    }
+
+    private fun clearTruncated(message: ByteArray): ByteArray {
+        if (message.size < 3) return message
+        message[2] = (message[2].toInt() and 0xFD).toByte()
+        return message
+    }
+
+    private fun endOfQuestions(message: ByteArray): Int? {
+        val count = u16(message, 4)
+        var offset = 12
+        for (i in 0 until count) {
+            offset = skipName(message, offset) ?: return null
+            if (offset + 4 > message.size) return null
+            offset += 4
+        }
+        return offset
+    }
+
+    private fun skipRecord(message: ByteArray, start: Int): Int? {
+        var offset = skipName(message, start) ?: return null
+        if (offset + 10 > message.size) return null
+        val rdLength = u16(message, offset + 8)
+        offset += 10 + rdLength
+        if (offset > message.size) return null
+        return offset
+    }
+
+    private fun skipName(message: ByteArray, start: Int): Int? {
+        var offset = start
+        var jumps = 0
+        while (offset < message.size && jumps < 16) {
+            val len = message[offset].toInt() and 0xFF
+            if (len == 0) return offset + 1
+            if ((len and 0xC0) == 0xC0) {
+                if (offset + 1 >= message.size) return null
+                return offset + 2
+            }
+            if (offset + 1 + len > message.size) return null
+            offset += 1 + len
+            jumps++
+        }
+        return null
+    }
+
+    private fun u16(buf: ByteArray, offset: Int): Int {
+        if (offset + 1 >= buf.size) return 0
+        return ((buf[offset].toInt() and 0xFF) shl 8) or (buf[offset + 1].toInt() and 0xFF)
+    }
+
+    private fun putU16(buf: ByteArray, offset: Int, value: Int) {
+        buf[offset] = (value ushr 8).toByte()
+        buf[offset + 1] = (value and 0xFF).toByte()
+    }
 }

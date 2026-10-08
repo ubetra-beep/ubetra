@@ -290,6 +290,8 @@ class Dynamic(Base):
     # JSON list of minutes before due, e.g. [30, 10]
     task_reminder_offsets: Mapped[str] = mapped_column(Text, default="[15]")
     task_complete_notify: Mapped[bool] = mapped_column(Boolean, default=True)
+    # How many days of completed tasks the Tasks screen lists
+    task_completed_history_days: Mapped[int] = mapped_column(Integer, default=9)
     # off | auto | client | cuda — smart censor on the sub's display only
     ml_censor_mode: Mapped[str] = mapped_column(String(16), default="off")
     # When True, only the keyholder can clear chat history
@@ -624,6 +626,22 @@ class TaskCompletion(Base):
     late: Mapped[bool] = mapped_column(Boolean, default=False)
     completed_by_membership_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     content_snippet: Mapped[str] = mapped_column(String(200), default="")
+
+
+class TaskLibraryItem(Base):
+    """Reusable task text. Deleting a row does not remove completion logs."""
+
+    __tablename__ = "task_library"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(String(36), index=True)
+    content_key: Mapped[str] = mapped_column(String(200), default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    tags: Mapped[str] = mapped_column(String(500), default="")
+    recurrence: Mapped[str] = mapped_column(String(16), default="none")
+    recurrence_interval: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class ChatMessage(Base):
