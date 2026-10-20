@@ -5152,6 +5152,10 @@ details[open] summary {
 .task-suggest-row.unchecked .task-suggest-text {
   text-decoration: line-through;
 }
+.chat-check-in-card {
+  border-left: 3px solid var(--accent, #c084fc);
+  margin: 0.35rem 0;
+}
 .task-chip,
 .task-goal-chip {
   font-size: 0.75rem;

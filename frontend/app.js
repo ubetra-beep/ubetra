@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v163";
+const CLIENT_SW_CACHE = "ubetra-v164";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -4541,6 +4541,26 @@ function showUpdatePopover() {
       reloadAppShell();
     },
   }, "Reload now"));
+  kids.push(el("button", {
+    type: "button",
+    className: "ghost-btn",
+    onClick: async () => {
+      try {
+        const dynId = getActiveDynamicId();
+        const path = dynId
+          ? `/push/reload-all?dynamic_id=${encodeURIComponent(dynId)}`
+          : "/push/reload";
+        const result = await api(path, { method: "POST" });
+        showToast(
+          dynId
+            ? `Refresh sent to ${result.users || 0} partner(s) · ${result.devices || 0} device(s)`
+            : `Refresh sent to your devices (${result.devices || 0})`
+        );
+      } catch (err) {
+        showToast(err.message || "Could not send refresh");
+      }
+    },
+  }, "Push refresh to phones"));
   if (appUpdateState.apkNewer && android?.available) {
     kids.push(
       el("p", {}, `A newer Android APK (${android.version || android.version_code}) is on this server. That is a package install, not a WebView reload.`),
@@ -21004,7 +21024,8 @@ function parseChatActionBody(body, dynamicId) {
           onClick: (ev) => {
             ev.preventDefault();
             ev.stopPropagation();
-            navigate(path.startsWith("/") ? path : `/${path}`);
+            const target = path.startsWith("/") ? path : `/${path}`;
+            navigate(target);
           },
         },
         label
@@ -21051,6 +21072,15 @@ function isUnrespondedPunishmentLog(msg, pendingIds) {
   return !!(reportId && pendingIds?.has(reportId));
 }
 
+function chatDeepLinkPath(msg) {
+  const fromPayload = String(msg?.payload?.path || "").trim();
+  if (fromPayload) return fromPayload.startsWith("/") ? fromPayload : `/${fromPayload}`;
+  const match = String(msg?.body || "").match(/\[\[ubetra:([^|\]]+)\|/);
+  if (!match) return "";
+  const path = match[1].trim();
+  return path.startsWith("/") ? path : `/${path}`;
+}
+
 function renderChatLogLine(msg, dynamicId, pendingPunishmentIds) {
   const parsed = parseSystemEventBody(msg.body);
   const who = parsed.fromLabel || msg.sender_display_name || "Log";
@@ -21062,6 +21092,29 @@ function renderChatLogLine(msg, dynamicId, pendingPunishmentIds) {
     " ",
     ...parseChatActionBody(parsed.text, dynamicId),
   ]);
+}
+
+function renderCheckInChatCard(msg, dynamicId) {
+  const path = chatDeepLinkPath(msg) || `/dynamic/${dynamicId}/check-in`;
+  const parsed = parseSystemEventBody(msg.body);
+  const label = msg.payload?.link_label || "Open check-in";
+  return el("div", { className: "card stack chat-check-in-card" }, [
+    el("strong", {}, parsed.fromLabel || "Check-in"),
+    el("p", {}, stripChatMarkers(parsed.text) || "Relationship check-in"),
+    el("button", {
+      className: "primary-btn",
+      type: "button",
+      onClick: (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        navigate(path);
+      },
+    }, label),
+  ]);
+}
+
+function isCheckInChatMessage(msg) {
+  return String(msg?.action || "").startsWith("relationship_check_in");
 }
 
 function isActivityLogMessage(msg) {
@@ -21545,6 +21598,11 @@ function renderChat(dynamicId) {
       nodes.push(renderChatLogGroup(pendingLogs.splice(0), id, expandedLogGroups, pendingPunishmentIds));
     };
     for (const msg of lastMessages) {
+      if (isCheckInChatMessage(msg)) {
+        flushPendingLogs();
+        if (showActivityLogs) nodes.push(renderCheckInChatCard(msg, id));
+        continue;
+      }
       if (isActivityLogMessage(msg)) {
         if (showActivityLogs) pendingLogs.push(msg);
         continue;

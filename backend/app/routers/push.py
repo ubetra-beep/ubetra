@@ -169,3 +169,47 @@ def unsubscribe_native_push(
     q.delete(synchronize_session=False)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/reload")
+def reload_my_clients(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """Tell this account's phones/browsers to clear cache and reload."""
+    from ..services.push import notify_app_reload
+
+    devices = notify_app_reload(db, user_id=user.id)
+    return {"ok": True, "devices": devices}
+
+
+@router.post("/reload-all")
+def reload_all_clients(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    dynamic_id: Annotated[str | None, Query()] = None,
+) -> dict:
+    """Keyholder: reload both partners in a dynamic. Without dynamic_id, reload every account (host only use)."""
+    from ..models import Membership, PartnerRole
+    from ..services.push import broadcast_app_reload, broadcast_app_reload_for_dynamic
+
+    if dynamic_id:
+        membership = (
+            db.query(Membership)
+            .filter(Membership.dynamic_id == dynamic_id, Membership.user_id == user.id)
+            .first()
+        )
+        if membership is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+        if membership.role != PartnerRole.dominant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the keyholder can refresh both partners' apps.",
+            )
+        result = broadcast_app_reload_for_dynamic(db, dynamic_id)
+        return {"ok": True, **result}
+
+    # Full-server broadcast: any signed-in user on a private install may trigger
+    # (same trust model as holding the LLM keys). Prefer dynamic_id in couples use.
+    result = broadcast_app_reload(db)
+    return {"ok": True, **result}

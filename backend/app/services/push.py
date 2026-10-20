@@ -471,6 +471,48 @@ def notify_app_reload(db: Session, *, user_id: str) -> int:
     )
 
 
+def broadcast_app_reload(
+    db: Session,
+    *,
+    user_ids: set[str] | None = None,
+    title: str = "UBETRA update",
+    body: str = "Refreshing to load the latest version…",
+) -> dict[str, int]:
+    """Push kind=reload to many users. Open apps reload; closed ones show a tap-to-refresh banner."""
+    from ..models import User
+
+    if user_ids is None:
+        user_ids = {row[0] for row in db.query(User.id).all()}
+    sent = 0
+    users = 0
+    for uid in user_ids:
+        if not uid:
+            continue
+        users += 1
+        sent += notify_user_devices(
+            db,
+            user_id=uid,
+            title=title[:80],
+            body=(body or "")[:160],
+            url="/#/home",
+            tag="ubetra-reload",
+            kind="reload",
+            respect_push_enabled=False,
+        )
+    return {"users": users, "devices": sent}
+
+
+def broadcast_app_reload_for_dynamic(db: Session, dynamic_id: str) -> dict[str, int]:
+    from ..models import Membership
+
+    ids = {
+        m.user_id
+        for m in db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
+        if m.user_id
+    }
+    return broadcast_app_reload(db, user_ids=ids)
+
+
 def notify_password_reset_push(
     db: Session,
     *,

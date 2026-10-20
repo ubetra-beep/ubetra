@@ -17,6 +17,7 @@ COPY backend ./backend
 COPY frontend ./frontend
 COPY wiki ./wiki
 COPY plugins ./plugins
+COPY scripts ./scripts
 COPY VERSION ./VERSION
 
 RUN mkdir -p /app/backend/data /app/backend/data/redgifs

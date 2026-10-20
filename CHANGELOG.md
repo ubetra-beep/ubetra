@@ -3,6 +3,17 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.18] — 2026-10-20
+
+### Fixed
+- Relationship check-in Chat links open as a clear card (not buried in collapsed activity logs)
+
+### Added
+- Server can push `kind=reload` so phones clear cache and refresh after deploy (`scripts/broadcast_reload.py`, Update app → Push refresh to phones)
+
+### Changed
+- Service worker cache `ubetra-v164`
+
 ## [1.17] — 2026-10-20
 
 ### Added
