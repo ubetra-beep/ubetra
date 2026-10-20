@@ -340,6 +340,8 @@ class Dynamic(Base):
     instructor_live: Mapped[str] = mapped_column(Text, default="")
     # JSON: Assistant Domme agent grants {grants, session}
     assistant_permissions: Mapped[str] = mapped_column(Text, default="")
+    # Last time a quarterly relationship check-in invite was posted to Chat
+    check_in_invite_posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     memberships: Mapped[list["Membership"]] = relationship(
         back_populates="dynamic",
@@ -356,6 +358,9 @@ class Dynamic(Base):
     )
     agreements: Mapped[list["Agreement"]] = relationship(
         back_populates="dynamic", order_by="Agreement.position"
+    )
+    relationship_check_ins: Mapped[list["RelationshipCheckIn"]] = relationship(
+        back_populates="dynamic"
     )
     chat_messages: Mapped[list["ChatMessage"]] = relationship(back_populates="dynamic")
     chat_key_transfers: Mapped[list["ChatKeyTransfer"]] = relationship(back_populates="dynamic")
@@ -951,6 +956,23 @@ class ChastityBreak(Base):
     created_by_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
 
     lockup: Mapped[ChastityLockup] = relationship(back_populates="breaks")
+
+
+class RelationshipCheckIn(Base):
+    """Shared LLM review of interviews, ground rules, and tracking logs."""
+
+    __tablename__ = "relationship_check_ins"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    created_by_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    report_text: Mapped[str] = mapped_column(Text, default="")
+    period_start: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    period_end: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    window_days: Mapped[int] = mapped_column(Integer, default=90)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dynamic: Mapped["Dynamic"] = relationship(back_populates="relationship_check_ins")
 
 
 class Agreement(Base):

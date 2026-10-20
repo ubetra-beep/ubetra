@@ -3,6 +3,15 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.17] — 2026-10-20
+
+### Added
+- Relationship check-in: LLM reviews both interviews, ground rules, and orgasm/chastity logs, then posts a shared report in Chat with a push to both partners
+- Chat invite link every 3 months (or immediately when the oldest tracking log is already 3+ months old)
+
+### Changed
+- Service worker cache `ubetra-v163`
+
 ## [1.16] — 2026-10-19
 
 ### Added

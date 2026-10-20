@@ -286,6 +286,27 @@ class SuggestedAgreementsOut(BaseModel):
     reason: str = ""
 
 
+class RelationshipCheckInOut(BaseModel):
+    id: str
+    report_text: str
+    period_start: datetime
+    period_end: datetime
+    window_days: int
+    created_at: datetime
+    created_by_display_name: str = ""
+
+
+class RelationshipCheckInStatusOut(BaseModel):
+    ready: bool
+    reason: str = ""
+    due: bool = False
+    earliest_tracking_at: datetime | None = None
+    last_check_in_at: datetime | None = None
+    invite_posted_at: datetime | None = None
+    latest: RelationshipCheckInOut | None = None
+    history: list[RelationshipCheckInOut] = Field(default_factory=list)
+
+
 class KinkExamplesOut(BaseModel):
     examples: list[str]
 

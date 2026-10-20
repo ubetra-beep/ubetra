@@ -19,6 +19,7 @@ from .routers import (
     assistant,
     auth,
     chastity,
+    check_in,
     context_links,
     core_knowledge,
     dynamics,
@@ -81,6 +82,7 @@ app.include_router(punishments.router, prefix="/api")
 app.include_router(history_dashboard.router, prefix="/api")
 app.include_router(chastity.router, prefix="/api")
 app.include_router(agreements.router, prefix="/api")
+app.include_router(check_in.router, prefix="/api")
 app.include_router(acts.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(gear.router, prefix="/api")
@@ -116,9 +118,11 @@ def on_startup() -> None:
         db.close()
     from .services.task_notify import start_task_notify_loop
     from .services.edge_guard import start_edge_guard_loop
+    from .services.relationship_check_in import start_check_in_loop
 
     start_task_notify_loop()
     start_edge_guard_loop()
+    start_check_in_loop()
 
 
 @app.get("/api/health")

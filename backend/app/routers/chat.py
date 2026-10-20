@@ -448,6 +448,12 @@ def list_messages(
 
     _purge_expired(db, dynamic_id)
     _purge_trashed_chat(db, dynamic_id)
+    try:
+        from ..services.relationship_check_in import maybe_post_invite_for_dynamic
+
+        maybe_post_invite_for_dynamic(db, dynamic_id)
+    except Exception:
+        pass
     db.commit()
 
     messages = (

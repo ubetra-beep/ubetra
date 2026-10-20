@@ -68,6 +68,7 @@ def post_activity_event(
     subject_membership_id: str | None = None,
     from_label: str | None = None,
     extra: dict | None = None,
+    force: bool = False,
 ) -> None:
     """Structured, clickable activity log for chat."""
     link = f"[[ubetra:{path}|{link_label}]]"
@@ -86,6 +87,7 @@ def post_activity_event(
         from_label=from_label,
         action=action,
         payload=payload,
+        force=force,
     )
 
 

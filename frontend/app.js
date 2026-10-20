@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v162";
+const CLIENT_SW_CACHE = "ubetra-v163";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -155,6 +155,7 @@ const FACET_SECTIONS = [
     items: [
       { id: "ground_rules", icon: "🛡", title: "Ground rules", subtitle: "Agreements and boundaries", core: true, route: "ground-rules" },
       { id: "interview", icon: "🎙", title: "Dynamic interview", subtitle: "Tell the AI what you want here", core: true, route: "interview", badge: "interview" },
+      { id: "check_in", icon: "🪞", title: "Relationship check-in", subtitle: "Quarterly AI review for both of you", core: true, route: "check-in" },
       { id: "kink_list", icon: "📋", title: "Kink list", subtitle: "Want / if partner / not into", core: true, route: "survey", badge: "survey" },
     ],
   },
@@ -5384,7 +5385,7 @@ function updateBottomNav() {
     !enabledFeatures.length || enabledFeatures.includes("scene_workshop");
   const trackingRoutes = new Set([
     "track", "tracking", "chastity", "feelings", "punishment", "sleep",
-    "history", "vault", "journal", "ground-rules", "interview", "survey",
+    "history", "vault", "journal", "ground-rules", "interview", "check-in", "survey",
     "knowledge", "context", "gear", "features", "overlap",
   ]);
   const playtimeRoutes = new Set(["assistant", "tasks", "acts", "manga", "instructor"]);
@@ -17630,6 +17631,145 @@ function renderChastityRulesPanel(dynamicId, settings, limitProposals, { onChang
   return wrap;
 }
 
+function formatCheckInWhen(iso) {
+  if (!iso) return "";
+  return formatLocalDateTime(iso, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function renderCheckInReportBody(text) {
+  const wrap = el("div", { className: "stack check-in-report" });
+  String(text || "").split(/\n{2,}/).forEach((block) => {
+    const lines = block.split("\n");
+    const first = (lines[0] || "").trim();
+    if (/^\*\*.+\*\*$/.test(first) || /^#{1,3}\s/.test(first)) {
+      const title = first.replace(/^#{1,3}\s*/, "").replace(/^\*\*|\*\*$/g, "");
+      wrap.appendChild(el("h3", {}, title));
+      const rest = lines.slice(1).join("\n").trim();
+      if (rest) wrap.appendChild(el("p", { style: "white-space:pre-wrap" }, rest));
+    } else {
+      wrap.appendChild(el("p", { style: "white-space:pre-wrap" }, block.trim()));
+    }
+  });
+  return wrap;
+}
+
+function renderRelationshipCheckIn(dynamicId, focusId = "") {
+  setViewContent(el("p", { className: "muted" }, "Loading check-in…"));
+  Promise.all([
+    api(`/dynamics/${dynamicId}/check-in`),
+    loadDynamic(dynamicId),
+    focusId ? api(`/dynamics/${dynamicId}/check-in/${focusId}`).catch(() => null) : Promise.resolve(null),
+  ])
+    .then(([status, , focused]) => {
+      const error = el("div", { className: "error hidden" });
+      const busy = el("p", { className: "muted hidden" });
+      const reportHost = el("div", { className: "card stack" });
+      const showReport = (report) => {
+        if (!report) {
+          reportHost.replaceChildren(el("p", { className: "muted" }, "No check-in report yet."));
+          return;
+        }
+        reportHost.replaceChildren(
+          el("h2", {}, "Shared report"),
+          el("p", { className: "muted" }, [
+            formatCheckInWhen(report.created_at),
+            report.created_by_display_name ? ` · by ${report.created_by_display_name}` : "",
+            ` · last ${report.window_days || 90} days of logs`,
+          ].join("")),
+          renderCheckInReportBody(report.report_text),
+        );
+      };
+      showReport(focused || status.latest);
+
+      const stack = el("div", { className: "stack" }, [
+        el("h1", {}, "Relationship check-in"),
+        el(
+          "p",
+          { className: "muted" },
+          "The AI reviews both interviews, approved ground rules, and orgasm & chastity logs, then posts a shared report in Chat for both of you. Invites appear in Chat every 3 months (or sooner if your oldest tracking log is already that old)."
+        ),
+        el("p", { className: "muted" }, [
+          status.due ? "A check-in is due. " : "Not due yet. ",
+          status.earliest_tracking_at
+            ? `Oldest tracking log: ${formatCheckInWhen(status.earliest_tracking_at)}. `
+            : "No orgasm/chastity logs yet. ",
+          status.last_check_in_at
+            ? `Last check-in: ${formatCheckInWhen(status.last_check_in_at)}.`
+            : "No check-in completed yet.",
+        ].join("")),
+        error,
+        busy,
+        el("div", { className: "row wrap" }, [
+          el("button", {
+            className: "primary-btn",
+            type: "button",
+            disabled: !status.ready,
+            onClick: async () => {
+              error.classList.add("hidden");
+              busy.textContent = "Writing your check-in… this can take a minute.";
+              busy.classList.remove("hidden");
+              try {
+                const report = await api(`/dynamics/${dynamicId}/check-in/generate`, { method: "POST" });
+                showToast("Check-in posted to Chat for both of you.");
+                navigate(`/dynamic/${dynamicId}/check-in/${report.id}`);
+              } catch (err) {
+                busy.classList.add("hidden");
+                error.textContent = err.message;
+                error.classList.remove("hidden");
+              }
+            },
+          }, status.ready ? "Run check-in now" : "Not ready"),
+          el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: async () => {
+              error.classList.add("hidden");
+              try {
+                await api(`/dynamics/${dynamicId}/check-in/invite`, { method: "POST" });
+                showToast("Check-in link posted in Chat.");
+                navigate(`/chat/${dynamicId}`);
+              } catch (err) {
+                error.textContent = err.message;
+                error.classList.remove("hidden");
+              }
+            },
+          }, "Post Chat invite"),
+        ]),
+        status.ready
+          ? null
+          : el("p", { className: "muted" }, status.reason || "Finish setup before running a check-in."),
+        reportHost,
+      ]);
+
+      if ((status.history || []).length > 1) {
+        const hist = el("div", { className: "card stack" }, [el("h3", {}, "Earlier check-ins")]);
+        status.history.forEach((row) => {
+          if (focused?.id === row.id || (!focused && status.latest?.id === row.id)) return;
+          hist.appendChild(el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${dynamicId}/check-in/${row.id}`),
+          }, formatCheckInWhen(row.created_at) || row.id.slice(0, 8)));
+        });
+        stack.appendChild(hist);
+      }
+
+      stack.appendChild(el("button", {
+        className: "ghost-btn",
+        type: "button",
+        onClick: () => navigate(`/chat/${dynamicId}`),
+      }, "Back to Chat"));
+      setViewContent(stack);
+    })
+    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+}
+
 function renderGroundRules(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading agreements..."));
   Promise.all([
@@ -25252,6 +25392,7 @@ async function renderRoute() {
     }
     if (parts[2] === "survey") return renderSurvey(dynamicId);
     if (parts[2] === "ground-rules") return renderGroundRules(dynamicId);
+    if (parts[2] === "check-in") return renderRelationshipCheckIn(dynamicId, parts[3] || "");
     if (parts[2] === "overlap") return renderOverlap(dynamicId);
     if (parts[2] === "tasks") return renderTasks(dynamicId);
     if (parts[2] === "knowledge") {

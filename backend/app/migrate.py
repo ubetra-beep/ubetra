@@ -1855,6 +1855,39 @@ def _migrate_1_14(conn) -> None:
       text("CREATE UNIQUE INDEX IF NOT EXISTS uq_task_library_key ON task_library (dynamic_id, content_key)")
     )
 
+  dynamic_columns = {
+    row[1]
+    for row in conn.execute(text("PRAGMA table_info(dynamics)")).fetchall()
+  }
+  if "check_in_invite_posted_at" not in dynamic_columns:
+    conn.execute(text("ALTER TABLE dynamics ADD COLUMN check_in_invite_posted_at DATETIME"))
+
+  tables = {
+    row[0]
+    for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+  }
+  if "relationship_check_ins" not in tables:
+    conn.execute(
+      text(
+        "CREATE TABLE relationship_check_ins ("
+        "id VARCHAR(36) PRIMARY KEY, "
+        "dynamic_id VARCHAR(36) NOT NULL REFERENCES dynamics(id), "
+        "created_by_membership_id VARCHAR(36) NOT NULL REFERENCES memberships(id), "
+        "report_text TEXT DEFAULT '', "
+        "period_start DATETIME, "
+        "period_end DATETIME, "
+        "window_days INTEGER DEFAULT 90, "
+        "created_at DATETIME"
+        ")"
+      )
+    )
+    conn.execute(
+      text(
+        "CREATE INDEX IF NOT EXISTS ix_relationship_check_ins_dynamic_id "
+        "ON relationship_check_ins (dynamic_id)"
+      )
+    )
+
   existing_library = {
     (row[0], row[1])
     for row in conn.execute(text("SELECT dynamic_id, content_key FROM task_library")).fetchall()

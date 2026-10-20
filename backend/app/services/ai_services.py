@@ -91,6 +91,14 @@ AI_TOOLS: dict[str, AiToolSpec] = {
         needs=(CAP_TEXT, CAP_TEXT_NSFW),
         recommend_providers=(LlmProvider.lmstudio.value, LlmProvider.openrouter.value),
     ),
+    "check_in": AiToolSpec(
+        id="check_in",
+        label="Relationship check-in",
+        description="Quarterly review of interviews, ground rules, and tracking logs for both partners.",
+        needs=(CAP_TEXT, CAP_TEXT_NSFW),
+        recommend_providers=(LlmProvider.lmstudio.value, LlmProvider.openrouter.value),
+        recommend_note="Uses both partners' interview summaries for a shared report.",
+    ),
     "interests": AiToolSpec(
         id="interests",
         label="Kink survey assist",
