@@ -5117,6 +5117,41 @@ details[open] summary {
   min-width: 0;
   font-weight: 600;
 }
+.task-emoji {
+  flex: 0 0 auto;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+.task-emoji-schedule {
+  margin-left: auto;
+}
+.task-flat-list {
+  gap: 0;
+}
+.task-suggest-panel::before {
+  content: none;
+}
+.task-suggest-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.task-suggest-row > input[type="checkbox"] {
+  margin-top: 0.6rem;
+  flex: 0 0 auto;
+}
+.task-suggest-row > .stack {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.task-suggest-row.unchecked {
+  opacity: 0.45;
+}
+.task-suggest-row.unchecked .task-suggest-text {
+  text-decoration: line-through;
+}
 .task-chip,
 .task-goal-chip {
   font-size: 0.75rem;

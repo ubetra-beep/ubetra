@@ -1,4 +1,4 @@
-const CACHE = "ubetra-v157";
+const CACHE = "ubetra-v162";
 const ASSETS = [
   "/",
   "/assets/styles.css",
@@ -52,14 +52,15 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   // Network-first for app shell so nav/UI fixes apply without a stuck History tab.
+  const fresh = request.mode === "navigate" ? fetch(request) : fetch(request, { cache: "no-cache" });
   event.respondWith(
-    fetch(request)
+    fresh
       .then((response) => {
         const copy = response.clone();
         caches.open(CACHE).then((cache) => cache.put(request, copy));
         return response;
       })
-      .catch(() => caches.match(request))
+      .catch(() => caches.match(request, { ignoreSearch: true }))
   );
 });
 

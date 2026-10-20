@@ -1,6 +1,6 @@
 # UBETRA
 
-**Version:** `1.15` (beta)
+**Version:** `1.16` (beta)
 
 Self-hosted private planner for consensual adult relationship dynamics. Runs as a Progressive Web App (PWA) on your own hardware — **not** a hosted SaaS.
 

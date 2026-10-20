@@ -101,6 +101,7 @@ class PasswordResetConfirm(BaseModel):
 class PasswordResetOk(BaseModel):
     ok: bool = True
     detail: str = ""
+    access_token: str | None = None
 
 
 class UserUsernameUpdate(BaseModel):
@@ -521,6 +522,22 @@ class TaskAssistIn(BaseModel):
 
 class TaskAssistOut(BaseModel):
     text: str
+
+
+class TaskSuggestIn(BaseModel):
+    note: str = Field(default="", max_length=2000)
+    count: int = Field(default=6, ge=1, le=12)
+    avoid: list[str] = Field(default_factory=list, max_length=100)
+
+
+class TaskSuggestionOut(BaseModel):
+    content: str
+    tag: str = ""
+    schedule: Literal["am", "noon", "pm", "oneoff"] = "oneoff"
+
+
+class TaskSuggestOut(BaseModel):
+    suggestions: list[TaskSuggestionOut]
 
 
 class RegimenTagNote(BaseModel):

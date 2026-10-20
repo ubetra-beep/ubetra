@@ -22,6 +22,14 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
+def verify_login_password(plain: str, hashed: str) -> bool:
+    """Accept the password as typed, or without stray spaces a phone keyboard can add."""
+    if verify_password(plain, hashed):
+        return True
+    trimmed = (plain or "").strip()
+    return bool(trimmed) and trimmed != plain and verify_password(trimmed, hashed)
+
+
 def create_access_token(user_id: str) -> str:
     expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
     payload = {"sub": user_id, "exp": expire}

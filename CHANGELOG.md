@@ -3,6 +3,19 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.16] — 2026-10-19
+
+### Added
+- Flat task list with tag and schedule emoji (no Overdue / Due today / Upcoming / Recurring section menus)
+- Create task is one ad-hoc task; multi-task ideas use **Suggest tasks with assistant** (inline edit, check to keep)
+- Password reset signs you in; sessions last 30 days and renew while you use the app
+- OpenRouter diagnostics pack for self-hosters: [`help/for-Sindy/`](help/for-Sindy/)
+
+### Changed
+- Login tolerates stray password spaces; public auth routes skip stale Bearer tokens
+- App shell assets are version-stamped so phones pick up UI updates without clearing storage
+- Service worker cache `ubetra-v162`
+
 ## [1.15] — 2026-10-06
 
 ### Added

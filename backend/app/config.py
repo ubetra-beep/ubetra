@@ -11,7 +11,7 @@ CATALOG_PATH = DATA_DIR / "interest_catalog.json"
 class Settings(BaseSettings):
     secret_key: str = "dev-only-change-me-in-production"
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24 * 7
+    access_token_expire_minutes: int = 60 * 24 * 30
     database_url: str = f"sqlite:///{DB_PATH.as_posix()}"
     cors_origins: list[str] = ["http://localhost:8000", "http://127.0.0.1:8000"]
     gemini_api_key: str = ""

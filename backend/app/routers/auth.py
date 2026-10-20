@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Annotated
 
@@ -5,7 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..auth import create_access_token, get_current_user, hash_password, verify_password
+from ..auth import (
+    create_access_token,
+    get_current_user,
+    hash_password,
+    verify_login_password,
+    verify_password,
+)
 from ..config import settings
 from ..database import get_db
 from ..models import Membership, User
@@ -39,6 +46,7 @@ from ..services.mfa import (
 from ..services.tasks_service import default_reminder_offsets, serialize_reminder_offsets
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger("ubetra.auth")
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{2,63}$")
@@ -187,10 +195,33 @@ def _find_login_user(db: Session, identifier: str) -> User | None:
     )
 
 
+def _mask_identifier(identifier: str) -> str:
+    ident = (identifier or "").strip()
+    if "@" in ident:
+        local, _, domain = ident.partition("@")
+        return f"{local[:2]}***@{domain}"
+    return f"{ident[:2]}***" if ident else "(empty)"
+
+
+def _log_login_failure(identifier: str, password: str, user: User | None) -> None:
+    raw = identifier or ""
+    pw = password or ""
+    logger.warning(
+        "Login failed: ident=%s ident_len=%d ident_padded=%s account=%s pw_len=%d pw_padded=%s",
+        _mask_identifier(raw),
+        len(raw),
+        raw != raw.strip(),
+        user.username if user is not None else "NOT_FOUND",
+        len(pw),
+        pw != pw.strip(),
+    )
+
+
 @router.post("/login", response_model=LoginResponse)
 def login(payload: UserLogin, db: Annotated[Session, Depends(get_db)]) -> LoginResponse:
     user = _find_login_user(db, payload.email)
-    if user is None or not verify_password(payload.password, user.password_hash):
+    if user is None or not verify_login_password(payload.password, user.password_hash):
+        _log_login_failure(payload.email, payload.password, user)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     if settings.mfa_required:
@@ -283,6 +314,11 @@ def claim_email(payload: ClaimEmailRequest, db: Annotated[Session, Depends(get_d
         mfa_token=create_mfa_token(user.id, challenge.id),
         email_hint=_email_hint(user.email),
     )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+def refresh_session(user: Annotated[User, Depends(get_current_user)]) -> TokenResponse:
+    return TokenResponse(access_token=create_access_token(user.id))
 
 
 @router.get("/me", response_model=UserOut)
@@ -406,14 +442,18 @@ def password_reset_confirm(
     from ..services.password_reset import confirm_password_reset
 
     try:
-        confirm_password_reset(
+        user = confirm_password_reset(
             db,
             email=payload.email,
-            new_password=payload.new_password,
+            new_password=(payload.new_password or "").strip(),
             code=payload.code,
             token=payload.token,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.commit()
-    return PasswordResetOk(ok=True, detail="Password updated. You can sign in now.")
+    return PasswordResetOk(
+        ok=True,
+        detail="Password updated. You're signed in.",
+        access_token=create_access_token(user.id),
+    )

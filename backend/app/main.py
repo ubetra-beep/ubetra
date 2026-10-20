@@ -1,9 +1,10 @@
 from pathlib import Path
 import json
+import re
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .catalog import ensure_data_dir, seed_catalog
@@ -198,9 +199,31 @@ def download_android_apk(request: Request) -> Response:
 if FRONTEND_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
 
+    _ASSET_REF = re.compile(r'(/assets/[\w.-]+\.(?:js|css))(?=")')
+
+    def _versioned_index() -> str:
+        html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+
+        def stamp(match: re.Match) -> str:
+            path = FRONTEND_DIR / match.group(1).removeprefix("/assets/")
+            try:
+                return f"{match.group(1)}?v={int(path.stat().st_mtime)}"
+            except OSError:
+                return match.group(1)
+
+        return _ASSET_REF.sub(stamp, html)
+
+    @app.middleware("http")
+    async def no_stale_shell(request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if (path == "/" or path == "/sw.js" or path.startswith("/assets/")) and "cache-control" not in response.headers:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(FRONTEND_DIR / "index.html")
+    def index() -> HTMLResponse:
+        return HTMLResponse(_versioned_index(), headers={"Cache-Control": "no-cache"})
 
     @app.get("/manifest.webmanifest")
     def manifest(request: Request, style: str = "") -> JSONResponse:

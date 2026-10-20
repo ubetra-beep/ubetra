@@ -30,6 +30,9 @@ from ..schemas import (
     TagPresetsUpdate,
     TaskAssistIn,
     TaskAssistOut,
+    TaskSuggestIn,
+    TaskSuggestionOut,
+    TaskSuggestOut,
     TrainingRegimenAssignedIn,
     TrainingRegimenGenerateIn,
     TrainingRegimenOut,
@@ -1344,6 +1347,41 @@ Output only the rewritten task text, 1-4 sentences, no preamble."""
         db=db,
     )
     return TaskAssistOut(text=(text or "").strip())
+
+
+@router.post("/dynamics/{dynamic_id}/tasks/suggest", response_model=TaskSuggestOut)
+def suggest_task_ideas(
+    dynamic_id: str,
+    payload: TaskSuggestIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskSuggestOut:
+    membership = get_membership(dynamic_id, user, db)
+    if membership.role != PartnerRole.dominant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the dominant partner can get task suggestions",
+        )
+    if not getattr(user, "ai_enabled", True):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="AI features are turned off")
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None or not is_llm_configured(user, dynamic):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AI is not configured for this dynamic",
+        )
+    from ..services.task_suggest import suggest_tasks
+
+    rows = suggest_tasks(
+        db,
+        dynamic=dynamic,
+        membership=membership,
+        user=user,
+        note=payload.note,
+        count=payload.count,
+        avoid=payload.avoid,
+    )
+    return TaskSuggestOut(suggestions=[TaskSuggestionOut(**r) for r in rows])
 
 
 @router.post("/tasks/{task_list_id}/items/{task_id}/assist", response_model=TaskAssistOut)

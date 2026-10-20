@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v157";
+const CLIENT_SW_CACHE = "ubetra-v162";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -512,9 +512,28 @@ function onboardingStep(status) {
   return "finish";
 }
 
+const PUBLIC_AUTH_PATHS = /^\/auth\/(login|register|claim-email|config|mfa\/|password-reset\/)/;
+const SESSION_RENEWED_KEY = "ubetra_session_renewed_at";
+const SESSION_RENEW_MS = 12 * 60 * 60 * 1000;
+
+async function renewSession({ force = false } = {}) {
+  if (!state.token) return;
+  const last = Number(localStorage.getItem(SESSION_RENEWED_KEY) || 0);
+  if (!force && Date.now() - last < SESSION_RENEW_MS) return;
+  try {
+    const result = await api("/auth/refresh", { method: "POST" });
+    if (result?.access_token) {
+      setToken(result.access_token);
+      localStorage.setItem(SESSION_RENEWED_KEY, String(Date.now()));
+    }
+  } catch {
+    /* keep the current token; /auth/me handles real expiry */
+  }
+}
+
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  if (state.token && !PUBLIC_AUTH_PATHS.test(path)) headers.Authorization = `Bearer ${state.token}`;
   const response = await fetch(`${API}${path}`, { ...options, headers });
   const text = await response.text();
   let data = null;
@@ -1381,6 +1400,39 @@ const TASK_TAG_LABELS = {
   submission: "Submission",
   punishment: "Punishment",
 };
+
+const TASK_TAG_EMOJI = {
+  domestic: "🧹",
+  "health / hygiene": "🧼",
+  health: "🧼",
+  hygiene: "🧼",
+  sensual: "🌹",
+  sexual: "🔥",
+  submission: "🙇",
+  punishment: "⛓️",
+  makeup: "💄",
+};
+
+function taskTagEmoji(task) {
+  const tags = Array.isArray(task?.tags)
+    ? task.tags
+    : String(task?.tags || "").split(",");
+  for (const tag of tags) {
+    const emoji = TASK_TAG_EMOJI[String(tag || "").trim().toLowerCase()];
+    if (emoji) return emoji;
+  }
+  return tags.some((t) => String(t || "").trim()) ? "🏷️" : "📝";
+}
+
+function taskScheduleEmoji(task) {
+  if (!task?.recurrence || task.recurrence === "none") return { emoji: "👠", label: "One-off" };
+  const due = taskDueDate(task);
+  if (!due) return null;
+  const hour = due.getHours();
+  if (hour >= 4 && hour < 11) return { emoji: "☕", label: "Morning" };
+  if (hour >= 11 && hour < 16) return { emoji: "🥗", label: "Noon" };
+  return { emoji: "🌙", label: "Evening" };
+}
 
 function formatTaskTag(tag) {
   const key = String(tag || "").trim().toLowerCase();
@@ -5814,6 +5866,10 @@ async function bootstrap() {
       startVideoCallWatcher();
       wireNativePushCallWake();
       syncEdgeGuardFromServer().catch(() => {});
+      renewSession();
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") renewSession();
+      });
       return;
     } catch {
       setToken(null);
@@ -5855,12 +5911,13 @@ function renderLogin() {
     event.preventDefault();
     error.classList.add("hidden");
     const data = new FormData(form);
+    setToken(null);
     try {
       const result = await api("/auth/login", {
         method: "POST",
         body: JSON.stringify({
-          email: data.get("email"),
-          password: data.get("password"),
+          email: String(data.get("email") || "").trim(),
+          password: String(data.get("password") || ""),
         }),
       });
       if (result.mfa_required) {
@@ -5997,11 +6054,20 @@ function renderResetPassword() {
     if (code) body.code = code;
     if (token) body.token = token;
     try {
-      await api("/auth/password-reset/confirm", {
+      const result = await api("/auth/password-reset/confirm", {
         method: "POST",
         body: JSON.stringify(body),
       });
       localStorage.removeItem(LAST_ROUTE_KEY);
+      if (result?.access_token) {
+        setToken(result.access_token);
+        localStorage.setItem(SESSION_RENEWED_KEY, String(Date.now()));
+        state.user = await api("/auth/me");
+        state.dynamics = await api("/dynamics");
+        showToast("Password updated — you're signed in.");
+        navigateAfterAuth();
+        return;
+      }
       showToast("Password updated — sign in with your new password.");
       navigate("/login");
     } catch (err) {
@@ -8580,15 +8646,9 @@ function appendCreateTaskForm(stack, {
   const you = dynamic?.partners?.find((p) => p.is_you);
   if (you?.role !== "dominant") return;
   const error = el("div", { className: "error hidden" });
-  const title = el("input", {
-    placeholder: confession ? "List title (e.g. Punishment)" : "List title (e.g. Tonight)",
-    value: confession ? `Punishment · ${confession.reporter_name || "confession"}` : "",
-  });
   const tasksBox = el("textarea", {
-    rows: "4",
-    placeholder: confession
-      ? "Punishment task(s). One per line."
-      : "One task per line",
+    rows: "2",
+    placeholder: confession ? "Punishment task" : "What should be done?",
   });
   const repeating = el("input", { type: "checkbox" });
   const recurrence = el("select");
@@ -8645,9 +8705,8 @@ function appendCreateTaskForm(stack, {
     el("h2", {}, confession ? "Assign a punishment task" : "Create tasks"),
     confession
       ? el("p", { className: "muted" }, `For the confession: “${(confession.action_text || "").slice(0, 160)}”`)
-      : el("p", { className: "muted" }, "At least one category tag is required. Due date is optional."),
-    title,
-    tasksBox,
+      : el("p", { className: "muted" }, "One task. Pick at least one category tag; due date is optional. For several at once, use Suggest tasks below."),
+    el("label", { className: "stack" }, ["Task", tasksBox]),
     el("label", { className: "checkbox-label" }, [repeating, " Repeating task"]),
     repeatBox,
     dueBy.node,
@@ -8710,9 +8769,10 @@ function appendCreateTaskForm(stack, {
     type: "button",
     onClick: async () => {
       error.classList.add("hidden");
-      const lines = tasksBox.value.split("\n").map((l) => l.trim()).filter(Boolean);
-      if (!title.value.trim() || !lines.length) {
-        error.textContent = "Add a title and at least one task.";
+      const text = tasksBox.value.split("\n").map((l) => l.trim()).filter(Boolean).join(" ");
+      const lines = text ? [text] : [];
+      if (!lines.length) {
+        error.textContent = "Write the task first.";
         error.classList.remove("hidden");
         return;
       }
@@ -8735,12 +8795,15 @@ function appendCreateTaskForm(stack, {
           recurrenceInterval = 1;
         }
       }
+      const listTitle = confession
+        ? `Punishment · ${confession.reporter_name || "confession"}`
+        : lines[0];
       const payload = {
-        title: title.value.trim(),
-        tasks: lines.map((content, index) => {
+        title: listTitle.slice(0, 200),
+        tasks: lines.map((content) => {
           const row = {
             content,
-            visibility: index === 0 ? "visible" : "after_prior",
+            visibility: "visible",
             recurrence: recurrenceValue,
             tags,
           };
@@ -8775,21 +8838,155 @@ function appendCreateTaskForm(stack, {
           navigate(`/dynamic/${dynamicId}/tasks`);
           return;
         }
-        title.value = "";
         tasksBox.value = "";
-        showToast("Task list created.");
+        showToast("Task created.");
         renderTasks(dynamicId);
       } catch (err) {
         error.textContent = err.message;
         error.classList.remove("hidden");
       }
     },
-  }, confession ? "Assign task" : "Create task list"));
+  }, confession ? "Assign task" : "Create task"));
   const form = el("details", { className: "card stack", open: !!confession }, [
     el("summary", {}, confession ? "Assign a punishment task" : "Create task"),
     ...cardKids.filter((node) => node && node.tagName !== "H2"),
   ]);
   stack.appendChild(form);
+  if (!confession) stack.appendChild(buildTaskSuggestPanel(dynamicId, tagPresets));
+}
+
+const TASK_SUGGEST_SCHEDULES = [
+  ["am", "☕ Daily AM", "08:00"],
+  ["noon", "🥗 Daily Noon", "12:00"],
+  ["pm", "🌙 Daily PM", "18:00"],
+  ["oneoff", "👠 One-off", ""],
+];
+
+function buildTaskSuggestPanel(dynamicId, tagPresets) {
+  const rows = [];
+  const seen = [];
+  const note = el("input", { placeholder: "Optional focus (e.g. morning routine, house chores)" });
+  const listHost = el("div", { className: "stack task-suggest-list" });
+  const status = el("p", { className: "muted hidden" });
+  const error = el("div", { className: "error hidden" });
+  const suggestBtn = el("button", { className: "primary-btn", type: "button" }, "Suggest tasks");
+  const moreBtn = el("button", { className: "ghost-btn hidden", type: "button" }, "Suggest more");
+  const addBtn = el("button", { className: "primary-btn hidden", type: "button" }, "Add checked tasks");
+
+  function refreshAddBtn() {
+    const kept = rows.filter((r) => r.keep.checked).length;
+    addBtn.textContent = kept === 1 ? "Add 1 task" : `Add ${kept} tasks`;
+    addBtn.classList.toggle("hidden", !rows.length);
+    addBtn.disabled = kept === 0;
+    moreBtn.classList.toggle("hidden", !rows.length);
+  }
+
+  function addRow(item) {
+    const keep = el("input", { type: "checkbox", checked: true });
+    const content = el("textarea", { rows: "2", className: "task-suggest-text" });
+    content.value = item.content;
+    const tag = el("select");
+    const tags = tagPresets.some((t) => t.toLowerCase() === String(item.tag || "").toLowerCase())
+      ? tagPresets
+      : [...tagPresets, item.tag].filter(Boolean);
+    tags.forEach((t) => tag.appendChild(el("option", { value: t }, `${taskTagEmoji({ tags: [t] })} ${t}`)));
+    tag.value = tags.find((t) => t.toLowerCase() === String(item.tag || "").toLowerCase()) || tags[0] || "";
+    const schedule = el("select");
+    TASK_SUGGEST_SCHEDULES.forEach(([v, label]) => schedule.appendChild(el("option", { value: v }, label)));
+    schedule.value = item.schedule || "oneoff";
+    const node = el("div", { className: "task-suggest-row" }, [
+      keep,
+      el("div", { className: "stack" }, [content, el("div", { className: "row wrap" }, [tag, schedule])]),
+    ]);
+    keep.addEventListener("change", () => {
+      node.classList.toggle("unchecked", !keep.checked);
+      refreshAddBtn();
+    });
+    rows.push({ keep, content, tag, schedule, node });
+    seen.push(item.content);
+    listHost.appendChild(node);
+  }
+
+  async function fetchIdeas() {
+    if (!isAiEnabled()) {
+      openAiOffSheet("Task suggestions use your shared AI context.");
+      return;
+    }
+    error.classList.add("hidden");
+    status.textContent = "Thinking up tasks…";
+    status.classList.remove("hidden");
+    suggestBtn.disabled = true;
+    moreBtn.disabled = true;
+    try {
+      const avoid = [...seen, ...rows.map((r) => r.content.value.trim())].filter(Boolean);
+      const out = await api(`/dynamics/${dynamicId}/tasks/suggest`, {
+        method: "POST",
+        body: JSON.stringify({ note: note.value.trim(), count: 6, avoid: [...new Set(avoid)].slice(0, 100) }),
+      });
+      const ideas = out?.suggestions || [];
+      ideas.forEach(addRow);
+      status.textContent = ideas.length ? "" : "No new ideas — try a different focus.";
+      status.classList.toggle("hidden", !!ideas.length);
+    } catch (ex) {
+      status.classList.add("hidden");
+      error.textContent = ex.message;
+      error.classList.remove("hidden");
+    } finally {
+      suggestBtn.disabled = false;
+      moreBtn.disabled = false;
+      refreshAddBtn();
+    }
+  }
+
+  async function addChecked() {
+    const kept = rows.filter((r) => r.keep.checked && r.content.value.trim());
+    if (!kept.length) return;
+    const tasks = kept.map((r) => {
+      const sched = TASK_SUGGEST_SCHEDULES.find(([v]) => v === r.schedule.value);
+      const row = {
+        content: r.content.value.trim(),
+        visibility: "visible",
+        recurrence: sched && sched[2] ? "daily" : "none",
+        tags: r.tag.value ? [r.tag.value] : [],
+      };
+      if (sched && sched[2]) {
+        row.recurrence_interval = 1;
+        const due = dueIsoFromTimeOfDay(sched[2]);
+        if (due) row.due_at = due;
+      }
+      return row;
+    });
+    error.classList.add("hidden");
+    addBtn.disabled = true;
+    try {
+      await api(`/dynamics/${dynamicId}/tasks`, {
+        method: "POST",
+        body: JSON.stringify({ title: `Assistant · ${new Date().toLocaleDateString()}`, tasks }),
+      });
+      showToast(tasks.length === 1 ? "Task added." : `${tasks.length} tasks added.`);
+      renderTasks(dynamicId);
+    } catch (ex) {
+      error.textContent = ex.message;
+      error.classList.remove("hidden");
+      addBtn.disabled = false;
+    }
+  }
+
+  suggestBtn.addEventListener("click", fetchIdeas);
+  moreBtn.addEventListener("click", fetchIdeas);
+  addBtn.addEventListener("click", addChecked);
+
+  const panel = el("details", { className: "card stack ai-only task-suggest-panel" }, [
+    el("summary", {}, [el("span", { className: "ai-mark" }, "✦"), " Suggest tasks with assistant"]),
+    el("p", { className: "muted" }, "Edit any suggestion inline. Checked ones are added; unchecked ones are dropped. Suggestions skip tasks you already have or did before."),
+    note,
+    el("div", { className: "row wrap" }, [suggestBtn, moreBtn]),
+    status,
+    listHost,
+    error,
+    addBtn,
+  ]);
+  return panel;
 }
 
 function renderTasksActsSwitcher(dynamicId, active) {
@@ -10093,17 +10290,6 @@ function renderTasks(dynamicId) {
         return flat;
       }
 
-      function taskGroupOf(task) {
-        if (task.completed_at) return "completed";
-        const due = taskDueDate(task);
-        if (!due) return "none";
-        const tomorrow = startOfLocalDay();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        if (due.getTime() < Date.now()) return "overdue";
-        if (due.getTime() < tomorrow.getTime()) return "today";
-        return "upcoming";
-      }
-
       function renderCompactTaskRow(list, task) {
         const goal = matchTaskGoal(task, activeGoalConfigs(goalsData));
         const dueText = taskDueChip(task);
@@ -10112,11 +10298,7 @@ function renderTasks(dynamicId) {
         if (!task.completed_at && taskIsPastDue(task)) chips.push(["late", "Late"]);
         if (needsApproval) chips.push(["pending", "Needs approval"]);
         if (task.paused) chips.push(["paused", "Paused"]);
-        if (task.recurrence && task.recurrence !== "none") {
-          const interval = Number(task.recurrence_interval || 0);
-          const recurLabel = interval > 1 ? `every ${interval} days` : task.recurrence;
-          chips.push(["recur", recurLabel]);
-        }
+        const schedule = taskScheduleEmoji(task);
         const check = el("input", { type: "checkbox" });
         if (task.completed_at) {
           check.checked = true;
@@ -10139,6 +10321,7 @@ function renderTasks(dynamicId) {
         }
         const row = el("div", { className: `task-compact${task.completed_at ? " done" : ""}${needsApproval ? " needs-approval" : ""}` }, [
           check,
+          el("span", { className: "task-emoji", "aria-hidden": "true" }, taskTagEmoji(task)),
           el("span", { className: "task-compact-title" }, task.content),
           dueText ? el("span", { className: "task-chip" }, dueText) : null,
           ...chips.map(([kind, label]) => el("span", { className: `task-chip task-chip-${kind}` }, label)),
@@ -10152,27 +10335,12 @@ function renderTasks(dynamicId) {
               },
             }, goal.title || "Goal")
             : null,
+          schedule
+            ? el("span", { className: "task-emoji task-emoji-schedule", title: schedule.label }, schedule.emoji)
+            : null,
         ]);
         row.addEventListener("click", () => openTaskDetail(list, task));
         return row;
-      }
-
-      function paintTaskGroup(id, title, rows, fallbackOpen) {
-        const storageId = `${dynamicId}:${id}`;
-        const section = el("details", { className: "task-timeline-section stack" });
-        section.open = taskSectionIsOpen(storageId, fallbackOpen);
-        section.appendChild(el("summary", {}, [
-          el("span", {}, title),
-          el("span", { className: "task-timeline-count" }, String(rows.length)),
-        ]));
-        section.addEventListener("toggle", () => rememberTaskSection(storageId, section.open));
-        const requested = id === "none"
-          ? (Array.isArray(acts) ? acts : []).filter((act) => act.status === "active" || act.status === "completed")
-          : [];
-        if (!rows.length && !requested.length) section.appendChild(el("p", { className: "muted" }, "None"));
-        else rows.forEach(({ list, task }) => section.appendChild(renderCompactTaskRow(list, task)));
-        requested.forEach((act) => section.appendChild(paintActRow(act)));
-        return section;
       }
 
       const bulkBar = el("div", { className: "task-bulk-bar card stack hidden" });
@@ -10251,34 +10419,6 @@ function renderTasks(dynamicId) {
           }, "Save as task"));
         }
         return row;
-      }
-
-      function paintRecurring() {
-        const buckets = { daily: [], weekly: [], every: [] };
-        taskRows().forEach((row) => {
-          const task = row.task;
-          if (!task.recurrence || task.recurrence === "none" || task.completed_at) return;
-          const interval = Number(task.recurrence_interval || 0);
-          if (task.recurrence === "weekly") buckets.weekly.push(row);
-          else if (interval > 1) buckets.every.push(row);
-          else buckets.daily.push(row);
-        });
-        const section = el("details", { className: "task-timeline-section stack" });
-        section.open = taskSectionIsOpen(`${dynamicId}:recurring`, false);
-        const total = buckets.daily.length + buckets.weekly.length + buckets.every.length;
-        section.appendChild(el("summary", {}, [
-          el("span", {}, "Recurring tasks"),
-          el("span", { className: "task-timeline-count" }, String(total)),
-        ]));
-        section.addEventListener("toggle", () => rememberTaskSection(`${dynamicId}:recurring`, section.open));
-        [
-          ["daily", "Daily", buckets.daily],
-          ["weekly", "Weekly", buckets.weekly],
-          ["every", "Every N days", buckets.every],
-        ].forEach(([id, title, rows]) => {
-          section.appendChild(paintTaskGroup(id, title, rows, rows.length > 0));
-        });
-        return section;
       }
 
       function paintTaskLibrary() {
@@ -10399,18 +10539,19 @@ function renderTasks(dynamicId) {
           onError: showError,
         }));
       } else {
-        const grouped = { overdue: [], today: [], upcoming: [], none: [], completed: [] };
-        taskRows().forEach((row) => {
-          const key = taskGroupOf(row.task);
-          if (grouped[key]) grouped[key].push(row);
-        });
-        stack.appendChild(paintTaskGroup("overdue", "Overdue", grouped.overdue, grouped.overdue.length > 0));
-        stack.appendChild(paintTaskGroup("today", "Due today", grouped.today, true));
-        stack.appendChild(paintTaskGroup("upcoming", "Upcoming", grouped.upcoming, true));
-        stack.appendChild(paintTaskGroup("none", "No due date", grouped.none, grouped.none.length > 0));
+        const dueMs = (task) => taskDueDate(task)?.getTime() ?? Number.POSITIVE_INFINITY;
+        const open = taskRows()
+          .filter(({ task }) => !task.completed_at)
+          .sort((a, b) => dueMs(a.task) - dueMs(b.task));
+        const requested = (Array.isArray(acts) ? acts : [])
+          .filter((act) => act.status === "active" || act.status === "completed");
+        const listCard = el("div", { className: "card stack task-flat-list" });
+        if (!open.length && !requested.length) listCard.appendChild(el("p", { className: "muted" }, "No tasks right now."));
+        open.forEach(({ list, task }) => listCard.appendChild(renderCompactTaskRow(list, task)));
+        requested.forEach((act) => listCard.appendChild(paintActRow(act)));
+        stack.appendChild(listCard);
         if (isDom) stack.appendChild(bulkBar);
       }
-      stack.appendChild(paintRecurring());
       stack.appendChild(paintTaskLibrary());
       stack.appendChild(paintCompletions());
       if (goalsData && you?.role === "dominant") {
