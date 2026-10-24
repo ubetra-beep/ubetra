@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..models import Dynamic, Membership, PartnerRole, User
 from .llm import generate_text
 from .menu_summaries import _days_since_full_o
+from .pronouns import personalize_items, role_tokens
 
 SPIN_PRESETS = [
     {
@@ -18,7 +19,7 @@ SPIN_PRESETS = [
         "title": "Days to wait longer",
         "description": (
             "Dice value = extra days before release/orgasm. "
-            "Tell him the number. On fail: lock back up and serve the wait — do not re-spin."
+            "Tell {sub} the number. On fail: lock back up and serve the wait — do not re-spin."
         ),
         "value_label": "Days",
         "uses_dice": True,
@@ -31,7 +32,7 @@ SPIN_PRESETS = [
         "title": "Weeks to wait longer",
         "description": (
             "Dice value = extra weeks before release/orgasm. "
-            "Tell him the number. On fail: lock back up and serve the wait — do not re-spin."
+            "Tell {sub} the number. On fail: lock back up and serve the wait — do not re-spin."
         ),
         "value_label": "Weeks",
         "uses_dice": True,
@@ -43,8 +44,8 @@ SPIN_PRESETS = [
         "id": "ruins_secret",
         "title": "Ruins before earned",
         "description": (
-            "Dice value = ruins required (secret). Tell him only that more ruins are required. "
-            "Do one ruin at a time (in front of you or self-ruin), then ask if he can handle another. "
+            "Dice value = ruins required (secret). Tell {sub} only that more ruins are required. "
+            "Do one ruin at a time (in front of you or self-ruin), then ask if {sub} can handle another. "
             "If not: lock up and finish the remaining ruins later. When the secret count is met, "
             "ask full orgasm now or later — after a full orgasm, run post-orgasm tasks and "
             "longer/shorter next-wait."
@@ -59,8 +60,8 @@ SPIN_PRESETS = [
         "id": "edges_shared",
         "title": "Edges before orgasm",
         "description": (
-            "Dice value = edges (shared so he can beg you to stop). "
-            "If he ruins early or can't finish: no orgasm — lock up and try the edges again "
+            "Dice value = edges (shared so {sub} can beg you to stop). "
+            "If {sub} ruins early or can't finish: no orgasm — lock up and try the edges again "
             "later, or re-spin for a different outcome."
         ),
         "value_label": "Edges (shared)",
@@ -73,8 +74,8 @@ SPIN_PRESETS = [
         "id": "dom_orgasms_locked",
         "title": "Orgasms for keyholder while locked",
         "description": (
-            "Dice value = orgasms he provides to the keyholder while he stays locked. "
-            "If interrupted: lock him back up and finish the remaining count later."
+            "Dice value = orgasms {sub} provides to {dom} while staying locked. "
+            "If interrupted: lock {sub} back up and finish the remaining count later."
         ),
         "value_label": "Orgasms for keyholder",
         "uses_dice": True,
@@ -86,7 +87,7 @@ SPIN_PRESETS = [
         "id": "full_orgasm",
         "title": "Full Orgasm!",
         "description": (
-            "He earns a full orgasm now. Then pick post-orgasm tasks, and optionally spin "
+            "{sub} earns a full orgasm now. Then pick post-orgasm tasks, and optionally spin "
             "the next wait period (longer or shorter than this wait)."
         ),
         "value_label": "",
@@ -115,8 +116,8 @@ POST_ORGASM_PRESETS = [
         "id": "massage",
         "title": "Massage",
         "description": (
-            "Give the keyholder a focused massage — shoulders, back, feet, or wherever she directs. "
-            "Stay attentive; ask what feels good and keep going until she says stop."
+            "Give {dom} a focused massage — shoulders, back, feet, or wherever {dom} directs. "
+            "Stay attentive; ask what feels good and keep going until {dom} says stop."
         ),
         "kind": "service",
     },
@@ -124,8 +125,8 @@ POST_ORGASM_PRESETS = [
         "id": "facesitting",
         "title": "Facesitting",
         "description": (
-            "Serve with oral / facesitting aftercare play. Stay still and useful under her; "
-            "follow her pace and don’t rush your own recovery."
+            "Serve with oral / facesitting aftercare play. Stay still and useful under {dom}; "
+            "follow {dom}'s pace and don’t rush your own recovery."
         ),
         "kind": "service",
     },
@@ -143,7 +144,7 @@ POST_ORGASM_PRESETS = [
         "title": "Cuddle / aftercare",
         "description": (
             "Quiet closeness: blankets, water, check-in, soft touch. Be present and calm; "
-            "let her set how much talk vs silence."
+            "let {dom} set how much talk vs silence."
         ),
         "kind": "service",
     },
@@ -151,8 +152,8 @@ POST_ORGASM_PRESETS = [
         "id": "foot_service",
         "title": "Foot service",
         "description": (
-            "Foot rub, worship, or polish as negotiated. Keep your focus on her comfort and "
-            "follow any rules she sets for kissing, pressure, or duration."
+            "Foot rub, worship, or polish as negotiated. Keep your focus on {dom}'s comfort and "
+            "follow any rules {dom} sets for kissing, pressure, or duration."
         ),
         "kind": "service",
     },
@@ -163,7 +164,7 @@ POST_ORGASM_ADDONS = [
         "id": "addon_torture",
         "title": "Post-orgasm torture",
         "description": (
-            "Extra stimulation after he’s already come — light teasing, overstim, or edging "
+            "Extra stimulation after {sub} has already come — light teasing, overstim, or edging "
             "torture within negotiated limits. Pair with a service or run as its own beat."
         ),
         "kind": "addon",
@@ -172,8 +173,8 @@ POST_ORGASM_ADDONS = [
         "id": "addon_piv_riding",
         "title": "PIV riding",
         "description": (
-            "She rides him (PIV) as part of or after his orgasm service window. "
-            "He stays useful for her pleasure; condom/protection rules as negotiated."
+            "Partnered sex you have negotiated, with {dom} leading, during or after the orgasm window. "
+            "{sub} stays available for {dom}'s pleasure; protection rules as negotiated."
         ),
         "kind": "addon",
     },
@@ -182,7 +183,7 @@ POST_ORGASM_ADDONS = [
         "title": "Butt plug while performing services",
         "description": (
             "Insert a butt plug (sized as negotiated) before or during the assigned service(s). "
-            "He keeps it in while he serves unless she says otherwise."
+            "{sub} keeps it in while serving unless {dom} says otherwise."
         ),
         "kind": "addon",
     },
@@ -231,20 +232,32 @@ def days_since_last_orgasm(db: Session, dynamic_id: str, memberships: list[Membe
     return _days_since_full_o(db, dynamic_id, sub)
 
 
-def build_spin_presets(*, dominant_name: str) -> list[dict]:
+def build_spin_presets(
+    *,
+    dominant_name: str,
+    submissive_name: str = "your partner",
+    sub_sex: str = "",
+    dom_sex: str = "",
+) -> list[dict]:
+    tokens = role_tokens(
+        sub_name=submissive_name,
+        dom_name=dominant_name,
+        sub_sex=sub_sex,
+        dom_sex=dom_sex,
+    )
     items = []
     for preset in SPIN_PRESETS:
         item = dict(preset)
         if item["id"] == "dom_orgasms_locked":
-            item["title"] = f"Additional orgasms for {dominant_name} while locked"
+            item["title"] = "Additional orgasms for {dom} while locked"
             item["description"] = (
-                f"Dice value = orgasms he provides to {dominant_name} while locked. "
+                "Dice value = orgasms {sub} provides to {dom} while locked. "
                 "On fail: re-spin for a new assignment."
             )
-            item["value_label"] = f"Orgasms for {dominant_name}"
+            item["value_label"] = "Orgasms for {dom}"
         item["source"] = "preset"
         items.append(item)
-    return items
+    return personalize_items(items, tokens)
 
 
 def generate_spin_extra_ideas(
@@ -331,6 +344,8 @@ def generate_post_orgasm_tasks(
     dynamic: Dynamic | None,
     dominant_name: str,
     submissive_name: str,
+    sub_sex: str = "",
+    dom_sex: str = "",
     db=None,
 ) -> list[dict]:
     prompt = f"""{submissive_name} just earned a Full Orgasm in a keyholder game.
@@ -382,7 +397,13 @@ Return ONLY valid JSON:
         )
         if len([t for t in out if t.get("kind") != "addon"]) >= 10:
             break
-    return out
+    tokens = role_tokens(
+        sub_name=submissive_name,
+        dom_name=dominant_name,
+        sub_sex=sub_sex,
+        dom_sex=dom_sex,
+    )
+    return personalize_items(out, tokens)
 
 
 def next_wait_day_choices(base_days: int, direction: str) -> list[int]:

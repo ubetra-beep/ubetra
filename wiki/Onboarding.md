@@ -43,7 +43,7 @@ If **SPTI profile** is off, the SPTI paste step is skipped.
 
 ## 3. Shared AI key
 
-Paste a Gemini or OpenAI key for the **dynamic**. Both partners use it (same pattern as the shared chat encryption key). You can **Fill out later** and add a key in Settings anytime.
+The step opens on **OpenRouter** with model `openrouter/auto`. Create one key at [openrouter.ai/keys](https://openrouter.ai/keys), paste it, and tap **Save key**. Both partners use that key. **Fill out later** skips AI; add the key later under Settings → AI & assistant.
 
 If you skip the key (or later turn AI off), the **dynamic interview** is a table of prompts to fill out — not a chat. Tracking, tasks, and Chat still work.
 

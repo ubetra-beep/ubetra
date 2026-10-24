@@ -5256,3 +5256,11 @@ details[open] summary {
   padding: 0 0.25rem;
 }
 
+
+.setup-steps {
+  margin: 0.25rem 0 0.75rem;
+  padding-left: 1.25rem;
+}
+.setup-steps li {
+  margin: 0.3rem 0;
+}
