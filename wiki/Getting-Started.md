@@ -27,7 +27,7 @@ If the server has MFA enabled (`UBETRA_MFA_REQUIRED`), you’ll enter an email o
 
 ## After login
 
-If setup is incomplete, you land on **Onboarding**. Otherwise you return to your last screen or the active dynamic.
+If setup is incomplete, you land on **Onboarding**. The AI step is already set to OpenRouter. The short path is [How to](How-to). Otherwise you return to your last screen or the active dynamic.
 
 ## Install as an app (PWA)
 

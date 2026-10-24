@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v164";
+const CLIENT_SW_CACHE = "ubetra-v165";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -443,9 +443,22 @@ let mfaSession = { token: null, emailHint: null };
 
 function navigateAfterAuth() {
   syncUserTimezone().catch(() => {});
-  // Soft sex prompt later — don't hard-land on Settings after login.
+  const { parts } = parseRoute();
+  const here = parts[0] || "";
+  const leavingAuth = ["", "login", "register", "forgot-password", "reset-password"].includes(here);
+  // After login, finish setup. A direct link to Settings or the survey stays put.
   if (!state.user?.onboarding_completed) {
-    navigate("/onboarding");
+    const survey = here === "dynamic" && parts[2] === "survey";
+    if (here !== "onboarding" && here !== "settings" && !survey) navigate("/onboarding");
+    else renderRoute();
+    return;
+  }
+  // A refresh on Settings, Chat, or a game stays there. Only the login screen
+  // falls through to the last page or Tracking.
+  if (!leavingAuth) {
+    renderRoute();
+    maybeShowPunishmentReminders();
+    refreshAppUpdates().catch(() => {});
     return;
   }
   const last = getLastRoute();
@@ -6432,7 +6445,10 @@ function renderOnboarding() {
           (selected?.models || []).forEach((model) => {
             modelSelect.appendChild(el("option", { value: model }, model));
           });
-          if (selected?.default_model) modelCustom.value = selected.default_model;
+          if (selected?.default_model) {
+            modelCustom.value = selected.default_model;
+            modelSelect.value = selected.default_model;
+          }
           if (selected?.needs_base_url) {
             baseUrlLabel.classList.remove("hidden");
             baseUrlInput.value = selected.default_base_url || baseUrlInput.value;
@@ -6442,14 +6458,27 @@ function renderOnboarding() {
         }
         providerSelect.addEventListener("change", refreshProviderUi);
         modelSelect.addEventListener("change", () => { modelCustom.value = modelSelect.value; });
+        if (providerMap.openrouter) providerSelect.value = "openrouter";
         refreshProviderUi();
 
-        panel.appendChild(el("h2", {}, "AI provider setup"));
-        panel.appendChild(el("p", { className: "muted" }, "Shared for your dynamic. Tap ? for adult-content guidance (LM Studio / uncensored OpenRouter block less)."));
+        panel.appendChild(el("h2", {}, "Connect OpenRouter"));
+        panel.appendChild(el("p", { className: "muted" }, "One key, shared with your partner. Leave the model on openrouter/auto."));
+        panel.appendChild(el("ol", { className: "setup-steps" }, [
+          el("li", {}, [
+            "Create a key at ",
+            el("a", { href: "https://openrouter.ai/keys", target: "_blank", rel: "noopener noreferrer" }, "openrouter.ai/keys"),
+            ".",
+          ]),
+          el("li", {}, "Paste it below."),
+          el("li", {}, "Save. You can test it later in Settings."),
+        ]));
         panel.appendChild(providerRow);
         panel.appendChild(description);
         panel.appendChild(el("label", {}, ["Model", modelSelect]));
-        panel.appendChild(el("label", {}, ["Custom model (optional)", modelCustom]));
+        panel.appendChild(el("details", {}, [
+          el("summary", {}, "Use a different model"),
+          el("label", {}, ["Custom model (optional)", modelCustom]),
+        ]));
         panel.appendChild(baseUrlLabel);
         panel.appendChild(el("label", {}, ["API key", apiKeyInput]));
         panel.appendChild(el("div", { className: "row wrap" }, [
@@ -6459,6 +6488,9 @@ function renderOnboarding() {
             onClick: async () => {
               error.classList.add("hidden");
               try {
+                if (!apiKeyInput.value.trim() && providerSelect.value !== "lmstudio" && providerSelect.value !== "openai_compatible") {
+                  throw new Error("Paste your OpenRouter key, or choose Fill out later.");
+                }
                 await api(`/dynamics/${status.dynamic_id}/shared-llm`, {
                   method: "PUT",
                   body: JSON.stringify({
@@ -6474,7 +6506,7 @@ function renderOnboarding() {
                 error.classList.remove("hidden");
               }
             },
-          }, "Save shared API key"),
+          }, "Save key"),
           el("button", {
             className: "ghost-btn",
             type: "button",
@@ -11713,7 +11745,7 @@ function renderSpinTheWheel(dynamicId) {
         midgameOrgasms: [],
         orgasmShouldHaveBeenGranted: null,
         dominant_name: dominant?.display_name || "the keyholder",
-        submissive_name: submissive?.display_name || "he",
+        submissive_name: submissive?.display_name || "your partner",
       };
 
       function persist() {
@@ -23885,6 +23917,25 @@ function renderSettings() {
         ]);
         llmBody.appendChild(advanced);
       } else {
+        llmBody.open = true;
+        const llmTitle = llmCard.querySelector("h2");
+        const llmIntro = llmCard.querySelector("p");
+        if (llmTitle) llmTitle.textContent = "Connect OpenRouter";
+        if (llmIntro) llmIntro.textContent = "Three steps. Leave the model on openrouter/auto. You do not need a second key or a named connection.";
+        const llmSummary = llmBody.querySelector("summary");
+        if (llmSummary) llmSummary.textContent = "Paste your key";
+        if (!providerSelect.value || providerSelect.value === "server") providerSelect.value = "openrouter";
+        if (!modelCustom.value) modelCustom.value = "openrouter/auto";
+        refreshProviderUi();
+        llmBody.appendChild(el("ol", { className: "setup-steps" }, [
+          el("li", {}, [
+            "Create a key at ",
+            el("a", { href: "https://openrouter.ai/keys", target: "_blank", rel: "noopener noreferrer" }, "openrouter.ai/keys"),
+            ".",
+          ]),
+          el("li", {}, "Paste it in API key. Leave the model on openrouter/auto."),
+          el("li", {}, "Save and test. Both partners then use this key."),
+        ]));
         llmBody.appendChild(llmFields);
       }
       stack.appendChild(error);
@@ -23937,9 +23988,32 @@ function renderSettings() {
         el("button", {
           className: "ghost-btn",
           type: "button",
+          className: "primary-btn",
           onClick: async () => {
             error.classList.add("hidden");
             try {
+              if (!apiKeyInput.value.trim() && !settings.api_key_set && !settings.shared_configured) {
+                throw new Error("Paste your OpenRouter key, then Save and test.");
+              }
+              if (apiKeyInput.value.trim() || providerSelect.value !== llmBaseline.provider) {
+                const body = {
+                  provider: providerSelect.value,
+                  model: modelCustom.value || modelSelect.value,
+                  base_url: baseUrlInput.value.trim(),
+                };
+                if (apiKeyInput.value.trim()) body.api_key = apiKeyInput.value.trim();
+                const llmPath = initialDynamicId
+                  ? `/settings/llm?dynamic_id=${encodeURIComponent(initialDynamicId)}`
+                  : "/settings/llm";
+                const updated = await api(llmPath, { method: "PUT", body: JSON.stringify(body) });
+                Object.assign(settings, updated);
+                apiKeyInput.value = "";
+                llmBaseline = {
+                  provider: providerSelect.value,
+                  model: (modelCustom.value || modelSelect.value || "").trim(),
+                  base_url: (baseUrlInput.value || "").trim(),
+                };
+              }
               const testPath = initialDynamicId
                 ? `/settings/llm/test?dynamic_id=${encodeURIComponent(initialDynamicId)}`
                 : "/settings/llm/test";
@@ -23956,7 +24030,7 @@ function renderSettings() {
               error.classList.remove("hidden");
             }
           },
-        }, "Test AI connection"),
+        }, "Save and test"),
         el("button", {
           className: "ghost-btn",
           onClick: async () => {
@@ -24156,7 +24230,11 @@ function renderSettings() {
           ),
         }, "Advanced AI routing →"),
       );
-      llmBody.appendChild(aiConnCard);
+      llmBody.appendChild(el("details", {}, [
+        el("summary", {}, "More connections and routing"),
+        el("p", { className: "muted" }, "Optional. A fresh install only needs the OpenRouter key above."),
+        aiConnCard,
+      ]));
       stack.appendChild(llmCard);
 
       const assistantDomOnly = !!(assistantSettings.dynamic_id && assistantSettings.you_are_dominant === false);

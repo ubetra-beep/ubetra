@@ -4,7 +4,7 @@
 
 Self-hosted private planner for consensual adult relationship dynamics. Runs as a Progressive Web App (PWA) on your own hardware — **not** a hosted SaaS.
 
-**User guide (features & workflows with screenshots):** [Wiki](https://github.com/ubetra-beep/ubetra/wiki) · source also in [`wiki/`](wiki/) in this repo.
+**User guide:** [How to](https://github.com/ubetra-beep/ubetra/wiki/How-to) (fresh OpenRouter setup and every dynamic workflow) · [Wiki](https://github.com/ubetra-beep/ubetra/wiki) · source in [`wiki/`](wiki/).
 
 UBETRA is free. There is no paid tier and no cloud account for the app itself. If you want to tip the developer:
 

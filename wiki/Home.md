@@ -12,6 +12,7 @@ Screenshots on these pages come from a local **WikiDom** (Dominant) / **WikiSub*
 
 | Page | What it covers |
 |------|----------------|
+| [How to](How-to) | Fresh OpenRouter setup, pronouns, every dynamic workflow |
 | [Getting Started](Getting-Started) | Install, first login, PWA |
 | [Onboarding](Onboarding) | Create/join dynamic, **pick features**, AI key, SPTI, kink survey |
 | [Features & Settings](Features-and-Settings) | **Full map of modules, settings, and how to use them** |

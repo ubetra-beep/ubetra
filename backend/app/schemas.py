@@ -176,6 +176,7 @@ class PartnerOut(BaseModel):
     spti_completed: bool = False
     chastity_enabled: bool = False
     chastity_max_lock_hours: int | None = None
+    biological_sex: str = ""
     is_you: bool = False
 
 
