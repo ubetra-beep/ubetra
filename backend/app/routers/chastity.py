@@ -487,6 +487,10 @@ def get_chastity_goals(
     dynamic = db.get(Dynamic, dynamic_id)
     if dynamic is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.switch_mode import sync_earned_gifts
+
+    sync_earned_gifts(db, dynamic)
+    db.commit()
     progress = build_goals_progress(db, dynamic)
     # Only keyholder sees live progress / countdown
     if not is_dominant(membership):

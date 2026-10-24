@@ -41,6 +41,7 @@ from .routers import (
     punishments,
     settings as settings_router,
     sleep,
+    switch,
     cycle,
     tasks,
     vault,
@@ -89,6 +90,7 @@ app.include_router(gear.router, prefix="/api")
 app.include_router(vault.router, prefix="/api")
 app.include_router(google_tasks.router, prefix="/api")
 app.include_router(sleep.router, prefix="/api")
+app.include_router(switch.router, prefix="/api")
 app.include_router(sleep.callback_router, prefix="/api")
 app.include_router(cycle.router, prefix="/api")
 app.include_router(kiosk.router, prefix="/api")

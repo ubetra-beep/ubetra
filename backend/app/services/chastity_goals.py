@@ -73,6 +73,7 @@ GOAL_KINDS = {
     "orgasm_grant": {"title": "Orgasm / unlock grant", "tone": "primary"},
     "ruin_gift": {"title": "Ruin gift", "tone": "gift"},
     "misc_gift": {"title": "Misc gift", "tone": "gift"},
+    "switch_gift": {"title": "Switch gift", "tone": "gift"},
 }
 
 DEFAULT_MAX_SOFT = 2
@@ -217,6 +218,7 @@ def parse_goals(raw: str | None) -> dict:
                     "ready_remind_every_minutes": _clean_every_minutes(g.get("ready_remind_every_minutes")),
                     "ready_pushed_for": g.get("ready_pushed_for") or None,
                     "cycle_extras": _clean_cycle_extras(g.get("cycle_extras")),
+                    "switch_style": "scene" if g.get("switch_style") == "scene" else "goal",
                 }
             )
         base["goals"] = cleaned
@@ -766,6 +768,7 @@ def _goal_progress_row(
         "created_at": goal.get("created_at"),
         "reset_at": goal.get("reset_at"),
         "start_mode": goal.get("start_mode") or "rolling",
+        "switch_style": "scene" if goal.get("switch_style") == "scene" else "goal",
         "archived_at": goal.get("archived_at"),
         "archive_reason": goal.get("archive_reason"),
         "repeat_count": int(goal.get("repeat_count") or 0),

@@ -1921,3 +1921,33 @@ def _migrate_1_14(conn) -> None:
         "interval": interval,
       },
     )
+
+  if "switch_sessions" not in tables:
+    conn.execute(
+      text(
+        "CREATE TABLE switch_sessions ("
+        "id VARCHAR(36) PRIMARY KEY, "
+        "dynamic_id VARCHAR(36) NOT NULL REFERENCES dynamics(id), "
+        "kind VARCHAR(32) DEFAULT 'timed', "
+        "status VARCHAR(32) DEFAULT 'drafting', "
+        "offered_by_membership_id VARCHAR(36) NOT NULL REFERENCES memberships(id), "
+        "drafter_membership_id VARCHAR(36) NOT NULL REFERENCES memberships(id), "
+        "subject_membership_id VARCHAR(36) NOT NULL REFERENCES memberships(id), "
+        "end_rule VARCHAR(32) DEFAULT 'clock', "
+        "ends_at DATETIME, "
+        "draft_goal_json TEXT DEFAULT '', "
+        "draft_scene_json TEXT DEFAULT '', "
+        "source_goal_id VARCHAR(64) DEFAULT '', "
+        "note TEXT DEFAULT '', "
+        "approved_at DATETIME, "
+        "started_at DATETIME, "
+        "ended_at DATETIME, "
+        "created_at DATETIME)"
+      )
+    )
+    conn.execute(
+      text("CREATE INDEX IF NOT EXISTS ix_switch_sessions_dynamic_id ON switch_sessions (dynamic_id)")
+    )
+    conn.execute(
+      text("CREATE INDEX IF NOT EXISTS ix_switch_sessions_status ON switch_sessions (status)")
+    )
