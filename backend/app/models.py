@@ -369,6 +369,7 @@ class Dynamic(Base):
     spin_sessions: Mapped[list["SpinGameSession"]] = relationship(back_populates="dynamic")
     feeling_checkins: Mapped[list["FeelingCheckIn"]] = relationship(back_populates="dynamic")
     punishment_reports: Mapped[list["PunishmentReport"]] = relationship(back_populates="dynamic")
+    switch_sessions: Mapped[list["SwitchSession"]] = relationship(back_populates="dynamic")
     kiosk_visits: Mapped[list["KioskVisit"]] = relationship(back_populates="dynamic")
     web_play_apps: Mapped[list["WebPlayApp"]] = relationship(back_populates="dynamic")
     instructor_sessions: Mapped[list["InstructorSession"]] = relationship(back_populates="dynamic")
@@ -377,6 +378,35 @@ class Dynamic(Base):
     assistant_change_logs: Mapped[list["AssistantChangeLog"]] = relationship(
         back_populates="dynamic"
     )
+
+
+class SwitchSession(Base):
+    """Temporary switch overlay. Does not change Membership.role."""
+
+    __tablename__ = "switch_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    # timed | session | until_goal | goal_gift | scene_gift
+    kind: Mapped[str] = mapped_column(String(32), default="timed")
+    # drafting | pending_approval | active | completed | declined
+    status: Mapped[str] = mapped_column(String(32), default="drafting", index=True)
+    offered_by_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    drafter_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    subject_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    # clock | one_scene | goal
+    end_rule: Mapped[str] = mapped_column(String(32), default="clock")
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    draft_goal_json: Mapped[str] = mapped_column(Text, default="")
+    draft_scene_json: Mapped[str] = mapped_column(Text, default="")
+    source_goal_id: Mapped[str] = mapped_column(String(64), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dynamic: Mapped[Dynamic] = relationship(back_populates="switch_sessions")
 
 
 class PunishmentReport(Base):

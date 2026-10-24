@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v164";
+const CLIENT_SW_CACHE = "ubetra-v165";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -5710,6 +5710,170 @@ function renderFacetRow(facet, dynamicId, dynamic) {
   return row;
 }
 
+function switchMetricLabel(metrics, id) {
+  return (metrics || []).find((m) => m.id === id)?.title || id || "";
+}
+
+function renderSwitchPanel(dynamicId, data, { compact = false } = {}) {
+  const sw = data?.switch;
+  if (!sw && !data?.can_offer) return null;
+  if (compact && !sw) return null;
+  const card = el("div", { className: "card stack", id: "switch-panel" });
+  const error = el("p", { className: "error hidden" });
+  const refresh = () => {
+    if (compact) {
+      navigate(`/dynamic/${dynamicId}/assistant`);
+      return;
+    }
+    renderAssistant(dynamicId);
+  };
+  async function post(path, body) {
+    error.classList.add("hidden");
+    try {
+      await api(`/dynamics/${dynamicId}/switch${path}`, {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      });
+      showToast("Switch updated.");
+      refresh();
+    } catch (err) {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    }
+  }
+  card.appendChild(el("h2", {}, "Switch"));
+  card.appendChild(el("p", { className: "muted" }, "Your tasks, chastity, and goals stay as they are. A switch does not change who the keyholder is."));
+  if (data?.headline) card.appendChild(el("p", {}, data.headline));
+  if (sw?.note) card.appendChild(el("p", { className: "muted" }, sw.note));
+  if (compact && sw) {
+    card.appendChild(el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+    }, "Open on Playtime"));
+    return card;
+  }
+  if (data?.can_offer) {
+    const kind = el("select");
+    [
+      ["timed", "For a length of time"],
+      ["session", "For one play session"],
+      ["until_goal", "Until a goal the sub writes is met"],
+    ].forEach(([value, label]) => kind.appendChild(el("option", { value }, label)));
+    const hours = el("input", { type: "number", min: "1", max: "720", value: "24" });
+    const hoursLabel = el("label", {}, ["Hours", hours]);
+    kind.addEventListener("change", () => {
+      hoursLabel.classList.toggle("hidden", kind.value !== "timed");
+    });
+    card.appendChild(el("label", {}, ["Offer", kind]));
+    card.appendChild(hoursLabel);
+    card.appendChild(el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => post("/offer", {
+        kind: kind.value,
+        hours: kind.value === "timed" ? Number(hours.value) : null,
+      }),
+    }, "Offer switch"));
+  }
+  if (data?.can_draft_goal) {
+    const title = el("input", { type: "text", maxlength: "80", placeholder: "Title" });
+    const detail = el("textarea", { rows: "3", placeholder: "What she experiences" });
+    const metric = el("select");
+    (data.metrics || []).forEach((m) => metric.appendChild(el("option", { value: m.id }, m.title)));
+    const target = el("input", { type: "number", min: "1", max: "100", value: "1" });
+    card.appendChild(el("h3", {}, "Draft a goal for your keyholder"));
+    card.appendChild(el("label", {}, ["Title", title]));
+    card.appendChild(el("label", {}, ["What it is", detail]));
+    card.appendChild(el("label", {}, ["Count", metric]));
+    card.appendChild(el("label", {}, ["How many", target]));
+    card.appendChild(el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => post("/draft", {
+        goal: {
+          title: title.value.trim(),
+          detail: detail.value.trim(),
+          metric: metric.value,
+          target: Number(target.value),
+        },
+      }),
+    }, "Send goal for approval"));
+  }
+  if (data?.can_draft_scene) {
+    card.appendChild(el("p", {}, "Direct one scene. It starts after the keyholder approves it."));
+    card.appendChild(el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => navigate(`/dynamic/${dynamicId}/assistant/scene`),
+    }, "Open Scene builder"));
+  }
+  if (data?.can_approve && sw) {
+    if (sw.goal) {
+      card.appendChild(el("p", {}, `${sw.goal.title} — ${sw.goal.target} ${switchMetricLabel(data.metrics, sw.goal.metric)}`));
+      if (sw.goal.detail) card.appendChild(el("p", { className: "muted" }, sw.goal.detail));
+    }
+    if (sw.scene) {
+      card.appendChild(el("p", {}, sw.scene.title || "Scene"));
+      if (sw.scene.summary) card.appendChild(el("p", { className: "muted" }, sw.scene.summary));
+      if (sw.scene.body) card.appendChild(el("p", { className: "playtime-scene-body" }, sw.scene.body));
+    }
+    const note = el("input", { type: "text", maxlength: "200", placeholder: "Note if you send it back" });
+    card.appendChild(el("div", { className: "row wrap" }, [
+      el("button", { type: "button", className: "primary-btn", onClick: () => post("/approve") }, "Approve and start"),
+      el("button", { type: "button", className: "ghost-btn", onClick: () => post("/send-back", { note: note.value }) }, "Send back"),
+      el("button", { type: "button", className: "ghost-btn", onClick: () => post("/decline", { note: note.value }) }, "Decline"),
+    ]));
+    card.appendChild(note);
+  }
+  if (sw?.status === "active") {
+    if (sw.goal) {
+      card.appendChild(el("p", {}, `${data.progress || 0} / ${sw.goal.target} ${switchMetricLabel(data.metrics, sw.goal.metric)}`));
+    }
+    const logs = [];
+    if (data.can_log && sw.end_rule === "one_scene") {
+      logs.push(["scene", "Log the scene"], ["spanking", "Log a spanking"]);
+    } else if (data.can_log && sw.goal) {
+      const map = { denials: ["denial", "Log a denial"], scenes: ["scene", "Log the scene"], spanking: ["spanking", "Log a spanking"] };
+      const pair = map[sw.goal.metric];
+      if (pair) logs.push(pair);
+    }
+    if (logs.length) {
+      card.appendChild(el("div", { className: "row wrap" }, logs.map(([kind, label]) => el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => post("/log", { kind }),
+      }, label))));
+    }
+    if (data.can_end) {
+      card.appendChild(el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => post("/end"),
+      }, "End switch"));
+    }
+  }
+  card.appendChild(error);
+  return card;
+}
+
+function mountSwitchBanner() {
+  const { parts } = parseRoute();
+  if (parts[0] !== "dynamic" || !parts[1]) return;
+  if (parts[2] === "assistant" && !parts[3]) return;
+  const dynamicId = parts[1];
+  const slot = el("div", { id: "switch-banner-slot" });
+  viewEl.prepend(slot);
+  api(`/dynamics/${dynamicId}/switch`).then((data) => {
+    if (!slot.isConnected || !data?.switch) {
+      slot.remove();
+      return;
+    }
+    const panel = renderSwitchPanel(dynamicId, data, { compact: true });
+    if (panel) slot.appendChild(panel);
+  }).catch(() => slot.remove());
+}
+
 function setViewContent(node) {
   const { parts } = parseRoute();
   if (parts[0] !== "chat") {
@@ -5721,6 +5885,7 @@ function setViewContent(node) {
   }
   viewEl.replaceChildren(node);
   updateBottomNav();
+  mountSwitchBanner();
 }
 
 async function bootstrap() {
@@ -11466,13 +11631,15 @@ function renderAssistant(dynamicId) {
     api(`/dynamics/${dynamicId}/assistant/status`),
     loadDynamic(dynamicId),
     api(`/dynamics/${dynamicId}/menu-summaries`).catch(() => ({})),
+    api(`/dynamics/${dynamicId}/switch`).catch(() => null),
   ])
-    .then(([status, , menuSummaries]) => {
+    .then(([status, , menuSummaries, switchData]) => {
       const stack = el("div", { className: "stack" }, [
         buildHubHeader(dynamicId, "Playtime", {
           subtitle: "Tasks, scenes, and release tools.",
           sectionFilter: "playtime",
         }),
+        switchData ? renderSwitchPanel(dynamicId, switchData) : null,
         el("div", { className: "row wrap" }, [
           el("p", { className: "muted" }, `Provider: ${status.llm_provider} · Model: ${status.llm_model}`),
           aiConfigBadge("assistant", { dynamicId }),
@@ -11565,17 +11732,22 @@ function renderAssistant(dynamicId) {
           ])
         );
       } else {
-        stack.appendChild(
-          el("button", {
-            className: "choice-btn playtime-option ai-only",
-            "data-ai-label": "Scene builder writes a full scene from your shared AI context.",
-            type: "button",
-            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/scene`),
-          }, [
-            el("strong", {}, "Scene builder"),
-            el("span", { className: "muted" }, "Effort → lean → subjects → full scene"),
-          ])
-        );
+        const directing = you?.role === "submissive" && switchData?.can_draft_scene;
+        if (you?.role !== "submissive" || directing) {
+          stack.appendChild(
+            el("button", {
+              className: "choice-btn playtime-option ai-only",
+              "data-ai-label": "Scene builder writes a full scene from your shared AI context.",
+              type: "button",
+              onClick: () => navigate(`/dynamic/${dynamicId}/assistant/scene`),
+            }, [
+              el("strong", {}, directing ? "Direct a scene" : "Scene builder"),
+              el("span", { className: "muted" }, directing
+                ? "Write the scene. The keyholder approves it before it starts."
+                : "Effort → lean → subjects → full scene"),
+            ])
+          );
+        }
         stack.appendChild(
           el("button", {
             className: "choice-btn playtime-option",
@@ -13315,9 +13487,24 @@ function renderPlaytimeScene(dynamicId) {
   Promise.all([
     api(`/dynamics/${dynamicId}/assistant/status`),
     loadDynamic(dynamicId),
+    api(`/dynamics/${dynamicId}/switch`).catch(() => ({})),
   ])
-    .then(([status]) => {
+    .then(([status, , switchData]) => {
       const you = state.currentDynamic.partners.find((p) => p.is_you);
+      const directing = you?.role === "submissive" && !!switchData?.can_draft_scene;
+      if (you?.role === "submissive" && !directing) {
+        viewEl.replaceChildren(el("div", { className: "stack" }, [
+          el("h1", {}, "Scene builder"),
+          el("p", {}, "Scene builder stays with the keyholder. It opens for you when a scene switch is waiting for your draft."),
+          el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+          }, "Back to Playtime"),
+        ]));
+        updateBottomNav();
+        return;
+      }
       const error = el("div", { className: "error hidden" });
       const body = el("div", { className: "stack" });
 
@@ -13472,9 +13659,11 @@ function renderPlaytimeScene(dynamicId) {
 
       function paint() {
         body.replaceChildren();
-        body.appendChild(el("h1", {}, "Scene builder"));
+        body.appendChild(el("h1", {}, directing ? "Direct a scene" : "Scene builder"));
         body.appendChild(
-          el("p", { className: "muted" }, "Quick scene builder for the domme / keyholder. AI context comes from Settings → What to share with AI.")
+          el("p", { className: "muted" }, directing
+            ? "You are directing this scene. Submit it when it is ready. It starts after the keyholder approves it. Your tasks, chastity, and goals stay as they are."
+            : "Quick scene builder for the domme / keyholder. AI context comes from Settings → What to share with AI.")
         );
 
         if (!status.your_interview_completed) {
@@ -13595,6 +13784,35 @@ function renderPlaytimeScene(dynamicId) {
               el("p", { className: "playtime-scene-body" }, flow.scene.body),
             ])
           );
+
+          if (directing) {
+            body.appendChild(el("button", {
+              className: "primary-btn",
+              type: "button",
+              disabled: flow.busy,
+              onClick: async () => {
+                clearError();
+                setBusy(true);
+                try {
+                  await api(`/dynamics/${dynamicId}/switch/draft`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      scene: {
+                        title: flow.scene.title || flow.subject || "Scene",
+                        summary: flow.scene.summary || "",
+                        body: flow.scene.body || "",
+                      },
+                    }),
+                  });
+                  showToast("Scene sent for approval.");
+                  navigate(`/dynamic/${dynamicId}/assistant`);
+                } catch (err) {
+                  showError(err.message);
+                  setBusy(false);
+                }
+              },
+            }, "Submit for approval"));
+          }
 
           body.appendChild(el("h3", {}, "Use this scene?"));
           body.appendChild(el("p", { className: "muted" }, "Rate it after play, or ask for something different."));
@@ -16390,7 +16608,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
     [...(goalsData.goals || []), ...(goalsData.archived_goals || [])].map((g) => [g.id, g])
   );
   const error = el("div", { className: "error hidden" });
-  const giftLabel = (kind) => ({ orgasm_grant: "Orgasm", ruin_gift: "Ruin", misc_gift: "Other" }[kind] || "Other");
+  const giftLabel = (kind) => ({ orgasm_grant: "Orgasm", ruin_gift: "Ruin", misc_gift: "Other", switch_gift: "Switch" }[kind] || "Other");
   const subs = (partners || []).filter((p) => p.role === "submissive");
   const summaryCount = el("span", { className: "task-timeline-count" }, "");
   const helpBtn = el("button", {
@@ -16450,6 +16668,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       ["ruin_gift", "Ruin"],
       ["orgasm_grant", "Orgasm"],
       ["misc_gift", "Other"],
+      ["switch_gift", "Switch"],
     ].forEach(([id, label]) => {
       const opt = el("option", { value: id }, label);
       if (goal.kind === id) opt.selected = true;
@@ -16465,6 +16684,19 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       }
     });
     kindSelect.disabled = archived;
+
+    if (!goal.switch_style) goal.switch_style = "goal";
+    const styleSelect = el("select");
+    [
+      ["goal", "Sub drafts a goal for you"],
+      ["scene", "Sub directs a scene"],
+    ].forEach(([id, label]) => {
+      const opt = el("option", { value: id }, label);
+      if ((goal.switch_style || "goal") === id) opt.selected = true;
+      styleSelect.appendChild(opt);
+    });
+    styleSelect.addEventListener("change", () => { goal.switch_style = styleSelect.value; });
+    styleSelect.disabled = archived;
 
     const title = el("input", { value: goal.title || "", placeholder: "Goal title" });
     title.addEventListener("change", () => { goal.title = title.value.trim(); });
@@ -16698,6 +16930,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       ]),
       el("label", {}, ["Title", title]),
       el("label", {}, ["Gift type", kindSelect]),
+      goal.kind === "switch_gift" ? el("label", {}, ["Switch gift", styleSelect]) : null,
       subs.length > 1 ? el("label", {}, ["For", forSelect]) : null,
       archived ? null : el("label", {}, ["Tracking start", startSelect]),
       archived ? null : startHint,
@@ -16753,6 +16986,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       config.goals.push({
         id: `goal-${Date.now()}`,
         kind: "orgasm_grant",
+        switch_style: "goal",
         title: "Next orgasm / unlock",
         for_membership_id: subs[0]?.id || null,
         requirements: [
