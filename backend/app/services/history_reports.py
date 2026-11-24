@@ -211,7 +211,17 @@ def build_chastity_days_report(
         days_payload = []
         partial_days = free_days = 0
         whole_days = count_rolling_full_days(lockups, sub.id, until=period_end)
+        first_lock = None
+        for lockup in lockups:
+            if lockup.for_membership_id != sub.id or lockup.started_at is None:
+                continue
+            started = as_naive_utc(lockup.started_at) or lockup.started_at
+            if first_lock is None or started < first_lock:
+                first_lock = started
+        first_day = first_lock.date() if first_lock is not None else None
         for day in day_list:
+            if first_day is None or day < first_day:
+                continue
             status, locked = calendar_day_status(
                 lockups, sub.id, day, period_end=period_end
             )

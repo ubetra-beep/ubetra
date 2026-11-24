@@ -1630,6 +1630,8 @@ class HistoryWeekBucket(BaseModel):
     avg_duration_by_partner: dict[str, float | None] = Field(default_factory=dict)
     play_by_partner: dict[str, int] = Field(default_factory=dict)
     ruined_by_partner: dict[str, int] = Field(default_factory=dict)
+    full_by_partner: dict[str, int] = Field(default_factory=dict)
+    sessions_by_partner: dict[str, int] = Field(default_factory=dict)
 
 
 class HistoryPartnerSummary(BaseModel):
@@ -1637,6 +1639,10 @@ class HistoryPartnerSummary(BaseModel):
     name: str
     role: str
     orgasm_count: int
+    full_orgasm_count: int = 0
+    ruined_orgasm_count: int = 0
+    full_session_count: int = 0
+    ruined_session_count: int = 0
     play_count: int
     avg_duration_minutes: float | None = None
     chastity_enabled: bool
@@ -1779,6 +1785,8 @@ class HistoryChastityStatsOut(BaseModel):
 class HistoryWeeklyOut(BaseModel):
     dynamic_name: str
     days: int
+    span_days: int = 0
+    span_label: str = ""
     comparison_label: str
     partners: list[HistoryPartnerSummary]
     weekly_buckets: list[HistoryWeekBucket]

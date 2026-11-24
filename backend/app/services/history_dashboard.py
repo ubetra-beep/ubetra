@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from ..models import (
@@ -14,7 +15,51 @@ from ..models import (
 from ..schemas import HistoryPartnerSummary, HistoryWeekBucket
 from .chastity import chastity_subs, effective_locked_seconds, partner_state
 from .tags import entry_matches_selected_tags, tags_to_list
-from .tracking_events import has_ruined_orgasm_tag, is_orgasm_event, is_play_event, orgasm_count
+from .tracking_events import has_ruined_orgasm_tag, is_orgasm_event, is_play_event
+
+
+def _span_label(days: int) -> str:
+    if days >= 45:
+        months = max(1, round(days / 30.44))
+        return "1 month" if months == 1 else f"{months} months"
+    weeks = max(1, round(days / 7))
+    return "1 week" if weeks == 1 else f"{weeks} weeks"
+
+
+def _history_start(db: Session, dynamic_id: str) -> datetime | None:
+    first_entry = (
+        db.query(func.min(OrgTrackingEntry.occurred_at))
+        .filter(OrgTrackingEntry.dynamic_id == dynamic_id)
+        .scalar()
+    )
+    first_lock = (
+        db.query(func.min(ChastityLockup.started_at))
+        .filter(ChastityLockup.dynamic_id == dynamic_id)
+        .scalar()
+    )
+    stamps = [stamp for stamp in (first_entry, first_lock) if stamp is not None]
+    return min(stamps) if stamps else None
+
+
+def _orgasm_kind_counts(entry: OrgTrackingEntry) -> tuple[int, int]:
+    """Ruined is its own tag. Every other orgasm row, including older method-only logs, is full."""
+    if not is_orgasm_event(entry.event_type):
+        return 0, 0
+    rows = list(entry.orgasms or [])
+    tag_lists = [tags_to_list(row.tags) for row in rows] or [tags_to_list(entry.tags)]
+    full = ruined = 0
+    for tags in tag_lists:
+        if has_ruined_orgasm_tag(tags):
+            ruined += 1
+        else:
+            full += 1
+    if not tag_lists:
+        return 1, 0
+    return full, ruined
+
+
+def _is_logged_session(entry: OrgTrackingEntry) -> bool:
+    return is_orgasm_event(entry.event_type) or is_play_event(entry.event_type)
 
 
 def _week_starts(since: datetime, until: datetime) -> list[datetime]:
@@ -51,10 +96,17 @@ def build_history_dashboard(
     *,
     days: int = 90,
     selected_tags: list[str] | None = None,
+    since_first: bool = False,
 ) -> dict:
     selected_tags = selected_tags or []
-    since = datetime.utcnow() - timedelta(days=days)
     now = datetime.utcnow()
+    if since_first:
+        start = _history_start(db, dynamic_id)
+        since = datetime.combine(start.date(), datetime.min.time()) if start else now - timedelta(days=30)
+    else:
+        since = now - timedelta(days=days)
+    span_days = max(1, (now - since).days or 1)
+    span_label = _span_label(span_days)
     membership_map = {m.id: m for m in memberships}
     tracked_subs = chastity_subs(memberships)
 
@@ -91,6 +143,8 @@ def build_history_dashboard(
     for week_start in _week_starts(since, now):
         week_end = min(week_start + timedelta(days=7), now + timedelta(seconds=1))
         orgasms_by_partner: dict[str, int] = {}
+        full_by_partner: dict[str, int] = {}
+        sessions_by_partner: dict[str, int] = {}
         chastity_locked_pct: dict[str, float] = {}
         durations: dict[str, list[int]] = {}
         play_by_partner: dict[str, int] = {}
@@ -98,6 +152,8 @@ def build_history_dashboard(
 
         for membership in memberships:
             orgasms_by_partner[membership.id] = 0
+            full_by_partner[membership.id] = 0
+            sessions_by_partner[membership.id] = 0
             play_by_partner[membership.id] = 0
             ruined_by_partner[membership.id] = 0
             durations[membership.id] = []
@@ -105,15 +161,13 @@ def build_history_dashboard(
         for entry in filtered_entries:
             if week_start <= entry.occurred_at < week_end:
                 mid = entry.for_membership_id
+                if _is_logged_session(entry):
+                    sessions_by_partner[mid] = sessions_by_partner.get(mid, 0) + 1
                 if is_orgasm_event(entry.event_type):
-                    orgasms_by_partner[mid] = orgasms_by_partner.get(mid, 0) + orgasm_count(entry)
-                    rows = entry.orgasms or []
-                    if rows:
-                        ruined_by_partner[mid] = ruined_by_partner.get(mid, 0) + sum(
-                            1 for row in rows if has_ruined_orgasm_tag(tags_to_list(row.tags))
-                        )
-                    elif has_ruined_orgasm_tag(tags_to_list(entry.tags)):
-                        ruined_by_partner[mid] = ruined_by_partner.get(mid, 0) + 1
+                    full_n, ruined_n = _orgasm_kind_counts(entry)
+                    orgasms_by_partner[mid] = orgasms_by_partner.get(mid, 0) + full_n + ruined_n
+                    full_by_partner[mid] = full_by_partner.get(mid, 0) + full_n
+                    ruined_by_partner[mid] = ruined_by_partner.get(mid, 0) + ruined_n
                 if is_play_event(entry.event_type):
                     play_by_partner[mid] = play_by_partner.get(mid, 0) + 1
                 if entry.duration_minutes is not None:
@@ -134,6 +188,8 @@ def build_history_dashboard(
                 start=week_start,
                 end=week_end,
                 orgasms_by_partner=orgasms_by_partner,
+                full_by_partner=full_by_partner,
+                sessions_by_partner=sessions_by_partner,
                 chastity_locked_pct_by_partner=chastity_locked_pct,
                 avg_duration_by_partner={
                     mid: round(sum(vals) / len(vals), 1) if vals else None
@@ -147,24 +203,27 @@ def build_history_dashboard(
     partner_summaries: list[HistoryPartnerSummary] = []
     org_totals: dict[str, int] = {}
     for membership in memberships:
-        org_count = sum(
-            orgasm_count(entry)
-            for entry in filtered_entries
-            if entry.for_membership_id == membership.id
-            and is_orgasm_event(entry.event_type)
-        )
-        play_count = sum(
-            1
-            for entry in filtered_entries
-            if entry.for_membership_id == membership.id
-            and is_play_event(entry.event_type)
-        )
+        member_entries = [
+            entry for entry in filtered_entries if entry.for_membership_id == membership.id
+        ]
+        full_total = ruined_total = 0
+        full_sessions = ruined_sessions = 0
+        for entry in member_entries:
+            full_n, ruined_n = _orgasm_kind_counts(entry)
+            full_total += full_n
+            ruined_total += ruined_n
+            if full_n > 0:
+                full_sessions += 1
+            elif ruined_n > 0:
+                ruined_sessions += 1
+        org_count = full_total + ruined_total
+        play_count = sum(1 for entry in member_entries if is_play_event(entry.event_type))
         dur_vals = [
             e.duration_minutes
-            for e in filtered_entries
-            if e.for_membership_id == membership.id and e.duration_minutes is not None
+            for e in member_entries
+            if e.duration_minutes is not None
         ]
-        org_totals[membership.id] = org_count
+        org_totals[membership.id] = full_total
         pct_locked = None
         if membership.chastity_enabled and membership.role == PartnerRole.submissive:
             pct_locked = partner_state(db, dynamic_id, membership)["percent_locked_all_time"]
@@ -174,6 +233,10 @@ def build_history_dashboard(
                 name=membership.display_name,
                 role=membership.role.value,
                 orgasm_count=org_count,
+                full_orgasm_count=full_total,
+                ruined_orgasm_count=ruined_total,
+                full_session_count=full_sessions,
+                ruined_session_count=ruined_sessions,
                 play_count=play_count,
                 avg_duration_minutes=round(sum(dur_vals) / len(dur_vals), 1) if dur_vals else None,
                 chastity_enabled=membership.chastity_enabled,
@@ -182,27 +245,30 @@ def build_history_dashboard(
         )
 
     values = list(org_totals.values())
-    comparison_label = "No orgasms logged in this period"
+    comparison_label = "No full orgasms logged in this period"
     if values and max(values) > 0:
         names = {m.id: m.display_name for m in memberships}
         leader_id = max(org_totals, key=org_totals.get)
         leader = org_totals[leader_id]
         other_total = sum(v for k, v in org_totals.items() if k != leader_id)
+        window = span_label if since_first else f"last {span_days} days"
         if leader > other_total and other_total == 0:
-            comparison_label = f"{names[leader_id]}: {leader} orgasms · partner: 0"
+            comparison_label = f"{names[leader_id]}: {leader} full orgasms · partner: 0"
         elif leader != other_total:
             comparison_label = (
-                f"{names[leader_id]} leads {leader}–{other_total} orgasms in last {days} days"
+                f"{names[leader_id]} leads {leader}–{other_total} full orgasms over {window}"
             )
         else:
-            comparison_label = f"Tied at {leader} orgasms each in last {days} days"
+            comparison_label = f"Tied at {leader} full orgasms each over {window}"
 
     available_tags: set[str] = set()
     for entry in entries:
         available_tags.update(tags_to_list(entry.tags))
 
     return {
-        "days": days,
+        "days": span_days,
+        "span_days": span_days,
+        "span_label": span_label,
         "selected_tags": selected_tags,
         "available_tags": sorted(available_tags),
         "partners": partner_summaries,

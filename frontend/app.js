@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v168";
+const CLIENT_SW_CACHE = "ubetra-v170";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -174,7 +174,7 @@ const FACET_SECTIONS = [
 
 /** Facets linked from Today under More tracking. */
 const TRACKING_FACETS = [
-  { id: "history", icon: "📊", title: "History", subtitle: "Reports and logs", route: "history", core: true },
+  { id: "history", icon: "📊", title: "History", subtitle: "Days in chastity", route: "history", core: true },
   { id: "chastity", icon: "🔒", title: "Chastity tracking", subtitle: "Lockup stats and current lock time", route: "chastity" },
   { id: "org_tracking", icon: "📈", title: "Sex & orgasm tracking", subtitle: "Counts and recent activity", route: "tracking" },
   { id: "feelings", icon: "💫", title: "Feelings tracking", subtitle: "Wheel check-ins before/after play", route: "feelings" },
@@ -1731,47 +1731,6 @@ function formatTrackingEventType(eventType) {
   return eventType;
 }
 
-function trackingTagText(tag) {
-  return String(tag || "").toLowerCase().replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function tagIsFullOrgasm(tag) {
-  const t = trackingTagText(tag);
-  return t === "full orgasm" || t.startsWith("full orgasm") || (t.includes("full") && t.includes("orgasm"));
-}
-
-function tagIsRuinedOrgasm(tag) {
-  return trackingTagText(tag).includes("ruin");
-}
-
-function tagIsDeniedOrMilking(tag) {
-  const t = trackingTagText(tag);
-  if (t.includes("ruin")) return false;
-  return t.includes("denied") || t.includes("denial") || t.includes("milk");
-}
-
-/** Older orgasm rows stored the method only. Ruined was a separate tag, so the rest are full. */
-function orgasmTagsCountAsFull(tags) {
-  const list = tags || [];
-  if (list.some(tagIsRuinedOrgasm) && !list.some(tagIsFullOrgasm)) return false;
-  if (list.some(tagIsFullOrgasm)) return true;
-  if (list.some(tagIsDeniedOrMilking)) return false;
-  return true;
-}
-
-function formatTrackingEntryKind(entry) {
-  if (entry.event_type !== "orgasm" && entry.event_type !== "both") {
-    return formatTrackingEventType(entry.event_type);
-  }
-  const rows = entry.orgasms?.length ? entry.orgasms : [{ tags: entry.tags || [] }];
-  const full = rows.some((row) => orgasmTagsCountAsFull(row.tags || []));
-  const ruined = rows.some((row) => (row.tags || []).some(tagIsRuinedOrgasm));
-  if (full && ruined) return "Full + ruined";
-  if (ruined) return "Ruined orgasm";
-  if (full) return "Full orgasm";
-  return "Orgasm";
-}
-
 function buildPartnerSoloRadio(name = `ctx-${Date.now()}`) {
   const wrap = el("div", { className: "row wrap partner-context-radio" });
   const inputs = PARTNER_CONTEXT_OPTIONS.map((opt, idx) => {
@@ -2190,13 +2149,9 @@ function renderTrackingEntrySummary(entry, { dynamicId, editable = false, onChan
   let expanded = false;
 
   function buildCard(onEdit, onDelete) {
-    const storedTags = entry.orgasms?.length
+    const allTags = entry.orgasms?.length
       ? entry.orgasms.flatMap((o) => o.tags || [])
       : entry.tags || [];
-    const allTags = (entry.event_type === "orgasm" || entry.event_type === "both")
-      && (entry.orgasms?.length ? entry.orgasms : [{ tags: storedTags }]).some((row) => orgasmTagsCountAsFull(row.tags || []) && !(row.tags || []).some(tagIsFullOrgasm))
-      ? ["Full orgasm", ...storedTags]
-      : storedTags;
     const accentColors = tagAccentColors(allTags);
     const accentGradient = tagAccentGradient(accentColors);
 
@@ -2220,7 +2175,7 @@ function renderTrackingEntrySummary(entry, { dynamicId, editable = false, onChan
           el("strong", {}, entry.for_display_name),
           el("span", { className: "muted log-card-when" }, formatLogWhen(entry.occurred_at)),
         ]),
-        el("span", { className: "pill" }, formatTrackingEntryKind(entry)),
+        el("span", { className: "pill" }, formatTrackingEventType(entry.event_type)),
       ]
     );
 
@@ -2278,15 +2233,12 @@ function renderTrackingEntrySummary(entry, { dynamicId, editable = false, onChan
 
     if (entry.orgasms?.length) {
       entry.orgasms.forEach((orgasm, idx) => {
-        const oTags = orgasm.tags || [];
-        const shown = orgasmTagsCountAsFull(oTags) && !oTags.some(tagIsFullOrgasm)
-          ? ["Full orgasm", ...oTags]
-          : oTags;
+        const oTags = (orgasm.tags || []).join(", ");
         details.appendChild(
           el(
             "p",
             { className: "muted log-card-orgasm" },
-            `Orgasm ${idx + 1} · ${shown.join(", ")}`
+            `Orgasm ${idx + 1}${oTags ? ` · ${oTags}` : ""}`
           )
         );
       });
@@ -6373,8 +6325,9 @@ function renderOnboarding() {
 }
 
 const HISTORY_REPORTS = [
-  { id: "weekly", title: "Weekly activity", subtitle: "Orgasm comparison, weekly trends, and averages", needsChastity: false, yearBased: false },
   { id: "chastity-days", title: "Days in chastity", subtitle: "Calendar of full, partial, and free days", needsChastity: true, yearBased: true },
+  { id: "weekly", title: "Weekly activity", subtitle: "Full orgasms, sessions, and locked time", needsChastity: false, yearBased: false },
+  { id: "calendar", title: "Calendar", subtitle: "Lockups, orgasms, and feelings on the month", needsChastity: false, yearBased: false },
   { id: "orgasms", title: "Orgasm report", subtitle: "Charts, averages, monthly trends, and intervals", needsChastity: false, yearBased: true },
   { id: "chastity-stats", title: "Chastity statistics", subtitle: "Sessions, durations, locked %, monthly charts", needsChastity: true, yearBased: true },
   { id: "sessions", title: "Linked sessions", subtitle: "Entries within 1 hour grouped together", needsChastity: false, yearBased: false },
@@ -6382,14 +6335,14 @@ const HISTORY_REPORTS = [
   { id: "chastity-log", title: "Chastity lockup log", subtitle: "Lockup periods with edit controls", needsChastity: true, yearBased: false },
 ];
 
-function historyReportShell(dynamicId, title, bodyNodes, { onBack } = {}) {
+function historyReportShell(dynamicId, title, bodyNodes, { onBack, backLabel } = {}) {
   const stack = el("div", { className: "stack" }, [
     el("div", { className: "row wrap" }, [
       el("button", {
         className: "ghost-btn",
         type: "button",
         onClick: () => (onBack ? onBack() : navigate(`/dynamic/${dynamicId}/history`)),
-      }, "← History"),
+      }, backLabel || "← History"),
       el("h1", {}, title),
     ]),
     ...(Array.isArray(bodyNodes) ? bodyNodes : [bodyNodes]),
@@ -6859,6 +6812,191 @@ function renderPartnerLegend(partners) {
   return row;
 }
 
+function renderRuinFullSplit(items) {
+  const wrap = el("div", { className: "ratio-split-list" });
+  items.forEach((item) => {
+    const full = Number(item.full) || 0;
+    const ruined = Number(item.ruined) || 0;
+    const total = full + ruined;
+    const bar = el("div", { className: "ratio-split" });
+    if (total) {
+      bar.appendChild(el("div", { className: "full-part", style: `width:${(full / total) * 100}%` }));
+      bar.appendChild(el("div", { className: "ruined-part", style: `width:${(ruined / total) * 100}%` }));
+    }
+    wrap.appendChild(el("div", {}, [
+      el("div", { className: "ratio-split-label" }, [
+        el("span", {}, item.label),
+        el("span", { className: "muted" }, total ? `${ruined} ruined : ${full} full` : "none logged"),
+      ]),
+      bar,
+    ]));
+  });
+  wrap.appendChild(el("p", { className: "muted" }, "Green is full. Striped blue is ruined. The bar is that person's own mix, not a score against their partner."));
+  return wrap;
+}
+
+function svgEl(tag, attrs = {}) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value)));
+  return node;
+}
+
+function historySeries(buckets, partnerIds, valueKey, smooth) {
+  return partnerIds.map((pid) => {
+    const raw = buckets.map((bucket) => {
+      const value = typeof valueKey === "function" ? valueKey(bucket, pid) : (bucket[valueKey] || {})[pid];
+      return Number(value) || 0;
+    });
+    if (!smooth || smooth < 2) return raw;
+    return raw.map((_, index) => {
+      const slice = raw.slice(Math.max(0, index - smooth + 1), index + 1);
+      return slice.reduce((sum, n) => sum + n, 0) / slice.length;
+    });
+  });
+}
+
+function renderHistoryLineChart(buckets, { valueKey, partnerIds, partnerNames, maxHint, goal, unit = "", smooth = 0 } = {}) {
+  const series = historySeries(buckets, partnerIds, valueKey, smooth);
+  const goalValue = goal == null || Number.isNaN(Number(goal)) ? null : Number(goal);
+  const maxVal = Math.max(1, Number(maxHint) || 0, goalValue || 0, ...series.flat());
+  const width = Math.max(280, (buckets.length || 1) * 28);
+  const height = 168;
+  const padL = 32;
+  const padR = 10;
+  const padT = 12;
+  const padB = 24;
+  const innerW = width - padL - padR;
+  const innerH = height - padT - padB;
+  const xAt = (index) => padL + (buckets.length <= 1 ? innerW / 2 : (index / (buckets.length - 1)) * innerW);
+  const yAt = (value) => padT + innerH - (Math.max(0, value) / maxVal) * innerH;
+  const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, class: "history-line-chart", role: "img" });
+  [0, 0.5, 1].forEach((tick) => {
+    const y = yAt(maxVal * tick);
+    svg.appendChild(svgEl("line", { x1: padL, x2: width - padR, y1: y, y2: y, class: "history-line-grid" }));
+    const label = svgEl("text", { x: 2, y: y + 3, class: "history-line-axis" });
+    const shown = maxVal * tick;
+    label.textContent = shown >= 10 || unit === "%" ? String(Math.round(shown)) : shown.toFixed(1);
+    svg.appendChild(label);
+  });
+  if (goalValue != null) {
+    const y = yAt(Math.min(goalValue, maxVal));
+    svg.appendChild(svgEl("line", { x1: padL, x2: width - padR, y1: y, y2: y, class: "history-line-goal" }));
+  }
+  series.forEach((values, idx) => {
+    if (!values.length) return;
+    svg.appendChild(svgEl("polyline", {
+      points: values.map((value, index) => `${xAt(index)},${yAt(value)}`).join(" "),
+      class: `history-line p${idx}`,
+    }));
+    values.forEach((value, index) => {
+      const shown = unit === "%" ? `${Math.round(value)}%` : String(Math.round(value * 10) / 10);
+      const dot = svgEl("circle", {
+        cx: xAt(index),
+        cy: yAt(value),
+        r: buckets.length > 24 ? 2.2 : 3.2,
+        class: `history-line-dot p${idx}`,
+      });
+      const tip = svgEl("title");
+      tip.textContent = `${partnerNames[idx] || "Partner"} · ${buckets[index].label}: ${shown}`;
+      dot.appendChild(tip);
+      svg.appendChild(dot);
+    });
+  });
+  const step = Math.max(1, Math.ceil(buckets.length / 8));
+  buckets.forEach((bucket, index) => {
+    if (index % step !== 0 && index !== buckets.length - 1) return;
+    const label = svgEl("text", {
+      x: xAt(index),
+      y: height - 4,
+      class: "history-line-xlabel",
+      "text-anchor": "middle",
+    });
+    label.textContent = bucket.label;
+    svg.appendChild(label);
+  });
+  const wrap = el("div", { className: "history-line-wrap" });
+  wrap.appendChild(svg);
+  return wrap;
+}
+
+function lockGoalValue(data) {
+  const rows = data?.config?.targets || data?.targets || [];
+  const row = rows.find((item) => item.metric === "percent_locked");
+  return row && row.target != null && !Number.isNaN(Number(row.target)) ? Number(row.target) : null;
+}
+
+function renderWeeklyLockCard(data, { goal = null, interactive = false, onGoal } = {}) {
+  const subs = (data?.partners || []).filter((partner) => partner.chastity_enabled);
+  if (!data?.chastity_any_enabled || !subs.length || !(data.weekly_buckets || []).length) return null;
+  const ids = subs.map((partner) => partner.membership_id);
+  const names = subs.map((partner) => partner.name);
+  let current = goal == null ? 50 : Number(goal);
+  const showGoal = interactive || goal != null;
+  const plot = el("div", { className: "lock-goal-plot" });
+  const valueLabel = el("span", { className: "lock-goal-value" }, `${Math.round(current)}%`);
+  function draw() {
+    plot.replaceChildren(renderHistoryLineChart(data.weekly_buckets, {
+      valueKey: "chastity_locked_pct_by_partner",
+      partnerIds: ids,
+      partnerNames: names,
+      maxHint: 100,
+      goal: showGoal ? current : null,
+      unit: "%",
+    }));
+  }
+  draw();
+  const layout = el("div", { className: "lock-goal-layout" }, [plot]);
+  if (interactive) {
+    const range = el("input", {
+      type: "range",
+      className: "lock-goal-range",
+      min: "0",
+      max: "100",
+      step: "1",
+      value: String(Math.round(current)),
+      "aria-label": "Weekly locked goal",
+    });
+    range.addEventListener("input", () => {
+      current = Number(range.value);
+      valueLabel.textContent = `${Math.round(current)}%`;
+      draw();
+      if (onGoal) onGoal(current);
+    });
+    layout.appendChild(el("label", { className: "lock-goal-slider" }, [
+      el("span", { className: "muted" }, "Goal"),
+      range,
+      valueLabel,
+    ]));
+  }
+  return el("div", { className: "card stack" }, [
+    el("h2", {}, "Locked time"),
+    el("p", { className: "muted" }, interactive
+      ? "Percent of each week spent locked. Slide the goal to the weekly average you want."
+      : "Percent of each week spent locked. The line climbs or falls from week to week."),
+    renderPartnerLegend(subs),
+    layout,
+  ]);
+}
+
+function buildWeeklyPeriodPicker(mode, sinceLabel, onChange) {
+  const select = el("select");
+  [
+    ["since_first", sinceLabel || "Since first log"],
+    ["30", "30 days"],
+    ["90", "90 days"],
+    ["180", "6 months"],
+    ["365", "1 year"],
+  ].forEach(([value, label]) => {
+    const opt = el("option", { value }, label);
+    if ((mode === "since_first" && value === "since_first") || String(mode) === value) opt.selected = true;
+    select.appendChild(opt);
+  });
+  select.addEventListener("change", () => {
+    onChange(select.value === "since_first" ? "since_first" : parseInt(select.value, 10));
+  });
+  return el("label", {}, ["Period", select]);
+}
+
 function renderHistoryHub(dynamicId) {
   const id = dynamicId || getActiveDynamicId();
   if (!id) {
@@ -6912,94 +7050,115 @@ function renderHistoryReport(dynamicId, reportId) {
   }
   state.activeDynamicId = id;
   let year = new Date().getFullYear();
-  let sinceFirstLockup = false;
+  let sinceFirstLockup = true;
   let days = report.id === "chastity-log" ? 365 : 90;
+  let periodMode = "since_first";
+  let fullSpanLabel = "";
   let selectedTags = [];
 
   function paintWeekly() {
     const tagQuery = selectedTags.length ? `&tags=${encodeURIComponent(selectedTags.join(","))}` : "";
-    api(`/dynamics/${id}/history/reports/weekly?days=${days}${tagQuery}`)
-      .then((data) => {
+    const periodQuery = periodMode === "since_first" ? "since=first" : `days=${days}`;
+    Promise.all([
+      api(`/dynamics/${id}/history/reports/weekly?${periodQuery}${tagQuery}`),
+      api(`/dynamics/${id}/standing-targets`).catch(() => null),
+    ])
+      .then(([data, standing]) => {
+        if (periodMode === "since_first" && data.span_label) fullSpanLabel = data.span_label;
         const partnerIds = data.partners.map((p) => p.membership_id);
         const partnerNames = data.partners.map((p) => p.name);
-        const buckets = data.weekly_buckets.slice(-12);
+        const buckets = data.weekly_buckets || [];
+        const spanLabel = data.span_label || "this period";
         const nodes = [
-          buildDaysPicker(days, (v) => { days = v; paintWeekly(); }),
+          buildWeeklyPeriodPicker(periodMode, fullSpanLabel || spanLabel, (next) => {
+            periodMode = next;
+            if (next !== "since_first") days = next;
+            paintWeekly();
+          }),
+          periodMode === "since_first"
+            ? el("p", { className: "muted" }, "From the first log through today.")
+            : null,
           el("p", { className: "muted" }, data.comparison_label),
           renderPartnerLegend(data.partners),
-        ];
+        ].filter(Boolean);
 
         const compare = el("div", { className: "card stack" }, [
-          el("h2", {}, "Orgasm totals"),
-          renderCompareBars(data.partners.map((p) => ({ label: p.name, value: p.orgasm_count }))),
+          el("h2", {}, "Full orgasms"),
+          renderCompareBars(data.partners.map((p) => ({
+            label: p.name,
+            value: p.full_orgasm_count ?? p.orgasm_count,
+          }))),
+          el("p", { className: "muted" }, "Partner beside partner. Ruined orgasms are not in these bars."),
         ]);
         nodes.push(compare);
+        nodes.push(el("div", { className: "card stack" }, [
+          el("h2", {}, "Ruined to full"),
+          renderRuinFullSplit(data.partners.map((p) => ({
+            label: p.name,
+            full: p.full_orgasm_count ?? 0,
+            ruined: p.ruined_orgasm_count ?? 0,
+          }))),
+        ]));
 
         nodes.push(el("div", { className: "card stack" }, [
-          el("h2", {}, "Averages this period"),
+          el("h2", {}, `Averages over ${spanLabel}`),
           renderMetricTiles(data.partners.flatMap((p) => {
-            const weeks = Math.max(1, days / 7);
-            return [
-              { label: `${p.name} / week`, value: (p.orgasm_count / weeks).toFixed(1), hint: "orgasms" },
-              { label: `${p.name} duration`, value: p.avg_duration_minutes != null ? `${p.avg_duration_minutes}m` : "—", hint: "avg session" },
-              { label: `${p.name} play`, value: p.play_count, hint: "no-O sessions" },
+            const span = data.span_days || days;
+            const weeks = Math.max(1, span / 7);
+            const fullCount = p.full_orgasm_count ?? p.orgasm_count;
+            const tiles = [
+              { label: `${p.name} / week`, value: (fullCount / weeks).toFixed(1), hint: "full orgasms" },
             ];
+            if (p.role !== "dominant") {
+              tiles.push({ label: `${p.name} play`, value: p.play_count, hint: "no-O sessions" });
+            }
+            if (p.role === "submissive") {
+              const fullSessions = Number(p.full_session_count) || 0;
+              const ruinedSessions = Number(p.ruined_session_count) || 0;
+              tiles.push({
+                label: `${p.name} sessions`,
+                value: fullSessions || ruinedSessions ? `${fullSessions} : ${ruinedSessions}` : "—",
+                hint: "full : ruined",
+              });
+            }
+            return tiles;
           })),
         ]));
 
         nodes.push(el("div", { className: "card stack" }, [
-          el("h2", {}, "Weekly orgasms"),
-          renderHistoryBarChart(buckets, {
-            valueKey: "orgasms_by_partner",
+          el("h2", {}, "Full orgasm rate"),
+          renderHistoryLineChart(buckets, {
+            valueKey: "full_by_partner",
             partnerIds,
             partnerNames,
+            smooth: 4,
           }),
-          el("p", { className: "muted" }, "Bars = orgasm count per partner each week"),
+          el("p", { className: "muted" }, "Each point is that partner's average full orgasms per week over the previous 4 weeks. Older logs without a ruined tag count as full."),
         ]));
 
         nodes.push(el("div", { className: "card stack" }, [
-          el("h2", {}, "Weekly play sessions"),
-          renderHistoryBarChart(buckets, {
-            valueKey: "play_by_partner",
+          el("h2", {}, "Sessions per week"),
+          renderHistoryLineChart(buckets, {
+            valueKey: "sessions_by_partner",
             partnerIds,
             partnerNames,
           }),
+          el("p", { className: "muted" }, "Sessions logged that week. Several orgasms in one session count once."),
         ]));
 
-        nodes.push(el("div", { className: "card stack" }, [
-          el("h2", {}, "Weekly ruined / denial tags"),
-          renderHistoryBarChart(buckets, {
-            valueKey: "ruined_by_partner",
-            partnerIds,
-            partnerNames,
-          }),
-        ]));
-
-        nodes.push(el("div", { className: "card stack" }, [
-          el("h2", {}, "Average session duration (min)"),
-          renderHistoryBarChart(buckets, {
-            valueKey: (bucket, pid) => bucket.avg_duration_by_partner?.[pid] || 0,
-            partnerIds,
-            partnerNames,
-          }),
-        ]));
-
-        if (data.chastity_any_enabled) {
-          nodes.push(el("div", { className: "card stack" }, [
-            el("h2", {}, "Weekly chastity % locked"),
-            renderHistoryBarChart(buckets, {
-              valueKey: "chastity_locked_pct_by_partner",
-              partnerIds,
-              partnerNames,
-              maxHint: 100,
-            }),
-            el("p", { className: "muted" }, "Height = percent of the week locked (sub only)"),
-          ]));
-        }
+        const lockCard = renderWeeklyLockCard(data, { goal: lockGoalValue(standing) });
+        if (lockCard) nodes.push(lockCard);
 
         historyReportShell(id, report.title, nodes);
       })
       .catch((err) => historyReportShell(id, report.title, el("p", { className: "error" }, err.message)));
+  }
+
+  function paintCalendar() {
+    loadDynamic(id).then(() => {
+      const partners = state.currentDynamic?.partners || [];
+      historyReportShell(id, report.title, renderTrackingEventsCalendar(id, partners));
+    }).catch((err) => historyReportShell(id, report.title, el("p", { className: "error" }, err.message)));
   }
 
   function paintChastityDays() {
@@ -7014,27 +7173,42 @@ function renderHistoryReport(dynamicId, reportId) {
           }),
         ];
         if (data.since_first && data.range_start) {
-          nodes.push(el("p", { className: "muted" }, `From ${data.range_start} through today.`));
+          nodes.push(el("p", { className: "muted" }, `From ${data.range_start} through today. Days before a person’s first lockup are left off.`));
+        } else {
+          nodes.push(el("p", { className: "muted" }, "Days before a person’s first lockup are left off."));
         }
+        nodes.push(el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: () => navigate(`/dynamic/${id}/history/list`),
+        }, "Other reports"));
         if (!data.partners.length) {
           nodes.push(el("p", { className: "muted" }, "Chastity not enabled."));
         }
         data.partners.forEach((partner) => {
-          nodes.push(el("div", { className: "card stack" }, [
+          const card = el("div", { className: "card stack" }, [
             el("h2", {}, partner.name),
-            renderMetricTiles([
+          ]);
+          if (!(partner.days || []).length) {
+            card.appendChild(el("p", { className: "muted" }, "No lockups in this range."));
+          } else {
+            card.appendChild(renderMetricTiles([
               { label: "Rolling whole days", value: partner.whole_days },
               { label: "Partial days", value: partner.partial_days },
               { label: "Free days", value: partner.free_days },
-            ]),
-            renderChastityCalendar(partner.days, {
+            ]));
+            card.appendChild(renderChastityCalendar(partner.days, {
               dynamicId: id,
               membershipId: partner.membership_id,
               onChanged: () => paintChastityDays(),
-            }),
-          ]));
+            }));
+          }
+          nodes.push(card);
         });
-        historyReportShell(id, report.title, nodes);
+        historyReportShell(id, report.title, nodes, {
+          onBack: () => navigate(`/dynamic/${id}`),
+          backLabel: "← Dynamic",
+        });
       })
       .catch((err) => historyReportShell(id, report.title, el("p", { className: "error" }, err.message)));
   }
@@ -7386,6 +7560,7 @@ function renderHistoryReport(dynamicId, reportId) {
 
   setViewContent(el("p", { className: "muted" }, "Loading report..."));
   if (reportId === "weekly") paintWeekly();
+  else if (reportId === "calendar") paintCalendar();
   else if (reportId === "chastity-days") paintChastityDays();
   else if (reportId === "orgasms") paintOrgasms();
   else if (reportId === "chastity-stats") paintChastityStats();
@@ -16808,6 +16983,7 @@ function renderTracking(dynamicId) {
           renderCumulativeOrgasmChart(stats.cumulative_30d || [], stats.partners || []),
         ]));
       }
+      stack.appendChild(renderTrackingEventsCalendar(dynamicId, partners));
 
       const partnerChecks = partners.map((p, idx) => {
         const input = el("input", {
@@ -27591,9 +27767,10 @@ async function renderRoute() {
   if (parts[0] === "dynamic" && parts[1]) {
     const dynamicId = parts[1];
     if (parts[2] === "history") {
+      if (parts[3] === "list") return renderHistoryHub(dynamicId);
       if (parts[3] === "sessions" && parts[4]) return renderHistorySession(dynamicId, parts[4]);
       if (parts[3]) return renderHistoryReport(dynamicId, parts[3]);
-      return renderHistoryHub(dynamicId);
+      return renderHistoryReport(dynamicId, "chastity-days");
     }
     if (parts[2] === "survey") return renderSurvey(dynamicId);
     if (parts[2] === "ground-rules") return renderGroundRules(dynamicId);
