@@ -1731,6 +1731,47 @@ function formatTrackingEventType(eventType) {
   return eventType;
 }
 
+function trackingTagText(tag) {
+  return String(tag || "").toLowerCase().replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function tagIsFullOrgasm(tag) {
+  const t = trackingTagText(tag);
+  return t === "full orgasm" || t.startsWith("full orgasm") || (t.includes("full") && t.includes("orgasm"));
+}
+
+function tagIsRuinedOrgasm(tag) {
+  return trackingTagText(tag).includes("ruin");
+}
+
+function tagIsDeniedOrMilking(tag) {
+  const t = trackingTagText(tag);
+  if (t.includes("ruin")) return false;
+  return t.includes("denied") || t.includes("denial") || t.includes("milk");
+}
+
+/** Older orgasm rows stored the method only. Ruined was a separate tag, so the rest are full. */
+function orgasmTagsCountAsFull(tags) {
+  const list = tags || [];
+  if (list.some(tagIsRuinedOrgasm) && !list.some(tagIsFullOrgasm)) return false;
+  if (list.some(tagIsFullOrgasm)) return true;
+  if (list.some(tagIsDeniedOrMilking)) return false;
+  return true;
+}
+
+function formatTrackingEntryKind(entry) {
+  if (entry.event_type !== "orgasm" && entry.event_type !== "both") {
+    return formatTrackingEventType(entry.event_type);
+  }
+  const rows = entry.orgasms?.length ? entry.orgasms : [{ tags: entry.tags || [] }];
+  const full = rows.some((row) => orgasmTagsCountAsFull(row.tags || []));
+  const ruined = rows.some((row) => (row.tags || []).some(tagIsRuinedOrgasm));
+  if (full && ruined) return "Full + ruined";
+  if (ruined) return "Ruined orgasm";
+  if (full) return "Full orgasm";
+  return "Orgasm";
+}
+
 function buildPartnerSoloRadio(name = `ctx-${Date.now()}`) {
   const wrap = el("div", { className: "row wrap partner-context-radio" });
   const inputs = PARTNER_CONTEXT_OPTIONS.map((opt, idx) => {
@@ -2149,9 +2190,13 @@ function renderTrackingEntrySummary(entry, { dynamicId, editable = false, onChan
   let expanded = false;
 
   function buildCard(onEdit, onDelete) {
-    const allTags = entry.orgasms?.length
+    const storedTags = entry.orgasms?.length
       ? entry.orgasms.flatMap((o) => o.tags || [])
       : entry.tags || [];
+    const allTags = (entry.event_type === "orgasm" || entry.event_type === "both")
+      && (entry.orgasms?.length ? entry.orgasms : [{ tags: storedTags }]).some((row) => orgasmTagsCountAsFull(row.tags || []) && !(row.tags || []).some(tagIsFullOrgasm))
+      ? ["Full orgasm", ...storedTags]
+      : storedTags;
     const accentColors = tagAccentColors(allTags);
     const accentGradient = tagAccentGradient(accentColors);
 
@@ -2175,7 +2220,7 @@ function renderTrackingEntrySummary(entry, { dynamicId, editable = false, onChan
           el("strong", {}, entry.for_display_name),
           el("span", { className: "muted log-card-when" }, formatLogWhen(entry.occurred_at)),
         ]),
-        el("span", { className: "pill" }, formatTrackingEventType(entry.event_type)),
+        el("span", { className: "pill" }, formatTrackingEntryKind(entry)),
       ]
     );
 
@@ -2233,12 +2278,15 @@ function renderTrackingEntrySummary(entry, { dynamicId, editable = false, onChan
 
     if (entry.orgasms?.length) {
       entry.orgasms.forEach((orgasm, idx) => {
-        const oTags = (orgasm.tags || []).join(", ");
+        const oTags = orgasm.tags || [];
+        const shown = orgasmTagsCountAsFull(oTags) && !oTags.some(tagIsFullOrgasm)
+          ? ["Full orgasm", ...oTags]
+          : oTags;
         details.appendChild(
           el(
             "p",
             { className: "muted log-card-orgasm" },
-            `Orgasm ${idx + 1}${oTags ? ` · ${oTags}` : ""}`
+            `Orgasm ${idx + 1} · ${shown.join(", ")}`
           )
         );
       });

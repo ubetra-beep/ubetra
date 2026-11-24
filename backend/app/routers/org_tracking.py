@@ -40,7 +40,7 @@ from ..services.tags import tags_to_list, tags_to_string
 
 from ..services.chat_events import post_activity_event, post_system_event
 
-from ..services.tracking_events import has_full_orgasm_tag, is_orgasm_event, is_play_event, orgasm_count
+from ..services.tracking_events import is_orgasm_event, is_play_event, orgasm_count
 from ..services.chastity_release import event_goal_kind, maybe_relock_after_orgasm, orgasm_end_kind
 
 from ..services.feelings import feelings_status, has_recent_context_checkin
@@ -587,7 +587,7 @@ def log_tracking_entry(
 
     if gift_kind and dynamic_row is not None:
         from ..services.chastity_goals import note_orgasm_gift
-        from ..services.tracking_events import has_cheated_tag, has_full_orgasm_tag, has_ruined_orgasm_tag
+        from ..services.tracking_events import counts_as_full_orgasm, has_cheated_tag, has_ruined_orgasm_tag
 
         sources = [tags_to_list(row.tags) for row in (entry.orgasms or [])] or [tags_to_list(entry.tags)]
         orgasm_counts = {"full": 0, "ruin": 0, "cheated": 0}
@@ -596,7 +596,7 @@ def log_tracking_entry(
                 orgasm_counts["cheated"] += 1
             elif has_ruined_orgasm_tag(row_tags):
                 orgasm_counts["ruin"] += 1
-            elif has_full_orgasm_tag(row_tags):
+            elif counts_as_full_orgasm(row_tags):
                 orgasm_counts["full"] += 1
         note_orgasm_gift(
             db,

@@ -23,8 +23,9 @@ from ..models import (
     TaskCompletion,
 )
 from .tracking_events import (
+    counts_as_full_orgasm,
+    entry_counts_as_full_orgasm,
     has_denial_tag,
-    has_full_orgasm_tag,
     has_ruined_orgasm_tag,
     is_orgasm_event,
     is_play_event,
@@ -35,7 +36,7 @@ REQUIREMENT_TYPES = {
     "days_since_full_orgasm": {
         "title": "Days since last full orgasm",
         "kind": "duration",
-        "hint": "Time since the sub’s last full-orgasm tag / Released!",
+        "hint": "Time since the sub’s last full orgasm. Older logs without a ruined tag count.",
     },
     "days_since_lockup": {
         "title": "Days in current / last lockup",
@@ -269,11 +270,7 @@ def _last_full_orgasm_at(db: Session, dynamic_id: str, sub_id: str) -> datetime 
         .all()
     )
     for entry in entries:
-        rows = entry.orgasms or []
-        if rows:
-            if any(has_full_orgasm_tag(tags_to_list(r.tags)) for r in rows):
-                return entry.occurred_at
-        elif has_full_orgasm_tag(tags_to_list(entry.tags)):
+        if entry_counts_as_full_orgasm(entry):
             return entry.occurred_at
     lockup = (
         db.query(ChastityLockup)
@@ -917,7 +914,7 @@ def note_orgasm_gift(
     if orgasm_counts is None:
         cheated = has_cheated_tag(tags)
         ruined = has_ruined_orgasm_tag(tags)
-        full = has_full_orgasm_tag(tags) and not ruined
+        full = counts_as_full_orgasm(tags) and not ruined
         cheated_n = 1 if cheated else 0
         ruin_n = 1 if ruined and not cheated else 0
         full_n = 1 if full else 0

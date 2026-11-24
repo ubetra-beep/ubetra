@@ -342,7 +342,7 @@ def next_logged_orgasm(db: Session, dynamic_id: str, membership_id: str, after: 
     from .tracking_events import (
         has_cheated_tag,
         has_denial_tag,
-        has_full_orgasm_tag,
+        counts_as_full_orgasm,
         has_milking_tag,
         has_ruined_orgasm_tag,
         is_orgasm_event,
@@ -371,7 +371,7 @@ def next_logged_orgasm(db: Session, dynamic_id: str, membership_id: str, after: 
         for row in entry.orgasms or []:
             tags.extend(tags_to_list(row.tags))
         if not is_orgasm_event(entry.event_type):
-            if not (has_full_orgasm_tag(tags) or has_ruined_orgasm_tag(tags) or has_cheated_tag(tags)):
+            if not (counts_as_full_orgasm(tags) or has_ruined_orgasm_tag(tags) or has_cheated_tag(tags)):
                 if has_denial_tag(tags) or has_milking_tag(tags):
                     continue
                 if not list(entry.orgasms or []):
@@ -380,7 +380,7 @@ def next_logged_orgasm(db: Session, dynamic_id: str, membership_id: str, after: 
             label = "Cheated orgasm"
         elif has_ruined_orgasm_tag(tags):
             label = "Ruined orgasm"
-        elif has_full_orgasm_tag(tags):
+        elif counts_as_full_orgasm(tags):
             label = "Full orgasm"
         else:
             label = "Orgasm"
