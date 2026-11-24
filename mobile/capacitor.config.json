@@ -1,17 +1,11 @@
 {
-  "appId": "org.duckdns.ubeneeko.app",
+  "appId": "com.ubetra.app",
   "appName": "UBETRA",
   "webDir": "www",
   "server": {
-    "url": "https://ubeneeko.duckdns.org",
-    "cleartext": false,
-    "allowNavigation": [
-      "ubeneeko.duckdns.org",
-      "*.duckdns.org",
-      "accounts.google.com",
-      "*.google.com",
-      "*.googleapis.com"
-    ]
+    "androidScheme": "https",
+    "cleartext": true,
+    "allowNavigation": ["*"]
   },
   "plugins": {
     "PushNotifications": {

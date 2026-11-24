@@ -119,7 +119,7 @@ AREA_MAPS: dict[str, dict] = {
         "hub": "playtime",
         "title": "Playtime",
         "packs": ["identity", "features", "playtime", "tasks_inbox", "utilization"],
-        "branches": ["assistant/scene", "assistant/games", "instructor", "manga", "tasks"],
+        "branches": ["assistant/scene", "assistant/games", "instructor", "tasks"],
     },
     "assistant/scene": {
         "hub": "playtime",
@@ -143,12 +143,6 @@ AREA_MAPS: dict[str, dict] = {
         "hub": "playtime",
         "title": "Instructor",
         "packs": ["identity", "playtime", "tracking_orgasm"],
-        "branches": ["assistant"],
-    },
-    "manga": {
-        "hub": "playtime",
-        "title": "Monthly manga",
-        "packs": ["identity", "interview", "context_library"],
         "branches": ["assistant"],
     },
     "ground-rules": {

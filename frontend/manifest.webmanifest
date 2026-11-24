@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Shared space",
-  "short_name": "Space",
-  "description": "Private shared planner",
+  "name": "UBETRA",
+  "short_name": "UBETRA",
+  "description": "Private shared log",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -28,6 +28,20 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Log orgasm",
+      "short_name": "Log",
+      "description": "Log an orgasm or play session",
+      "url": "/#/quick/log"
+    },
+    {
+      "name": "Lock",
+      "short_name": "Lock",
+      "description": "Open chastity lock controls",
+      "url": "/#/quick/lock"
     }
   ]
 }

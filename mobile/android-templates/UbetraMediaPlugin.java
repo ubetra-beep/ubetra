@@ -1,4 +1,4 @@
-package org.duckdns.ubeneeko.app;
+package com.ubetra.app;
 
 import android.Manifest;
 import android.app.NotificationManager;

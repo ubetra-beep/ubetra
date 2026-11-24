@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
-from .models import Membership, User
+from .models import Membership, User, WatchDevice
+
+# Wear access tokens are shorter than browser tokens and carry wdid.
+# Pairing, refresh rotation, and revoke rules live in app.services.watch.
+WATCH_ACCESS_TOKEN_MINUTES = 60 * 12
 
 security = HTTPBearer(auto_error=False)
 
@@ -36,6 +40,30 @@ def create_access_token(user_id: str) -> str:
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
 
 
+def create_watch_access_token(user_id: str, device_id: str) -> str:
+    """Access JWT for one watch device. Revoke is enforced by the device row, not only exp."""
+    expire = datetime.utcnow() + timedelta(minutes=WATCH_ACCESS_TOKEN_MINUTES)
+    payload = {
+        "sub": user_id,
+        "wdid": device_id,
+        "purpose": "watch",
+        "exp": expire,
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
+
+
+def _require_live_watch(db: Session, user_id: str, device_id: str) -> None:
+    device = db.get(WatchDevice, device_id)
+    if device is None or device.user_id != user_id or device.revoked_at is not None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Watch access revoked")
+    now = datetime.utcnow()
+    seen = device.last_seen_at
+    if seen is None or (now - seen).total_seconds() >= 60:
+        device.last_seen_at = now
+        db.add(device)
+        db.commit()
+
+
 def user_from_token(token: str, db: Session) -> User:
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
@@ -51,6 +79,11 @@ def user_from_token(token: str, db: Session) -> User:
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    device_id = payload.get("wdid")
+    if payload.get("purpose") == "watch" or device_id:
+        if not device_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Watch access revoked")
+        _require_live_watch(db, user.id, str(device_id))
     return user
 
 

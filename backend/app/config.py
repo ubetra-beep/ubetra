@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT_DIR / "backend" / "data"
@@ -46,10 +46,12 @@ class Settings(BaseSettings):
     # Shared Gluetun drop folder (read-only). Host path is bind-mounted in compose.
     redgifs_dir: str = "/app/backend/data/redgifs"
 
-    class Config:
-        env_prefix = "UBETRA_"
-        env_file = str(ROOT_DIR / ".env")
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        env_prefix="UBETRA_",
+        env_file=str(ROOT_DIR / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 settings = Settings()

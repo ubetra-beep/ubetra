@@ -229,7 +229,7 @@ def _headline(session: SwitchSession, progress: int) -> str:
     if session.status == "drafting":
         if session.kind == "scene_gift":
             return "Scene switch is open. Direct one scene, then the keyholder approves it."
-        return "Switch is open. Draft one goal for the keyholder. It starts after she approves it."
+        return "Switch is open. Draft one goal for the keyholder. It starts after the keyholder approves it."
     if session.status == "pending_approval":
         return "Switch draft is waiting for the keyholder."
     if session.status == "active":

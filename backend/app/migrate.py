@@ -1951,3 +1951,81 @@ def _migrate_1_14(conn) -> None:
     conn.execute(
       text("CREATE INDEX IF NOT EXISTS ix_switch_sessions_status ON switch_sessions (status)")
     )
+
+  ensure_watch_tables(conn)
+  ensure_client_sync_columns(conn)
+
+
+def ensure_watch_tables(conn) -> None:
+  """Create Wear pairing tables when create_all has not already done so."""
+  conn.execute(
+    text(
+      "CREATE TABLE IF NOT EXISTS watch_pair_codes ("
+      "id VARCHAR(36) PRIMARY KEY, "
+      "user_id VARCHAR(36) NOT NULL REFERENCES users(id), "
+      "code_hash VARCHAR(64) NOT NULL, "
+      "api_base VARCHAR(300) DEFAULT '', "
+      "expires_at DATETIME NOT NULL, "
+      "consumed_at DATETIME, "
+      "created_at DATETIME)"
+    )
+  )
+  conn.execute(
+    text("CREATE INDEX IF NOT EXISTS ix_watch_pair_codes_user_id ON watch_pair_codes (user_id)")
+  )
+  conn.execute(
+    text("CREATE INDEX IF NOT EXISTS ix_watch_pair_codes_code_hash ON watch_pair_codes (code_hash)")
+  )
+  conn.execute(
+    text(
+      "CREATE TABLE IF NOT EXISTS watch_devices ("
+      "id VARCHAR(36) PRIMARY KEY, "
+      "user_id VARCHAR(36) NOT NULL REFERENCES users(id), "
+      "label VARCHAR(64) DEFAULT 'Wear OS', "
+      "refresh_token_hash VARCHAR(64), "
+      "api_base VARCHAR(300) DEFAULT '', "
+      "created_at DATETIME, "
+      "last_seen_at DATETIME, "
+      "revoked_at DATETIME)"
+    )
+  )
+  conn.execute(
+    text("CREATE INDEX IF NOT EXISTS ix_watch_devices_user_id ON watch_devices (user_id)")
+  )
+  conn.execute(
+    text(
+      "CREATE UNIQUE INDEX IF NOT EXISTS ix_watch_devices_refresh_token_hash "
+      "ON watch_devices (refresh_token_hash)"
+    )
+  )
+
+
+def ensure_client_sync_columns(conn) -> None:
+  """client_event_id dedupes phone retries. Tables stay if Edge Guard is unused."""
+  conn.execute(
+    text(
+      "CREATE TABLE IF NOT EXISTS client_events ("
+      "client_event_id VARCHAR(64) PRIMARY KEY, "
+      "dynamic_id VARCHAR(36) NOT NULL, "
+      "kind VARCHAR(32) DEFAULT '', "
+      "resource_id VARCHAR(36) DEFAULT '', "
+      "updated_at DATETIME)"
+    )
+  )
+  conn.execute(
+    text("CREATE INDEX IF NOT EXISTS ix_client_events_dynamic_id ON client_events (dynamic_id)")
+  )
+  for table in ("org_tracking_entries", "chastity_lockups"):
+    cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}
+    if not cols:
+      continue
+    if "client_event_id" not in cols:
+      conn.execute(text(f"ALTER TABLE {table} ADD COLUMN client_event_id VARCHAR(64)"))
+    if "updated_at" not in cols:
+      conn.execute(text(f"ALTER TABLE {table} ADD COLUMN updated_at DATETIME"))
+    conn.execute(
+      text(
+        f"CREATE UNIQUE INDEX IF NOT EXISTS uq_{table}_client_event_id "
+        f"ON {table} (client_event_id)"
+      )
+    )

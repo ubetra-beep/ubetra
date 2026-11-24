@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">UBETRA</string>
+    <string name="tile_status">Chastity</string>
+    <string name="tile_status_description">Lock status and duration</string>
+    <string name="tile_lock">Quick lock</string>
+    <string name="tile_lock_description">Lock, break, and timer actions</string>
+    <string name="tile_log">Quick log</string>
+    <string name="tile_log_description">Full, ruined, denied, and play</string>
+    <string name="complication_lock">Lock status</string>
+    <string name="complication_sleep">Last night sleep</string>
+    <string name="complication_cycle">Cycle day</string>
+    <string name="complication_orgasm">7-day orgasms</string>
+</resources>

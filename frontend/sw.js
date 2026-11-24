@@ -1,4 +1,4 @@
-const CACHE = "ubetra-v165";
+const CACHE = "ubetra-v168";
 const ASSETS = [
   "/",
   "/assets/styles.css",

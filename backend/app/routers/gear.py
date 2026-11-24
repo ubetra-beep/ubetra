@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, get_membership
@@ -18,13 +19,16 @@ from ..schemas import (
 )
 from ..services.features import is_feature_enabled
 from ..services.gear_catalog import catalog_categories, catalog_item_by_id, catalog_items
+from ..services import gear_art
 
 router = APIRouter(prefix="/dynamics", tags=["gear"])
 
 VALID_CATEGORIES = {"vanilla_toys", "kinky_stuff", "outfits"}
 
 
-def _item_out(item: GearInventoryItem) -> GearInventoryItemOut:
+def _item_out(item: GearInventoryItem, pictures: dict | None = None) -> GearInventoryItemOut:
+    key = item.catalog_item_id or f"custom_{item.id}"
+    pic = (pictures or {}).get(key) or {}
     return GearInventoryItemOut(
         id=item.id,
         catalog_item_id=item.catalog_item_id,
@@ -36,6 +40,8 @@ def _item_out(item: GearInventoryItem) -> GearInventoryItemOut:
         is_custom=bool(item.is_custom),
         tier=item.tier or "common",
         created_at=item.created_at,
+        has_image=bool(pic.get("has_image")),
+        art_key=key,
     )
 
 
@@ -53,6 +59,7 @@ def get_gear(
     if not is_feature_enabled(dynamic, "gear"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gear is disabled for this dynamic")
 
+    pictures = {row["key"]: row for row in gear_art.list_gear_entries(db, dynamic_id)}
     inventory = (
         db.query(GearInventoryItem)
         .filter(GearInventoryItem.dynamic_id == dynamic_id)
@@ -76,10 +83,12 @@ def get_gear(
                 owned=bool(inv.owned) if inv else False,
                 want=bool(inv.want) if inv else False,
                 inventory_id=inv.id if inv else None,
+                has_image=bool(pictures.get(entry["id"], {}).get("has_image")),
+                art_key=entry["id"],
             )
         )
 
-    inv_out = [_item_out(item) for item in inventory]
+    inv_out = [_item_out(item, pictures) for item in inventory]
     if category:
         inv_out = [item for item in inv_out if item.category == category]
 
@@ -97,6 +106,71 @@ def get_gear(
         owned_count=sum(1 for item in inventory if item.owned),
         want_count=sum(1 for item in inventory if item.want),
     )
+
+
+@router.get("/{dynamic_id}/gear/tokens")
+def gear_tokens(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    q: str = "",
+    all_items: bool = False,
+) -> dict:
+    get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None or not is_feature_enabled(dynamic, "gear"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gear is disabled for this dynamic")
+    entries = gear_art.list_gear_entries(db, dynamic_id)
+    rows = entries if all_items else gear_art.suggest(entries, q)
+    return {
+        "items": [
+            {
+                "key": row["key"],
+                "name": row["name"],
+                "slug": row["slug"],
+                "has_image": row["has_image"],
+            }
+            for row in rows
+        ]
+    }
+
+
+@router.get("/{dynamic_id}/gear/art/status")
+def gear_art_status(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    get_membership(dynamic_id, user, db)
+    return gear_art.status(db, dynamic_id)
+
+
+@router.post("/{dynamic_id}/gear/art/generate")
+def gear_art_generate(
+    dynamic_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    get_membership(dynamic_id, user, db)
+    dynamic = db.get(Dynamic, dynamic_id)
+    if dynamic is None or not is_feature_enabled(dynamic, "gear"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gear is disabled for this dynamic")
+    gear_art.ensure_generating(dynamic_id)
+    return gear_art.status(db, dynamic_id)
+
+
+@router.get("/{dynamic_id}/gear/art/{item_key}")
+def gear_art_file(
+    dynamic_id: str,
+    item_key: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    get_membership(dynamic_id, user, db)
+    path = gear_art.art_path(dynamic_id, item_key)
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gear picture not ready")
+    return FileResponse(path, media_type="image/png")
 
 
 @router.post(

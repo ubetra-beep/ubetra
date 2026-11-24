@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v165";
+const CLIENT_SW_CACHE = "ubetra-v168";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -142,9 +142,11 @@ function showIconStylePicker({ title, confirmLabel, initial } = {}) {
 applyIconStyle(getIconStyle(), { persist: true });
 
 const NAV_TABS = [
-  { id: "tracking", label: "Tracking", icon: "📈", enabled: true, requiresDynamic: true },
-  { id: "workshop", label: "Playtime", icon: "✨", enabled: true, requiresDynamic: true },
-  { id: "chat", label: "Chat", icon: "💬", enabled: true, requiresDynamic: true },
+  { id: "today", label: "Today", icon: "◎", requiresDynamic: true },
+  { id: "log", label: "Log", icon: "＋", requiresDynamic: true },
+  { id: "play", label: "Play", icon: "▶", requiresDynamic: true },
+  { id: "chat", label: "Chat", icon: "💬", requiresDynamic: true },
+  { id: "more", label: "More", icon: "⋯", requiresDynamic: false },
 ];
 
 /** Facets shown on the Dynamic overview / Setup section. */
@@ -166,12 +168,11 @@ const FACET_SECTIONS = [
       { id: "core_knowledge", icon: "🧠", title: "Core knowledge", subtitle: "Relationship context for AI", core: true, route: "knowledge" },
       { id: "spti", icon: "🧬", title: "SPTI profile", subtitle: "Personality test for AI", route: "knowledge/spti" },
       { id: "context_library", icon: "📎", title: "Context library", subtitle: "Stories, scenes, and files for AI", route: "context" },
-      { id: "gear", icon: "🧰", title: "Gear", subtitle: "Vanilla toys, kinky stuff, outfits", route: "gear" },
     ],
   },
 ];
 
-/** Facets shown on the Tracking bottom-nav hub. */
+/** Facets linked from Today under More tracking. */
 const TRACKING_FACETS = [
   { id: "history", icon: "📊", title: "History", subtitle: "Reports and logs", route: "history", core: true },
   { id: "chastity", icon: "🔒", title: "Chastity tracking", subtitle: "Lockup stats and current lock time", route: "chastity" },
@@ -222,11 +223,11 @@ const PLAYTIME_FACETS = [
     core: true,
   },
   {
-    id: "manga_comics",
-    icon: "📚",
-    title: "Monthly manga",
-    subtitle: "AI comic from your dynamic context",
-    route: "manga",
+    id: "gear",
+    icon: "🧰",
+    title: "Gear",
+    subtitle: "Vanilla toys, kinky stuff, outfits",
+    route: "gear",
   },
 ];
 
@@ -437,15 +438,29 @@ function setToken(token) {
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
   setAuthVisible(!!token);
+  if (window.UbetraPhone) window.UbetraPhone.noteSession(state);
 }
 
 let mfaSession = { token: null, emailHint: null };
 
 function navigateAfterAuth() {
   syncUserTimezone().catch(() => {});
-  // Soft sex prompt later — don't hard-land on Settings after login.
+  const { parts } = parseRoute();
+  const here = parts[0] || "";
+  const leavingAuth = ["", "login", "register", "forgot-password", "reset-password"].includes(here);
+  // After login, finish setup. A direct link to Settings or the survey stays put.
   if (!state.user?.onboarding_completed) {
-    navigate("/onboarding");
+    const survey = here === "dynamic" && parts[2] === "survey";
+    if (here !== "onboarding" && here !== "settings" && !survey) navigate("/onboarding");
+    else renderRoute();
+    return;
+  }
+  // A refresh on Settings, Chat, or a game stays there. Only the login screen
+  // falls through to the last page or Tracking.
+  if (!leavingAuth) {
+    renderRoute();
+    maybeShowPunishmentReminders();
+    refreshAppUpdates().catch(() => {});
     return;
   }
   const last = getLastRoute();
@@ -466,7 +481,7 @@ function shouldRememberRoute(path) {
   const clean = String(path || "").split("?")[0];
   const parts = clean.replace(/^#/, "").split("/").filter(Boolean);
   if (!parts.length) return false;
-  if (["settings", "login", "register", "onboarding", "forgot-password", "reset-password"].includes(parts[0])) return false;
+  if (["settings", "login", "register", "onboarding", "forgot-password", "reset-password", "quick"].includes(parts[0])) return false;
   return true;
 }
 
@@ -533,9 +548,22 @@ async function renewSession({ force = false } = {}) {
 }
 
 async function api(path, options = {}) {
+  const phone = window.UbetraPhone;
+  if (phone && phone.shouldServeLocal(path, options)) {
+    return phone.serveLocal(path, options);
+  }
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (state.token && !PUBLIC_AUTH_PATHS.test(path)) headers.Authorization = `Bearer ${state.token}`;
-  const response = await fetch(`${API}${path}`, { ...options, headers });
+  let response;
+  try {
+    response = await fetch(`${API}${path}`, { ...options, headers });
+  } catch (err) {
+    if (phone && phone.canFallback(path, options)) {
+      phone.markUnreachable();
+      return phone.serveLocal(path, options);
+    }
+    throw err;
+  }
   const text = await response.text();
   let data = null;
   if (text) {
@@ -560,6 +588,8 @@ async function api(path, options = {}) {
     err.status = response.status;
     throw err;
   }
+  if (phone) phone.markReachable();
+  if (phone && state.token) phone.noteSession(state);
   return data;
 }
 
@@ -747,7 +777,7 @@ function inboxToneClass(kind) {
   if (k === "task_due_soon") return "tone-blue";
   if (k === "goal_ready") return "tone-green";
   if (k.startsWith("lockup") || k.includes("chastity") || k === "orgasm_logged") return "tone-purple";
-  if (k === "edge_guard_removal" || k.includes("approval")) return "tone-green";
+  if (k.includes("approval")) return "tone-green";
   return "tone-grey";
 }
 
@@ -757,7 +787,6 @@ function groupInboxItems(items) {
   (items || []).forEach((item) => {
     const special =
       item.kind === "task_completed_late" ||
-      item.kind === "edge_guard_removal" ||
       item.kind === "goal_ready" ||
       isPunishmentInboxItem(item);
     const key = special ? `one:${item.id}` : `${item.kind}|${item.title || ""}`;
@@ -848,42 +877,6 @@ function showInboxOverlay(dynamicId, items) {
             className: "ghost-btn",
             onClick: () => ackLate("ack"),
           }, "Close notification"),
-        ]),
-      ]);
-      log.appendChild(row);
-      return;
-    }
-    if (item.kind === "edge_guard_removal" && item.edge_guard_domain_id) {
-      const decide = async (decision) => {
-        try {
-          await api(`/dynamics/${dynamicId}/edge-guard/domains/${item.edge_guard_domain_id}/decision`, {
-            method: "POST",
-            body: JSON.stringify({ decision }),
-          });
-        } catch (err) {
-          error.textContent = err.message || "Could not update.";
-          error.classList.remove("hidden");
-          return;
-        }
-        row.remove();
-        showToast(decision === "approve" ? "Site removed" : "Request denied");
-        if (!log.querySelector(".inbox-log-item")) overlay.remove();
-      };
-      const row = el("div", { className: `inbox-log-item ${inboxToneClass(item.kind)} ${item.kind}` }, [
-        el("div", { className: "inbox-log-title" }, item.count > 1 ? `${item.title || "Edge Guard removal requested"} x${item.count}` : (item.title || "Edge Guard removal requested")),
-        item.body ? el("div", { className: "inbox-log-body" }, item.body) : null,
-        when ? el("div", { className: "inbox-log-when" }, when) : null,
-        el("div", { className: "row wrap" }, [
-          el("button", {
-            type: "button",
-            className: "primary-btn",
-            onClick: () => decide("approve"),
-          }, "Approve removal"),
-          el("button", {
-            type: "button",
-            className: "ghost-btn",
-            onClick: () => decide("deny"),
-          }, "Deny"),
         ]),
       ]);
       log.appendChild(row);
@@ -3675,7 +3668,7 @@ async function downloadNativeApk(abs) {
     canShareFile = false;
   }
   if (!canShareFile) {
-    throw new Error("Open ubeneeko.duckdns.org in Chrome and download the APK there.");
+    throw new Error("Open this UBETRA server in Chrome and download the APK there.");
   }
   try {
     await navigator.share({ files: [file], title: "ubetra.apk" });
@@ -4012,494 +4005,8 @@ function domainsFromRegexScan(text) {
   return out;
 }
 
-function domainsFromEdgeGuardFile(text) {
-  const trimmed = String(text || "").replace(/^\uFEFF/, "").trim();
-  if (!trimmed) return [];
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      const data = JSON.parse(trimmed);
-      const fromFields = [];
-      collectMindfulFields(data, fromFields, new Set(), 0);
-      if (fromFields.length) return fromFields;
-    } catch {
-      /* regex fallback */
-    }
-  }
-  return domainsFromRegexScan(trimmed);
-}
-
-function edgeGuardDynamic(preferredId) {
-  const list = state.dynamics || [];
-  const youAreSub = (d) => (d.partners || []).some((p) => p.is_you && p.role === "submissive");
-  if (preferredId) {
-    const chosen = list.find((d) => d.id === preferredId);
-    if (chosen) return chosen;
-  }
-  const active = list.find((d) => d.id === getActiveDynamicId());
-  if (active && youAreSub(active)) return active;
-  return list.find(youAreSub) || active || list[0] || null;
-}
-
-let edgeGuardSyncing = null;
 function syncEdgeGuardFromServer() {
-  if (!state.token || !isNativeApp()) return Promise.resolve();
-  if (edgeGuardSyncing) return edgeGuardSyncing;
-  edgeGuardSyncing = syncEdgeGuardFromServerInner().finally(() => {
-    edgeGuardSyncing = null;
-  });
-  return edgeGuardSyncing;
-}
-
-async function syncEdgeGuardFromServerInner() {
-  const dynamic = edgeGuardDynamic();
-  const plugin = nativePlugin("UbetraEdgeGuard");
-  if (!dynamic || !plugin?.getStatus || !plugin?.setBlockedDomains) return;
-  const remote = await api(`/dynamics/${dynamic.id}/edge-guard`);
-  let domains = (remote.you?.domains || []).map((row) => row.domain);
-  const seedKey = `ubetra_edge_guard_seeded_${dynamic.id}`;
-  let seeded = false;
-  try {
-    seeded = localStorage.getItem(seedKey) === "1";
-  } catch {
-    seeded = true;
-  }
-  if (!seeded) {
-    const local = await plugin.getStatus().catch(() => ({ domains: [] }));
-    const have = new Set(domains);
-    const extra = (local.domains || [])
-      .map((d) => normalizeEdgeDomain(d))
-      .filter((d) => d && !have.has(d));
-    if (extra.length) {
-      const added = await api(`/dynamics/${dynamic.id}/edge-guard/domains`, {
-        method: "POST",
-        body: JSON.stringify({ domains: extra }),
-      });
-      domains = (added.you?.domains || domains.map((domain) => ({ domain }))).map((row) => row.domain || row);
-    }
-    try {
-      localStorage.setItem(seedKey, "1");
-    } catch {
-      /* ignore */
-    }
-  }
-  await plugin.setBlockedDomains({
-    domains,
-    serverSync: true,
-    locked: !!remote.you?.locked,
-  });
-  const info = await plugin.getStatus();
-  await api(`/dynamics/${dynamic.id}/edge-guard/heartbeat`, {
-    method: "POST",
-    body: JSON.stringify({
-      enabled: !!info.enabled,
-      running: !!info.running,
-      vpn_permission: !!info.vpnPermissionGranted,
-      domain_count: info.domainCount || (info.domains || []).length || 0,
-    }),
-  });
-}
-
-function showEdgeGuardImportPreview(text, existing, onAdd) {
-  const found = domainsFromEdgeGuardFile(text);
-  if (!found.length) {
-    showToast("No domains found in that file");
-    return;
-  }
-  const have = new Set((existing || []).map((d) => normalizeEdgeDomain(d)).filter(Boolean));
-  const checks = found.map((domain) => {
-    const already = have.has(domain);
-    const box = el("input", { type: "checkbox", checked: !already, disabled: already });
-    return { domain, box, already };
-  });
-  const backdrop = el("div", { className: "modal-backdrop" });
-  const addBtn = el("button", {
-    type: "button",
-    className: "primary-btn",
-    onClick: async () => {
-      const picked = checks.filter((row) => row.box.checked && !row.already).map((row) => row.domain);
-      if (!picked.length) {
-        showToast("Select at least one new site");
-        return;
-      }
-      addBtn.disabled = true;
-      try {
-        await onAdd(picked);
-        backdrop.remove();
-      } catch (err) {
-        addBtn.disabled = false;
-        showToast(err.message || "Could not add sites");
-      }
-    },
-  }, "Add selected");
-  backdrop.appendChild(el("div", { className: "card stack modal-card" }, [
-    el("h3", {}, "Import sites"),
-    el("p", { className: "muted" }, "Mindful export field names are unconfirmed until a sample file is available. Known names are tried first, then any domain-like text. Uncheck anything that should stay off the list."),
-    el("div", { className: "stack", style: "max-height:40vh;overflow:auto;" }, checks.map(({ domain, box, already }) =>
-      el("label", { className: "checkbox-label" }, [box, ` ${domain}${already ? " (already blocked)" : ""}`])
-    )),
-    el("div", { className: "row wrap" }, [
-      addBtn,
-      el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Cancel"),
-    ]),
-  ]));
-  backdrop.addEventListener("click", (ev) => {
-    if (ev.target === backdrop) backdrop.remove();
-  });
-  document.body.appendChild(backdrop);
-}
-
-function edgeGuardImportInput(existing, onAdd) {
-  return el("label", {}, [
-    "Import Mindful, JSON, CSV, or TXT",
-    el("input", {
-      type: "file",
-      accept: ".json,.csv,.txt,.backup,application/json,text/csv,text/plain",
-      onChange: async (event) => {
-        const file = event.target.files?.[0];
-        event.target.value = "";
-        if (!file) return;
-        try {
-          showEdgeGuardImportPreview(await file.text(), existing, onAdd);
-        } catch (err) {
-          showToast(err.message || "Could not read that file");
-        }
-      },
-    }),
-  ]);
-}
-
-function edgeGuardDomainList(dynamicId, member, { canRemove, canRequest, onDone }) {
-  const domains = member?.domains || [];
-  if (!domains.length) return el("p", { className: "muted" }, "No sites yet.");
-  return el("ul", { className: "stack", style: "list-style:none;padding:0;margin:0;" }, domains.map((row) => {
-    const actions = [];
-    if (canRemove) {
-      actions.push(el("button", {
-        type: "button",
-        className: "ghost-btn",
-        onClick: async () => {
-          try {
-            await api(`/dynamics/${dynamicId}/edge-guard/domains/${row.id}`, { method: "DELETE" });
-            showToast(`Removed ${row.domain}`);
-            await onDone();
-          } catch (err) {
-            showToast(err.message || "Could not remove");
-          }
-        },
-      }, row.removal_requested_at ? "Approve removal" : "Remove"));
-    }
-    if (canRemove && row.removal_requested_at) {
-      actions.push(el("button", {
-        type: "button",
-        className: "ghost-btn",
-        onClick: async () => {
-          try {
-            await api(`/dynamics/${dynamicId}/edge-guard/domains/${row.id}/decision`, {
-              method: "POST",
-              body: JSON.stringify({ decision: "deny" }),
-            });
-            showToast("Request denied");
-            await onDone();
-          } catch (err) {
-            showToast(err.message || "Could not deny");
-          }
-        },
-      }, "Deny"));
-    }
-    if (canRequest) {
-      const pending = !!row.removal_requested_at;
-      actions.push(el("button", {
-        type: "button",
-        className: "ghost-btn",
-        disabled: pending,
-        onClick: async () => {
-          try {
-            await api(`/dynamics/${dynamicId}/edge-guard/domains/${row.id}/removal-request`, { method: "POST" });
-            showToast("Removal requested");
-            await onDone();
-          } catch (err) {
-            showToast(err.message || "Could not request removal");
-          }
-        },
-      }, pending ? "Requested" : "Request removal"));
-    }
-    return el("li", { className: "row wrap", style: "justify-content:space-between;gap:0.5rem;" }, [
-      el("code", {}, row.domain),
-      el("div", { className: "row wrap" }, actions),
-    ]);
-  }));
-}
-
-function edgeGuardCheckinLine(member) {
-  if (!member?.last_heartbeat) return "No phone check-in yet.";
-  const st = member.last_status || {};
-  const when = formatLocalDateTime(member.last_heartbeat, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  const bits = [`Last check-in ${when}`, st.enabled ? "reported on" : "reported off"];
-  if (st.vpn_permission === false) bits.push("VPN permission missing");
-  bits.push(`${st.domain_count || 0} on the phone`);
-  return bits.join(" · ");
-}
-
-function buildEdgeGuardCard(dynamicId) {
-  const native = isNativeApp();
-  const dynamic = edgeGuardDynamic(dynamicId);
-  const status = el("p", { className: "muted" }, dynamic ? "Loading Edge Guard…" : "");
-  const controls = el("div", { className: "stack" });
-  const card = el("div", { className: "card stack", id: "edge-guard-card" }, [
-    el("h2", {}, "Edge Guard"),
-    el(
-      "p",
-      { className: "muted" },
-      native
-        ? "Local DNS filter that blocks sites system-wide — including Microsoft Edge’s long-press Preview. Google Drive uploads stay available. The VPN stays on this phone. The blocklist is saved here so a keyholder can lock it."
-        : "Website blocking runs in the UBETRA Android app. Install the APK from this Settings page. A locked list can still be viewed here."
-    ),
-    status,
-    controls,
-  ]);
-  if (!dynamic) return card;
-
-  async function refresh() {
-    let remote = null;
-    let info = null;
-    try {
-      remote = await api(`/dynamics/${dynamic.id}/edge-guard`);
-    } catch (err) {
-      status.textContent = err.message || "Could not load the Edge Guard list";
-    }
-    const plugin = nativePlugin("UbetraEdgeGuard");
-    if (native) {
-      if (!plugin?.getStatus) {
-        status.textContent = "Edge Guard is not in this APK build. Install 0.88.0 or newer.";
-      } else {
-        try {
-          info = await plugin.getStatus();
-        } catch (err) {
-          status.textContent = err.message || "Could not read Edge Guard status";
-        }
-      }
-    }
-    const you = remote?.you;
-    const keyholder = !!remote?.you_are_keyholder;
-    const locked = !!(you?.locked || (info && info.locked));
-    const subLocked = locked && !keyholder;
-    if (info) {
-      const parts = [];
-      if (info.running) parts.push("filtering now");
-      else if (info.enabled) parts.push("enabled, waiting for VPN");
-      else parts.push("off");
-      parts.push(`${(you?.domains || info.domains || []).length} site(s)`);
-      if (subLocked) parts.push("locked by your keyholder");
-      if (!info.vpnPermissionGranted && info.enabled) parts.push("needs VPN permission");
-      status.textContent = parts.join(" · ");
-    } else if (you) {
-      status.textContent = subLocked ? "Locked by your keyholder." : edgeGuardCheckinLine(you);
-    }
-    const showToggle = native && !!plugin?.setEnabled && !(subLocked && (info ? info.enabled : true));
-    const domainInput = el("input", {
-      type: "text",
-      placeholder: "example.com",
-      autocomplete: "off",
-      spellcheck: "false",
-    });
-    const kids = [];
-    if (showToggle) {
-      const enableToggle = el("input", { type: "checkbox", checked: !!info?.enabled });
-      enableToggle.addEventListener("change", async () => {
-        const want = enableToggle.checked;
-        try {
-          const out = await plugin.setEnabled({ enabled: want });
-          if (want && out && out.vpnPermissionGranted === false) {
-            showToast("VPN permission is required for Edge Guard");
-          } else if (want && !out?.running && (out?.domainCount || 0) === 0) {
-            showToast("Add at least one website first");
-          } else {
-            showToast(want ? "Edge Guard on" : "Edge Guard off");
-          }
-        } catch (err) {
-          showToast(err.message || "Could not change Edge Guard");
-        }
-        try {
-          await syncEdgeGuardFromServer();
-        } catch {
-          /* status refresh still runs */
-        }
-        await refresh();
-      });
-      kids.push(el("label", { className: "row wrap", style: "gap:0.5rem;align-items:center;" }, [
-        enableToggle,
-        el("span", {}, "Block websites on this phone"),
-      ]));
-    } else if (subLocked && native) {
-      kids.push(el("p", {}, "Locked on by your keyholder. This phone cannot turn Edge Guard off or remove sites."));
-    }
-    const addDomains = async (domains) => {
-      const result = await api(`/dynamics/${dynamic.id}/edge-guard/domains`, {
-        method: "POST",
-        body: JSON.stringify({ domains }),
-      });
-      const added = result.added || [];
-      showToast(added.length ? `Added ${added.length} site(s)` : "No new sites to add");
-      if (native) await syncEdgeGuardFromServer().catch(() => {});
-      await refresh();
-    };
-    if (!keyholder || native) {
-      kids.push(el("label", {}, ["Add website", domainInput]));
-      kids.push(el("div", { className: "row wrap" }, [
-        el("button", {
-          type: "button",
-          className: "primary-btn",
-          onClick: async () => {
-            const domain = (domainInput.value || "").trim();
-            if (!domain) {
-              showToast("Enter a domain like reddit.com");
-              return;
-            }
-            try {
-              await addDomains([domain]);
-              domainInput.value = "";
-            } catch (err) {
-              showToast(err.message || "Could not add site");
-            }
-          },
-        }, "Add"),
-      ]));
-      kids.push(edgeGuardImportInput((you?.domains || []).map((row) => row.domain), addDomains));
-      kids.push(el("p", { className: "muted" }, "Mindful field names are unconfirmed until a sample export is provided."));
-      kids.push(edgeGuardDomainList(dynamic.id, you || { domains: [] }, {
-        canRemove: keyholder || !subLocked,
-        canRequest: subLocked,
-        onDone: async () => {
-          if (native) await syncEdgeGuardFromServer().catch(() => {});
-          await refresh();
-        },
-      }));
-    }
-    if (native) {
-      kids.push(permHowTo([
-        "Add domains you want blocked (e.g. reddit.com). Subdomains are included.",
-        "Turn on Block websites. Android will ask to allow a VPN connection — Allow. This is a local DNS sinkhole, not a remote VPN.",
-        "When your keyholder locks the list, Remove and the off switch disappear. Use Request removal instead.",
-        "Uninstalling the app or revoking the VPN cannot be blocked. UBETRA can only tell your keyholder.",
-      ]));
-    }
-    controls.replaceChildren(...kids);
-  }
-
-  refresh();
-  return card;
-}
-
-function buildEdgeGuardManageCard(dynamicId) {
-  const status = el("p", { className: "muted" }, "Loading Edge Guard…");
-  const body = el("div", { className: "stack" });
-  const card = el("div", { className: "card stack", id: "edge-guard-manage" }, [
-    el("h2", {}, "Edge Guard list"),
-    el("p", { className: "muted" }, "Blocklist for this dynamic, on any device. Locking stops the sub from removing sites or turning the filter off in the app. If the list has sites or is locked, you are told once when the phone reports Edge Guard off, and once if it misses a check-in for 6 hours. Uninstall and VPN revoke can only be detected."),
-    status,
-    body,
-  ]);
-
-  async function refresh() {
-    let remote;
-    try {
-      remote = await api(`/dynamics/${dynamicId}/edge-guard`);
-    } catch (err) {
-      status.textContent = err.message || "Could not load Edge Guard";
-      return;
-    }
-    const subs = (remote.members || []).filter((m) => m.role === "submissive");
-    const people = subs.length ? subs : (remote.members || []).filter((m) => m.membership_id !== remote.you?.membership_id);
-    if (!people.length) {
-      status.textContent = "No submissive partner in this dynamic yet.";
-      body.replaceChildren();
-      return;
-    }
-    status.textContent = "";
-    body.replaceChildren(...people.map((member) => {
-      const domainInput = el("input", {
-        type: "text",
-        placeholder: "example.com",
-        autocomplete: "off",
-        spellcheck: "false",
-      });
-      const lockBox = el("input", { type: "checkbox", checked: !!member.locked });
-      const requireBox = el("input", { type: "checkbox", checked: !!member.require_enabled });
-      const patch = async (payload) => {
-        await api(`/dynamics/${dynamicId}/edge-guard/policy`, {
-          method: "PATCH",
-          body: JSON.stringify({ membership_id: member.membership_id, ...payload }),
-        });
-        await refresh();
-      };
-      lockBox.addEventListener("change", async () => {
-        try {
-          await patch({ locked: lockBox.checked });
-          showToast(lockBox.checked ? "Edge Guard locked" : "Edge Guard unlocked");
-        } catch (err) {
-          lockBox.checked = !lockBox.checked;
-          showToast(err.message || "Could not update the lock");
-        }
-      });
-      requireBox.addEventListener("change", async () => {
-        try {
-          await patch({ require_enabled: requireBox.checked });
-          showToast("Saved");
-        } catch (err) {
-          requireBox.checked = !requireBox.checked;
-          showToast(err.message || "Could not update");
-        }
-      });
-      const addDomains = async (domains) => {
-        const result = await api(`/dynamics/${dynamicId}/edge-guard/domains`, {
-          method: "POST",
-          body: JSON.stringify({ domains, membership_id: member.membership_id }),
-        });
-        showToast((result.added || []).length ? `Added ${result.added.length} site(s)` : "No new sites to add");
-        await refresh();
-      };
-      return el("div", { className: "stack" }, [
-        el("h3", {}, member.display_name || "Sub"),
-        el("p", { className: "muted" }, edgeGuardCheckinLine(member)),
-        el("label", { className: "checkbox-label" }, [lockBox, " Lock the list (sub cannot remove sites or turn Edge Guard off)"]),
-        el("label", { className: "checkbox-label" }, [requireBox, " Require Edge Guard to stay on (also alert when the list is still empty)"]),
-        el("label", {}, ["Add website", domainInput]),
-        el("div", { className: "row wrap" }, [
-          el("button", {
-            type: "button",
-            className: "primary-btn",
-            onClick: async () => {
-              const domain = (domainInput.value || "").trim();
-              if (!domain) {
-                showToast("Enter a domain like reddit.com");
-                return;
-              }
-              try {
-                await addDomains([domain]);
-              } catch (err) {
-                showToast(err.message || "Could not add site");
-              }
-            },
-          }, "Add"),
-        ]),
-        edgeGuardImportInput((member.domains || []).map((row) => row.domain), addDomains),
-        el("p", { className: "muted" }, "Mindful field names are unconfirmed until a sample export is provided."),
-        edgeGuardDomainList(dynamicId, member, {
-          canRemove: true,
-          canRequest: false,
-          onDone: refresh,
-        }),
-      ]);
-    }));
-  }
-
-  refresh();
-  return card;
+  return Promise.resolve();
 }
 
 function isAndroidBrowser() {
@@ -5327,8 +4834,7 @@ function wireNativePushCallWake() {
     const wakeFromPush = (data) => {
       const kind = String(data?.kind || "");
       if (kind === "call") pollIncomingVideoCall().catch(() => {});
-      if (kind === "edge_guard") syncEdgeGuardFromServer().catch(() => {});
-      if (kind === "reload") syncEdgeGuardFromServer().finally(() => reloadAppShell());
+      if (kind === "reload") reloadAppShell();
     };
     Push.addListener("pushNotificationReceived", (ev) => {
       wakeFromPush(ev?.notification?.data || ev?.data || {});
@@ -5347,7 +4853,6 @@ function wireNativePushCallWake() {
   App?.addListener?.("appStateChange", (ev) => {
     if (ev?.isActive && state.token) {
       pollIncomingVideoCall().catch(() => {});
-      syncEdgeGuardFromServer().catch(() => {});
     }
   });
 }
@@ -5403,38 +4908,52 @@ function updateBottomNav() {
   const enabledFeatures = state.currentDynamic?.enabled_features || [];
   const playtimeOn =
     !enabledFeatures.length || enabledFeatures.includes("scene_workshop");
-  const trackingRoutes = new Set([
-    "track", "tracking", "chastity", "feelings", "punishment", "sleep",
-    "history", "vault", "journal", "ground-rules", "interview", "check-in", "survey",
-    "knowledge", "context", "gear", "features", "overlap",
-  ]);
-  const playtimeRoutes = new Set(["assistant", "tasks", "acts", "manga", "instructor"]);
-  const activeTab =
-    parts[0] === "chat" ? "chat"
-    : parts[0] === "dynamic" && playtimeRoutes.has(parts[2]) ? "workshop"
-    : "tracking";
+  const playtimeRoutes = new Set(["assistant", "tasks", "acts", "instructor", "gear"]);
+  let activeTab = "today";
+  if (navSheet === "log") activeTab = "log";
+  else if (navSheet === "more") activeTab = "more";
+  else if (parts[0] === "chat") activeTab = "chat";
+  else if (parts[0] === "dynamic" && playtimeRoutes.has(parts[2])) activeTab = "play";
 
   bottomNavEl.replaceChildren(
     ...NAV_TABS.map((tab) => {
-      const featureOff = tab.id === "workshop" && dynamicId && !playtimeOn;
-      const disabled = !tab.enabled || (tab.requiresDynamic && !dynamicId) || featureOff;
+      const featureOff = tab.id === "play" && dynamicId && !playtimeOn;
+      const serverTab = tab.id === "play" || tab.id === "chat";
+      const serverOff = !!(window.UbetraPhone && window.UbetraPhone.serverFeaturesGrey());
+      const disabled = (tab.requiresDynamic && !dynamicId) || featureOff || (serverTab && serverOff);
       const btn = el("button", {
-        className: `nav-tab ${activeTab === tab.id ? "active" : ""} ${disabled ? "disabled" : ""}`,
+        className: `nav-tab${activeTab === tab.id ? " active" : ""}${disabled ? " disabled" : ""}${serverTab && serverOff ? " server-grey" : ""}`,
         type: "button",
-        title: featureOff ? "Playtime is turned off in Application features" : "",
+        title: serverTab && serverOff ? "Needs self-host server" : featureOff ? "Playtime is turned off in Application features" : tab.label,
         onClick: () => {
           if (disabled) return;
-          if (tab.id === "tracking" && dynamicId) navigate(`/dynamic/${dynamicId}/track`);
-          if (tab.id === "workshop" && dynamicId) navigate(`/dynamic/${dynamicId}/assistant`);
-          if (tab.id === "chat" && dynamicId) navigate(`/chat/${dynamicId}`);
+          if (tab.id === "today" && dynamicId) {
+            closeNavSheets();
+            navigate(`/dynamic/${dynamicId}/track`);
+          }
+          if (tab.id === "log" && dynamicId) openQuickLogSheet(dynamicId);
+          if (tab.id === "play" && dynamicId) {
+            closeNavSheets();
+            navigate(`/dynamic/${dynamicId}/assistant`);
+          }
+          if (tab.id === "chat" && dynamicId) {
+            closeNavSheets();
+            navigate(`/chat/${dynamicId}`);
+          }
+          if (tab.id === "more") {
+            if (!dynamicId) navigate("/settings");
+            else openMoreSheet(dynamicId);
+          }
         },
       }, [
         el("span", { className: "nav-icon" }, tab.icon),
         tab.label,
       ]);
+      btn.dataset.tab = tab.id;
       return btn;
     })
   );
+  if (window.UbetraPhone) window.UbetraPhone.paint();
 }
 
 /** Hub title row with Application features hamburger. */
@@ -5579,7 +5098,7 @@ function isFacetEnabled(facet, enabledFeatures) {
   if (facet.core) return true;
   // Empty list historically meant "all on" — but opt-in features stay gated by their id.
   if (!enabledFeatures || !enabledFeatures.length) {
-    return facet.id !== "sleep_tracking" && facet.id !== "manga_comics" && facet.id !== "cycle_tracking";
+    return facet.id !== "sleep_tracking" && facet.id !== "cycle_tracking";
   }
   if (enabledFeatures.includes(facet.id)) return true;
   if (Array.isArray(facet.alsoEnabledBy)) {
@@ -5778,7 +5297,7 @@ function renderSwitchPanel(dynamicId, data, { compact = false } = {}) {
   }
   if (data?.can_draft_goal) {
     const title = el("input", { type: "text", maxlength: "80", placeholder: "Title" });
-    const detail = el("textarea", { rows: "3", placeholder: "What she experiences" });
+    const detail = el("textarea", { rows: "3", placeholder: `What ${voiceFromPartner((state.currentDynamic?.partners || []).find((p) => p.role === "dominant"), "the keyholder").name} experiences` });
     const metric = el("select");
     (data.metrics || []).forEach((m) => metric.appendChild(el("option", { value: m.id }, m.title)));
     const target = el("input", { type: "number", min: "1", max: "100", value: "1" });
@@ -5983,7 +5502,7 @@ async function bootstrap() {
         return;
       }
       if (event.data?.type === "ubetra-reload") {
-        syncEdgeGuardFromServer().finally(() => reloadAppShell());
+        reloadAppShell();
         return;
       }
       if (event.data?.type === "ubetra-navigate" && event.data.url) {
@@ -6030,14 +5549,22 @@ async function bootstrap() {
     }
     refreshConfessionWarning();
     maybeShowPunishmentReminders();
-    syncEdgeGuardFromServer().catch(() => {});
+    if (window.UbetraPhone) window.UbetraPhone.onForeground();
   });
 
   // Render login immediately so buttons work while token validation runs
+  if (window.UbetraPhone) await window.UbetraPhone.prepare(state);
+
   if (!state.token) {
     navigate("/login");
   } else {
     renderRoute();
+  }
+
+  if (window.UbetraPhone && window.UbetraPhone.usingLocalSession()) {
+    navigate("/dynamic/" + (state.activeDynamicId || "local") + "/track");
+    if (window.UbetraPhone) window.UbetraPhone.paint();
+    return;
   }
 
   if (state.token) {
@@ -6051,13 +5578,22 @@ async function bootstrap() {
       refreshAppUpdates().catch(() => {});
       startVideoCallWatcher();
       wireNativePushCallWake();
-      syncEdgeGuardFromServer().catch(() => {});
+      if (window.UbetraPhone) {
+        window.UbetraPhone.noteSession(state);
+        window.UbetraPhone.onForeground();
+      }
       renewSession();
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") renewSession();
       });
       return;
-    } catch {
+    } catch (err) {
+      if (window.UbetraPhone && (await window.UbetraPhone.keepSessionOffline())) {
+        await window.UbetraPhone.installOfflineSession(state);
+        navigate("/dynamic/" + (state.activeDynamicId || "local") + "/track");
+        window.UbetraPhone.paint();
+        return;
+      }
       setToken(null);
       state.user = null;
       state.dynamics = [];
@@ -6597,7 +6133,10 @@ function renderOnboarding() {
           (selected?.models || []).forEach((model) => {
             modelSelect.appendChild(el("option", { value: model }, model));
           });
-          if (selected?.default_model) modelCustom.value = selected.default_model;
+          if (selected?.default_model) {
+            modelCustom.value = selected.default_model;
+            modelSelect.value = selected.default_model;
+          }
           if (selected?.needs_base_url) {
             baseUrlLabel.classList.remove("hidden");
             baseUrlInput.value = selected.default_base_url || baseUrlInput.value;
@@ -6607,14 +6146,27 @@ function renderOnboarding() {
         }
         providerSelect.addEventListener("change", refreshProviderUi);
         modelSelect.addEventListener("change", () => { modelCustom.value = modelSelect.value; });
+        if (providerMap.openrouter) providerSelect.value = "openrouter";
         refreshProviderUi();
 
-        panel.appendChild(el("h2", {}, "AI provider setup"));
-        panel.appendChild(el("p", { className: "muted" }, "Shared for your dynamic. Tap ? for adult-content guidance (LM Studio / uncensored OpenRouter block less)."));
+        panel.appendChild(el("h2", {}, "Connect OpenRouter"));
+        panel.appendChild(el("p", { className: "muted" }, "One key, shared with your partner. Leave the model on openrouter/auto."));
+        panel.appendChild(el("ol", { className: "setup-steps" }, [
+          el("li", {}, [
+            "Create a key at ",
+            el("a", { href: "https://openrouter.ai/keys", target: "_blank", rel: "noopener noreferrer" }, "openrouter.ai/keys"),
+            ".",
+          ]),
+          el("li", {}, "Paste it below."),
+          el("li", {}, "Save. You can test it later in Settings."),
+        ]));
         panel.appendChild(providerRow);
         panel.appendChild(description);
         panel.appendChild(el("label", {}, ["Model", modelSelect]));
-        panel.appendChild(el("label", {}, ["Custom model (optional)", modelCustom]));
+        panel.appendChild(el("details", {}, [
+          el("summary", {}, "Use a different model"),
+          el("label", {}, ["Custom model (optional)", modelCustom]),
+        ]));
         panel.appendChild(baseUrlLabel);
         panel.appendChild(el("label", {}, ["API key", apiKeyInput]));
         panel.appendChild(el("div", { className: "row wrap" }, [
@@ -6624,6 +6176,9 @@ function renderOnboarding() {
             onClick: async () => {
               error.classList.add("hidden");
               try {
+                if (!apiKeyInput.value.trim() && providerSelect.value !== "lmstudio" && providerSelect.value !== "openai_compatible") {
+                  throw new Error("Paste your OpenRouter key, or choose Fill out later.");
+                }
                 await api(`/dynamics/${status.dynamic_id}/shared-llm`, {
                   method: "PUT",
                   body: JSON.stringify({
@@ -6639,7 +6194,7 @@ function renderOnboarding() {
                 error.classList.remove("hidden");
               }
             },
-          }, "Save shared API key"),
+          }, "Save key"),
           el("button", {
             className: "ghost-btn",
             type: "button",
@@ -8754,6 +8309,959 @@ function renderTrackingEventsCalendar(dynamicId, partners) {
   return host;
 }
 
+/* TODAY_HUB_START */
+/* Today hub and quick log. Prefers GET /watch/summary, and composes chastity, tracking, sleep, and cycle if that route is missing. */
+
+let navSheet = null;
+let quickLogToken = 0;
+
+const QUICK_LOG_OUTCOMES = [
+  { id: "full", label: "Full", eventType: "orgasm", tag: "Full Orgasm" },
+  { id: "ruined", label: "Ruined", eventType: "orgasm", tag: "Ruined Orgasm" },
+  { id: "denied", label: "Denied", eventType: "orgasm", tag: "Denied" },
+  { id: "play", label: "Play", eventType: "no_orgasm", tag: "" },
+];
+
+function closeNavSheets() {
+  quickLogToken += 1;
+  const nodes = Array.from(document.querySelectorAll(".today-sheet-backdrop"));
+  nodes.forEach((node) => {
+    if (typeof node._todayClose === "function") node._todayClose();
+    else node.remove();
+  });
+  const wasOpen = navSheet;
+  navSheet = null;
+  if (wasOpen) updateBottomNav();
+}
+
+function openTodaySheet(kind, title, bodyNodes) {
+  closeNavSheets();
+  navSheet = kind || null;
+  const backdrop = el("div", { className: "today-sheet-backdrop", role: "presentation" });
+  let closed = false;
+  function close() {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener("keydown", onKey);
+    if (backdrop.parentNode) backdrop.remove();
+    if (navSheet === kind) navSheet = null;
+    updateBottomNav();
+  }
+  function onKey(ev) {
+    if (ev.key === "Escape") close();
+  }
+  backdrop._todayClose = close;
+  const sheet = el("div", {
+    className: "today-sheet card stack",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": title || "Menu",
+  }, [
+    el("div", { className: "today-sheet-handle", "aria-hidden": "true" }),
+    el("div", { className: "row today-sheet-head" }, [
+      el("strong", {}, title || ""),
+      el("button", { type: "button", className: "ghost-btn", onClick: () => close() }, "Close"),
+    ]),
+  ].concat(bodyNodes || []));
+  backdrop.appendChild(sheet);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) close();
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(backdrop);
+  updateBottomNav();
+  return close;
+}
+
+function quickLogPayload(outcome, forMembershipId, notes) {
+  const body = {
+    for_membership_id: forMembershipId,
+    event_type: outcome.eventType,
+    notes: notes || "",
+    tags: [],
+    orgasms: [],
+    occurred_at: new Date().toISOString(),
+  };
+  if (outcome.eventType === "orgasm" && outcome.tag) {
+    body.orgasms = [{ tags: [outcome.tag] }];
+  }
+  return body;
+}
+
+function showQuickLogFeelingsGate(errorEl, dynamicId) {
+  errorEl.classList.remove("hidden");
+  errorEl.replaceChildren(el("span", {}, [
+    "Log feelings before play. ",
+    el("button", {
+      type: "button",
+      className: "link-btn",
+      onClick: () => {
+        closeNavSheets();
+        navigate(`/dynamic/${dynamicId}/feelings?context=before_play`, { skipInbox: true });
+      },
+    }, "Open Feelings"),
+  ]));
+}
+
+async function offerFeelingsAfterQuickLog(dynamicId, entry) {
+  closeNavSheets();
+  let status = null;
+  try {
+    status = await api(`/dynamics/${dynamicId}/feelings/status`);
+  } catch (err) {
+    status = null;
+  }
+  if (status && status.prompt_after_events === false) {
+    showToast("Saved.");
+    return;
+  }
+  const at = feelingsAtJustAfter(entry && entry.occurred_at ? entry.occurred_at : new Date().toISOString());
+  const params = new URLSearchParams();
+  params.set("at", at);
+  params.set("from", entry && entry.event_type === "no_orgasm" ? "play" : "orgasm");
+  if (entry && entry.id) params.set("org_entry_id", entry.id);
+  params.set("context", "after_play");
+  const path = `/dynamic/${dynamicId}/feelings?${params.toString()}`;
+  openTodaySheet("", "Saved", [
+    el("p", { className: "muted" }, "Log how that felt? You can skip this."),
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => {
+        closeNavSheets();
+        navigate(path, { skipInbox: true });
+      },
+    }, "Log feelings"),
+    el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => closeNavSheets(),
+    }, "Not now"),
+  ]);
+}
+
+async function openQuickLogSheet(dynamicId) {
+  if (!dynamicId) return;
+  if (navSheet === "log") {
+    closeNavSheets();
+    return;
+  }
+  const token = (quickLogToken += 1);
+  try {
+    if (!state.currentDynamic || state.currentDynamic.id !== dynamicId) {
+      await loadDynamic(dynamicId);
+    }
+  } catch (err) {
+    if (token === quickLogToken) showToast(err.message || "Could not open log.");
+    return;
+  }
+  if (token !== quickLogToken) return;
+  const dynamic = state.currentDynamic;
+  const partners = (dynamic && dynamic.partners) || [];
+  const you = partners.filter((partner) => partner.is_you)[0] || null;
+  let forId = (you && you.id) || (partners[0] && partners[0].id) || "";
+  let outcome = null;
+  let saving = false;
+  const errorEl = el("div", { className: "error hidden" });
+  const note = el("input", {
+    type: "text",
+    maxlength: "280",
+    placeholder: "Note (optional)",
+    "aria-label": "Note",
+  });
+  const submitBtn = el("button", { type: "button", className: "primary-btn" }, "Save");
+  const partnerRow = el("div", { className: "today-chip-row" });
+  const outcomeRow = el("div", { className: "today-chip-row" });
+
+  function paintPartners() {
+    partnerRow.replaceChildren();
+    partners.forEach((partner) => {
+      partnerRow.appendChild(el("button", {
+        type: "button",
+        className: `today-chip${partner.id === forId ? " active" : ""}`,
+        onClick: () => {
+          forId = partner.id;
+          paintPartners();
+        },
+      }, partner.display_name || "Partner"));
+    });
+  }
+
+  function paintOutcomes() {
+    outcomeRow.replaceChildren();
+    QUICK_LOG_OUTCOMES.forEach((item) => {
+      outcomeRow.appendChild(el("button", {
+        type: "button",
+        className: `today-chip${outcome && outcome.id === item.id ? " active" : ""}`,
+        "aria-label": item.id === "play" ? "Play, no orgasm" : item.label,
+        onClick: () => {
+          outcome = item;
+          paintOutcomes();
+        },
+      }, item.label));
+    });
+  }
+
+  async function submit() {
+    if (saving) return;
+    errorEl.classList.add("hidden");
+    errorEl.textContent = "";
+    if (!forId) {
+      errorEl.textContent = "Pick who this is for.";
+      errorEl.classList.remove("hidden");
+      return;
+    }
+    if (!outcome) {
+      errorEl.textContent = "Pick Full, Ruined, Denied, or Play.";
+      errorEl.classList.remove("hidden");
+      return;
+    }
+    saving = true;
+    submitBtn.disabled = true;
+    try {
+      const created = await api(`/dynamics/${dynamicId}/tracking`, {
+        method: "POST",
+        body: JSON.stringify(quickLogPayload(outcome, forId, note.value.trim())),
+      });
+      const route = parseRoute();
+      const refreshToday = route.parts[0] === "home"
+        || route.parts.length === 0
+        || (route.parts[0] === "dynamic" && route.parts[1] === dynamicId && (!route.parts[2] || route.parts[2] === "track"));
+      await offerFeelingsAfterQuickLog(dynamicId, created);
+      if (refreshToday) renderToday(dynamicId);
+    } catch (err) {
+      saving = false;
+      submitBtn.disabled = false;
+      if (err && (err.status === 409 || /feelings/i.test(err.message || ""))) {
+        showQuickLogFeelingsGate(errorEl, dynamicId);
+        return;
+      }
+      errorEl.textContent = (err && err.message) || "Could not save.";
+      errorEl.classList.remove("hidden");
+    }
+  }
+
+  submitBtn.addEventListener("click", () => {
+    submit();
+  });
+  note.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      submit();
+    }
+  });
+  if (partners.length > 1) paintPartners();
+  paintOutcomes();
+
+  const whoLine = partners.length > 1
+    ? el("div", { className: "stack" }, [
+      el("span", { className: "muted" }, "For"),
+      partnerRow,
+    ])
+    : el("p", { className: "muted" }, partners.length
+      ? `For ${partners[0].display_name || "you"}`
+      : "No partner on this dynamic yet.");
+
+  openTodaySheet("log", "Log", [
+    whoLine,
+    el("span", { className: "muted" }, "Right now"),
+    outcomeRow,
+    el("p", { className: "muted today-log-hint" }, "Play is no orgasm."),
+    note,
+    errorEl,
+    submitBtn,
+    el("button", {
+      type: "button",
+      className: "link-btn",
+      onClick: () => {
+        closeNavSheets();
+        navigate(`/dynamic/${dynamicId}/tracking`);
+      },
+    }, "More details"),
+  ]);
+}
+
+function openMoreSheet(dynamicId) {
+  if (navSheet === "more") {
+    closeNavSheets();
+    return;
+  }
+  if (!dynamicId) {
+    navigate("/settings");
+    return;
+  }
+  const dynamic = state.currentDynamic && state.currentDynamic.id === dynamicId ? state.currentDynamic : null;
+  const enabled = (dynamic && dynamic.enabled_features) || [];
+  const playtimeOn = !enabled.length || enabled.indexOf("scene_workshop") !== -1;
+  const buttons = [];
+  const serverOff = !!(window.UbetraPhone && window.UbetraPhone.serverFeaturesGrey());
+  if (playtimeOn) {
+    PLAYTIME_FACETS.forEach((facet) => {
+      if (dynamic && !isFacetEnabled(facet, enabled)) return;
+      buttons.push(el("button", {
+        type: "button",
+        className: "today-more-link" + (serverOff ? " server-grey" : ""),
+        title: serverOff ? "Needs self-host server" : "",
+        onClick: () => {
+          if (serverOff) {
+            showToast("Needs self-host server");
+            return;
+          }
+          closeNavSheets();
+          navigate(`/dynamic/${dynamicId}/${facet.route}`);
+        },
+      }, [
+        el("span", {}, facet.title),
+        el("span", { className: "muted" }, facet.subtitle || ""),
+      ]));
+    });
+    buttons.push(el("button", {
+      type: "button",
+      className: "today-more-link" + (serverOff ? " server-grey" : ""),
+      title: serverOff ? "Needs self-host server" : "",
+      onClick: () => {
+        if (serverOff) {
+          showToast("Needs self-host server");
+          return;
+        }
+        closeNavSheets();
+        navigate(`/dynamic/${dynamicId}/assistant/games`);
+      },
+    }, [
+      el("span", {}, "Games"),
+      el("span", { className: "muted" }, "Wheel, timers, and fates"),
+    ]));
+  }
+  buttons.push(el("button", {
+    type: "button",
+    className: "today-more-link",
+    onClick: () => {
+      closeNavSheets();
+      navigate("/settings");
+    },
+  }, [
+    el("span", {}, "Settings"),
+    el("span", { className: "muted" }, "Account, theme, and privacy"),
+  ]));
+  buttons.push(el("button", {
+    type: "button",
+    className: "today-more-link",
+    onClick: () => {
+      closeNavSheets();
+      openAppFeaturesPanel(dynamicId, "all");
+    },
+  }, [
+    el("span", {}, "Application features"),
+    el("span", { className: "muted" }, "Turn tools on or off"),
+  ]));
+  openTodaySheet("more", "More", buttons);
+}
+
+function preferredDynamicId() {
+  const known = state.dynamics || [];
+  const last = getLastRoute();
+  if (last) {
+    const parts = String(last).split("?")[0].split("/").filter(Boolean);
+    const fromRoute = (parts[0] === "dynamic" || parts[0] === "chat") ? parts[1] : "";
+    if (fromRoute && known.some((row) => row.id === fromRoute)) return fromRoute;
+  }
+  if (state.activeDynamicId && known.some((row) => row.id === state.activeDynamicId)) {
+    return state.activeDynamicId;
+  }
+  if (known[0] && known[0].id) return known[0].id;
+  return state.activeDynamicId || null;
+}
+
+function todayStillCurrent(dynamicId) {
+  const route = parseRoute();
+  if (route.parts[0] === "chat" || route.parts[0] === "settings" || route.parts[0] === "login") return false;
+  if (route.parts[0] === "dynamic" && route.parts[1] && route.parts[1] !== dynamicId) return false;
+  if (route.parts[0] === "dynamic" && route.parts[2] && route.parts[2] !== "track") return false;
+  return true;
+}
+
+function todayQuiet(promise, fallback) {
+  return promise.then(
+    (value) => ({ ok: true, value: value }),
+    () => ({ ok: false, value: fallback })
+  );
+}
+
+function todayRingProgress(partner, lockups) {
+  if (!partner) return 0.12;
+  if (partner.state === "on_break") return 0.42;
+  if (partner.state !== "locked") return 0.16;
+  if (partner.timer_overdue) return 1;
+  const lockup = (lockups || []).filter((row) => row.id === partner.active_lockup_id)[0];
+  const start = lockup ? parseServerDate(lockup.started_at) : null;
+  const end = parseServerDate(partner.planned_end_at);
+  if (!start || !end) return 0.72;
+  const span = end.getTime() - start.getTime();
+  if (span <= 0) return 0.72;
+  const pct = (Date.now() - start.getTime()) / span;
+  if (pct < 0.08) return 0.08;
+  if (pct > 1) return 1;
+  return pct;
+}
+
+function todayLockRing(partner, lockups) {
+  const radius = 15.2;
+  const circumference = 2 * Math.PI * radius;
+  const stateName = partner && partner.state ? partner.state : "unlocked";
+  let tone = "free";
+  let center = "Free";
+  let caption = "Not locked";
+  if (!partner) {
+    center = "—";
+    caption = "Chastity off";
+  } else if (stateName === "locked") {
+    tone = partner.timer_overdue ? "overdue" : "locked";
+    center = partner.current_duration_label || "Locked";
+    caption = partner.timer_overdue ? "Timer finished" : "Locked";
+  } else if (stateName === "on_break") {
+    tone = "break";
+    center = partner.break_duration_label || "Break";
+    caption = "On break";
+  } else if (partner.free_duration_label) {
+    center = partner.free_duration_label;
+    caption = "Free";
+  } else {
+    center = "Free";
+    caption = "No lockup yet";
+  }
+  const filled = (todayRingProgress(partner, lockups) * circumference).toFixed(2);
+  const wrap = el("div", { className: `today-ring tone-${tone}` });
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("aria-hidden", "true");
+  const track = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  track.setAttribute("class", "today-ring-track");
+  track.setAttribute("cx", "18");
+  track.setAttribute("cy", "18");
+  track.setAttribute("r", "15.2");
+  const value = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  value.setAttribute("class", "today-ring-value");
+  value.setAttribute("cx", "18");
+  value.setAttribute("cy", "18");
+  value.setAttribute("r", "15.2");
+  value.setAttribute("stroke-dasharray", `${filled} ${circumference.toFixed(2)}`);
+  svg.appendChild(track);
+  svg.appendChild(value);
+  wrap.appendChild(svg);
+  wrap.appendChild(el("div", { className: "today-ring-copy" }, [
+    el("strong", {}, center),
+    el("span", {}, caption),
+  ]));
+  return wrap;
+}
+
+function todayChastityFocus(overview, dynamic) {
+  const enrolled = ((overview && overview.partners) || []).filter((partner) => partner.chastity_enabled);
+  if (!enrolled.length) return null;
+  const active = enrolled.filter((partner) => partner.state === "locked" || partner.state === "on_break");
+  if (active.length) return active[0];
+  const you = ((dynamic && dynamic.partners) || []).filter((partner) => partner.is_you)[0];
+  if (you) {
+    const self = enrolled.filter((partner) => partner.membership_id === you.id)[0];
+    if (self) return self;
+  }
+  return enrolled[0];
+}
+
+function canRunChastityAction(dynamic, partner) {
+  if (!partner) return false;
+  const you = ((dynamic && dynamic.partners) || []).filter((row) => row.is_you)[0];
+  if (!you) return false;
+  if (you.role === "dominant") return true;
+  return you.id === partner.membership_id;
+}
+
+function todayOrgasmBars(stats) {
+  const series = (stats && stats.cumulative_30d) || [];
+  function sumRow(row) {
+    const map = (row && row.by_partner) || {};
+    return Object.keys(map).reduce((acc, key) => acc + (Number(map[key]) || 0), 0);
+  }
+  const tail = series.slice(-8);
+  const bars = [];
+  for (let i = 1; i < tail.length; i += 1) {
+    const delta = sumRow(tail[i]) - sumRow(tail[i - 1]);
+    bars.push(delta > 0 ? delta : 0);
+  }
+  while (bars.length < 7) bars.unshift(0);
+  return bars.slice(-7);
+}
+
+function todayCouldNot(label) {
+  return el("div", { className: "today-card" }, [
+    el("span", { className: "today-card-kicker" }, label),
+    el("span", { className: "muted" }, "Couldn't load"),
+  ]);
+}
+
+function todayOrgasmCard(dynamicId, stats) {
+  const partners = (stats && stats.partners) || [];
+  const total = partners.reduce((acc, partner) => acc + (Number(partner.orgasm_count) || 0), 0);
+  const bars = todayOrgasmBars(stats);
+  let max = 1;
+  bars.forEach((count) => {
+    if (count > max) max = count;
+  });
+  const spark = el("span", { className: "today-spark", "aria-hidden": "true" });
+  bars.forEach((count) => {
+    const bar = el("span", { className: "today-spark-bar" });
+    const height = Math.round((count / max) * 100);
+    bar.style.height = `${Math.max(height, count > 0 ? 18 : 8)}%`;
+    spark.appendChild(bar);
+  });
+  return el("button", {
+    type: "button",
+    className: "today-card today-card-wide",
+    onClick: () => navigate(`/dynamic/${dynamicId}/tracking`),
+  }, [
+    el("span", { className: "today-card-kicker" }, "Orgasms · 7 days"),
+    el("span", { className: "today-card-row" }, [
+      el("strong", { className: "today-card-value" }, String(total)),
+      (stats && stats.cumulative_30d && stats.cumulative_30d.length > 1) ? spark : null,
+    ]),
+    el("span", { className: "muted" }, (stats && stats.recent_orgasm_label) || "Last 7 days"),
+  ]);
+}
+
+function todaySleepGlanceCard(dynamicId, night) {
+  let value = "No nights yet";
+  let hint = "Open sleep to log or sync";
+  if (night && (night.duration_label || night.duration_min != null)) {
+    value = night.duration_label || `${(Number(night.duration_min) / 60).toFixed(1)}h`;
+    const who = night.name ? `${night.name} · ` : "";
+    hint = who + (night.night_date || (night.end_at ? formatSleepNightTitle(night.end_at) : "Last night"));
+  }
+  return el("button", {
+    type: "button",
+    className: "today-card",
+    onClick: () => navigate(`/dynamic/${dynamicId}/sleep`),
+  }, [
+    el("span", { className: "today-card-kicker" }, "Sleep"),
+    el("strong", { className: "today-card-value" }, value),
+    el("span", { className: "muted" }, hint),
+  ]);
+}
+
+function todaySleepCard(dynamicId, sessions, dynamic) {
+  const nights = groupSleepNights(sessions || []);
+  const night = nights[0];
+  let value = "No nights yet";
+  let hint = "Open sleep to log or sync";
+  if (night) {
+    const hours = (Number(night.duration_min) || 0) / 60;
+    const who = ((dynamic && dynamic.partners) || []).filter((partner) => partner.id === night.subject_membership_id)[0];
+    const whoName = who && who.display_name ? `${who.display_name} · ` : "";
+    value = `${hours.toFixed(1)}h`;
+    hint = whoName + formatSleepNightTitle(night.end_at);
+  }
+  return el("button", {
+    type: "button",
+    className: "today-card",
+    onClick: () => navigate(`/dynamic/${dynamicId}/sleep`),
+  }, [
+    el("span", { className: "today-card-kicker" }, "Sleep"),
+    el("strong", { className: "today-card-value" }, value),
+    el("span", { className: "muted" }, hint),
+  ]);
+}
+
+function todayCycleGlance(person) {
+  const summary = (person && person.summary) || {};
+  const name = (person && person.display_name) || "Cycle";
+  let value = name;
+  if (summary.on_period && summary.cycle_day) value = `${name} · day ${summary.cycle_day}`;
+  else if (summary.cycle_day) value = `${name} · day ${summary.cycle_day}`;
+  else if (summary.on_period) value = `${name} · on period`;
+  let hint = "No prediction yet";
+  if (summary.predicted_next) hint = `Next ~${summary.predicted_next}`;
+  else if (summary.last_period_start) hint = `Last start ${summary.last_period_start}`;
+  return { value: value, hint: hint };
+}
+
+function todayCycleCard(dynamicId, cycle) {
+  const people = ((cycle && cycle.people) || []).slice().sort((a, b) => {
+    if (a.is_you === b.is_you) return 0;
+    return a.is_you ? -1 : 1;
+  });
+  const first = people[0] ? todayCycleGlance(people[0]) : { value: "Cycle", hint: "Open the cycle page" };
+  const rest = people.slice(1).map((person) => todayCycleGlance(person).value);
+  return el("button", {
+    type: "button",
+    className: "today-card",
+    onClick: () => navigate(`/dynamic/${dynamicId}/cycle`),
+  }, [
+    el("span", { className: "today-card-kicker" }, "Cycle"),
+    el("strong", { className: "today-card-value today-card-value-sm" }, first.value),
+    el("span", { className: "muted" }, rest.length ? rest.join(" · ") : first.hint),
+  ]);
+}
+
+function todayRecentEvents(dynamicId, entries, lockups) {
+  const events = [];
+  (entries || []).slice(0, 8).forEach((entry) => {
+    const tags = entry.orgasms && entry.orgasms.length
+      ? entry.orgasms.reduce((acc, row) => acc.concat(row.tags || []), [])
+      : (entry.tags || []);
+    events.push({
+      at: entry.occurred_at,
+      title: `${entry.for_display_name || "Log"} · ${formatTrackingEventType(entry.event_type)}`,
+      detail: tags.slice(0, 2).join(", "),
+      path: `/dynamic/${dynamicId}/tracking`,
+    });
+  });
+  (lockups || []).slice(0, 4).forEach((lockup) => {
+    const name = lockup.for_display_name || "Lock";
+    events.push({
+      at: lockup.started_at,
+      title: `${name} locked`,
+      detail: lockup.status || "",
+      path: `/dynamic/${dynamicId}/chastity`,
+    });
+    if (lockup.ended_at) {
+      events.push({
+        at: lockup.ended_at,
+        title: `${name} released`,
+        detail: lockup.ended_kind || "",
+        path: `/dynamic/${dynamicId}/chastity`,
+      });
+    }
+  });
+  events.sort((a, b) => {
+    const left = parseServerDate(a.at);
+    const right = parseServerDate(b.at);
+    return (right ? right.getTime() : 0) - (left ? left.getTime() : 0);
+  });
+  return events.slice(0, 5);
+}
+
+function todayActionButton(label, onClick, primary) {
+  return el("button", {
+    type: "button",
+    className: primary ? "primary-btn today-action" : "ghost-btn today-action",
+    onClick: onClick,
+  }, label);
+}
+
+async function todaySyncBody(dynamicId, sleepOn, cycleOn) {
+  const bits = [];
+  try {
+    if (sleepOn) {
+      const out = await syncHealthConnect("sleep", dynamicId, {});
+      bits.push(`sleep ${(out && out.imported) || 0}`);
+    }
+    if (cycleOn) {
+      const out = await syncHealthConnect("cycle", dynamicId, {});
+      bits.push(`cycle ${(out && out.imported) || 0}`);
+    }
+    showToast(bits.length ? `Synced ${bits.join(", ")}.` : "Sync finished.");
+    renderToday(dynamicId);
+  } catch (err) {
+    showToast((err && err.message) || "Body sync failed.");
+  }
+}
+
+function markOfflineBodyCard(node, kind) {
+  if (!node || !window.UbetraPhone || !window.UbetraPhone.serverFeaturesGrey()) return node;
+  if (!window.UbetraPhone.hasBodyCache(kind)) {
+    node.classList.add("server-grey");
+    node.title = "Needs self-host server";
+  } else {
+    node.classList.add("server-cached");
+    node.title = "Last synced copy. Editing needs the server.";
+  }
+  return node;
+}
+
+function paintToday(dynamicId, dynamic, enabled, pack) {
+  if (!todayStillCurrent(dynamicId)) return;
+  const todayLabel = new Date().toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+  const stack = el("div", { className: "stack today-page" });
+  stack.appendChild(el("header", { className: "today-head" }, [
+    el("p", { className: "today-kicker" }, "Today"),
+    el("h1", {}, todayLabel),
+    el("p", { className: "muted" }, formatDynamicTitle(dynamic)),
+  ]));
+
+  const focus = pack.chastityOn && pack.overviewOk ? todayChastityFocus(pack.overview, dynamic) : null;
+  if (pack.chastityOn && !pack.overviewOk) {
+    stack.appendChild(el("button", {
+      type: "button",
+      className: "today-status today-status-plain",
+      onClick: () => renderToday(dynamicId),
+    }, [
+      el("span", { className: "today-status-copy" }, [
+        el("strong", {}, "Lock status"),
+        el("span", { className: "muted" }, "Couldn't load. Tap to retry."),
+      ]),
+    ]));
+  } else if (pack.chastityOn && pack.overview && pack.overview.any_enabled && focus) {
+    stack.appendChild(el("button", {
+      type: "button",
+      className: "today-status",
+      onClick: () => navigate(`/dynamic/${dynamicId}/chastity`),
+    }, [
+      todayLockRing(focus, pack.lockups),
+      el("span", { className: "today-status-copy" }, [
+        el("strong", {}, pack.overview.summary_label || "Chastity"),
+        el("span", { className: "muted" }, "Open chastity"),
+      ]),
+    ]));
+  } else if (pack.chastityOn) {
+    stack.appendChild(el("button", {
+      type: "button",
+      className: "today-status today-status-plain",
+      onClick: () => navigate(`/dynamic/${dynamicId}/chastity`),
+    }, [
+      el("span", { className: "today-status-copy" }, [
+        el("strong", {}, (pack.overview && pack.overview.summary_label) || "Chastity is off"),
+        el("span", { className: "muted" }, "Open chastity"),
+      ]),
+    ]));
+  }
+
+  const actions = el("div", { className: "today-actions" });
+  actions.appendChild(todayActionButton("Log", () => openQuickLogSheet(dynamicId), true));
+  if (focus && canRunChastityAction(dynamic, focus)) {
+    if (focus.state === "locked") {
+      actions.appendChild(todayActionButton("Unlock", () => {
+        navigate(`/dynamic/${dynamicId}/chastity?intent=unlock`);
+      }, false));
+      actions.appendChild(todayActionButton("Break", () => {
+        navigate(`/dynamic/${dynamicId}/chastity?intent=break`);
+      }, false));
+    } else if (focus.state === "on_break") {
+      actions.appendChild(todayActionButton("Relock", () => {
+        navigate(`/dynamic/${dynamicId}/chastity?intent=lock`);
+      }, false));
+    } else {
+      actions.appendChild(todayActionButton("Lock", () => {
+        navigate(`/dynamic/${dynamicId}/chastity?intent=lock`);
+      }, false));
+    }
+  }
+  stack.appendChild(actions);
+
+  const cards = el("div", { className: "today-cards" });
+  if (pack.sleepOn) {
+    const sleepCard = !pack.sleepOk
+      ? todayCouldNot("Sleep")
+      : pack.sleepGlance
+        ? todaySleepGlanceCard(dynamicId, pack.sleepGlance)
+        : todaySleepCard(dynamicId, pack.sleepSessions, dynamic);
+    cards.appendChild(markOfflineBodyCard(sleepCard, "sleep"));
+  }
+  if (pack.cycleOn) {
+    const cycleCard = pack.cycleOk ? todayCycleCard(dynamicId, pack.cycle) : todayCouldNot("Cycle");
+    cards.appendChild(markOfflineBodyCard(cycleCard, "cycle"));
+  }
+  if (pack.orgasmOn) {
+    cards.appendChild(pack.statsOk && pack.stats ? todayOrgasmCard(dynamicId, pack.stats) : todayCouldNot("Orgasms · 7 days"));
+  }
+  if (cards.childNodes.length) {
+    stack.appendChild(el("h2", { className: "today-section-label" }, "Body"));
+    stack.appendChild(cards);
+  }
+  if (isNativeApp() && (pack.sleepOn || pack.cycleOn)) {
+    stack.appendChild(el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        todaySyncBody(dynamicId, pack.sleepOn, pack.cycleOn);
+      },
+    }, "Sync body data"));
+  }
+
+  const events = todayRecentEvents(dynamicId, pack.entriesOk ? pack.entries : [], pack.lockups);
+  const recent = el("div", { className: "card today-events-card" }, [
+    el("h2", { className: "today-section-label" }, "Recent"),
+  ]);
+  if (!events.length) {
+    recent.appendChild(el("p", { className: "muted" }, pack.entriesOk ? "No recent events." : "Couldn't load recent events."));
+  } else {
+    events.forEach((event) => {
+      recent.appendChild(el("button", {
+        type: "button",
+        className: "today-event",
+        onClick: () => navigate(event.path),
+      }, [
+        el("span", { className: "today-event-copy" }, [
+          el("strong", {}, event.title),
+          event.detail ? el("span", { className: "muted" }, event.detail) : null,
+        ]),
+        el("span", { className: "today-event-when" }, formatLogWhen(event.at)),
+      ]));
+    });
+  }
+  stack.appendChild(recent);
+
+  const more = el("details", { className: "hub-setup-details today-more" }, [
+    el("summary", {}, "More tracking"),
+  ]);
+  const facetList = el("div", { className: "facet-list" });
+  TRACKING_FACETS.forEach((facet) => {
+    if (!isFacetEnabled(facet, enabled)) return;
+    facetList.appendChild(renderFacetRow(facet, dynamicId, dynamic));
+  });
+  if (facetList.childNodes.length) more.appendChild(facetList);
+  const setup = el("details", { className: "hub-setup-details" }, [
+    el("summary", {}, "Setup"),
+  ]);
+  const setupList = el("div", { className: "facet-list" });
+  FACET_SECTIONS.forEach((section) => {
+    (section.items || []).forEach((facet) => {
+      if (!isFacetEnabled(facet, enabled)) return;
+      setupList.appendChild(renderFacetRow(facet, dynamicId, dynamic));
+    });
+  });
+  if (setupList.childNodes.length) setup.appendChild(setupList);
+  setup.appendChild(el("button", {
+    type: "button",
+    className: "ghost-btn",
+    onClick: () => navigate(`/dynamic/${dynamicId}/features`),
+  }, "Application features"));
+  more.appendChild(setup);
+  stack.appendChild(more);
+  setViewContent(stack);
+}
+
+function renderToday(dynamicId) {
+  const id = dynamicId || getActiveDynamicId();
+  if (!id) {
+    renderHome();
+    return;
+  }
+  state.activeDynamicId = id;
+  if (!document.querySelector(".today-page")) {
+    setViewContent(el("p", { className: "muted" }, "Loading today…"));
+  }
+  loadDynamic(id).then(() => {
+    const dynamic = state.currentDynamic;
+    const enabled = (dynamic && dynamic.enabled_features) || [];
+    function facetOn(facetId) {
+      return isFacetEnabled({ id: facetId }, enabled);
+    }
+    function paintFromParts() {
+      const sleepOn = facetOn("sleep_tracking");
+      const cycleOn = facetOn("cycle_tracking");
+      const chastityOn = facetOn("chastity");
+      const orgasmOn = facetOn("org_tracking");
+      return Promise.all([
+        chastityOn ? todayQuiet(api(`/dynamics/${id}/chastity/overview`), null) : Promise.resolve({ ok: true, value: null }),
+        todayQuiet(api(`/dynamics/${id}/tracking/stats`), null),
+        todayQuiet(api(`/dynamics/${id}/tracking`), []),
+        chastityOn ? todayQuiet(api(`/dynamics/${id}/chastity`), []) : Promise.resolve({ ok: true, value: [] }),
+        sleepOn ? todayQuiet(api(`/dynamics/${id}/sleep`), []) : Promise.resolve({ ok: true, value: [] }),
+        cycleOn ? todayQuiet(api(`/dynamics/${id}/cycle`), null) : Promise.resolve({ ok: true, value: null }),
+      ]).then((rows) => {
+        if (!todayStillCurrent(id)) return;
+        paintToday(id, dynamic, enabled, {
+          sleepOn: sleepOn,
+          cycleOn: cycleOn,
+          chastityOn: chastityOn,
+          orgasmOn: orgasmOn,
+          overviewOk: rows[0].ok,
+          overview: rows[0].ok ? rows[0].value : null,
+          statsOk: rows[1].ok,
+          stats: rows[1].ok ? rows[1].value : null,
+          entriesOk: rows[2].ok,
+          entries: rows[2].ok && Array.isArray(rows[2].value) ? rows[2].value : [],
+          lockups: rows[3].ok && Array.isArray(rows[3].value) ? rows[3].value : [],
+          sleepOk: !sleepOn || rows[4].ok,
+          sleepSessions: rows[4].ok && Array.isArray(rows[4].value) ? rows[4].value : [],
+          cycleOk: !cycleOn || rows[5].ok,
+          cycle: rows[5].ok ? rows[5].value : null,
+        });
+      });
+    }
+    return todayQuiet(api(`/dynamics/${id}/watch/summary`), null).then((summaryResult) => {
+      const summary = summaryResult.ok ? summaryResult.value : null;
+      if (!summary || !summary.chastity || !summary.orgasm) return paintFromParts();
+      const chastityOn = !!(summary.chastity && summary.chastity.enabled);
+      const sleepOn = !!(summary.sleep && summary.sleep.enabled);
+      const cycleOn = !!(summary.cycle && summary.cycle.enabled);
+      const orgasmOn = !!(summary.orgasm && summary.orgasm.enabled);
+      return Promise.all([
+        todayQuiet(api(`/dynamics/${id}/tracking`), []),
+        chastityOn ? todayQuiet(api(`/dynamics/${id}/chastity`), []) : Promise.resolve({ ok: true, value: [] }),
+      ]).then((rows) => {
+        if (!todayStillCurrent(id)) return;
+        const partners = ((summary.chastity && summary.chastity.subjects) || []).map((subject) => {
+          const stateName = subject.state === "not_tracked" ? "unlocked" : (subject.state || "unlocked");
+          const tracked = !!subject.chastity_enabled && subject.state !== "not_tracked";
+          return {
+            membership_id: subject.membership_id,
+            name: subject.name,
+            chastity_enabled: tracked,
+            state: stateName,
+            current_duration_label: stateName === "locked" ? (subject.duration_label || null) : null,
+            break_duration_label: stateName === "on_break" ? (subject.duration_label || null) : null,
+            free_duration_label: (stateName === "unlocked" || stateName === "free") ? (subject.duration_label || null) : null,
+            timer_overdue: !!subject.timer_overdue,
+            planned_end_at: subject.planned_end_at || null,
+            active_lockup_id: subject.active_lockup_id || null,
+          };
+        });
+        const nights = ((summary.sleep && summary.sleep.nights) || []).filter((night) => night && (night.duration_label || night.duration_min != null));
+        paintToday(id, dynamic, enabled, {
+          sleepOn: sleepOn,
+          cycleOn: cycleOn,
+          chastityOn: chastityOn,
+          orgasmOn: orgasmOn,
+          overviewOk: true,
+          overview: {
+            any_enabled: partners.some((partner) => partner.chastity_enabled),
+            summary_label: summary.chastity.summary_label || "",
+            partners: partners,
+          },
+          statsOk: true,
+          stats: orgasmOn ? {
+            recent_orgasm_label: summary.orgasm.recent_orgasm_label || "",
+            partners: (summary.orgasm.partners || []).map((partner) => ({
+              membership_id: partner.membership_id,
+              name: partner.name,
+              orgasm_count: Number(partner.count_7d) || 0,
+            })),
+            cumulative_30d: [],
+          } : null,
+          entriesOk: rows[0].ok,
+          entries: rows[0].ok && Array.isArray(rows[0].value) ? rows[0].value : [],
+          lockups: rows[1].ok && Array.isArray(rows[1].value) ? rows[1].value : [],
+          sleepOk: true,
+          sleepGlance: nights[0] || null,
+          sleepSessions: [],
+          cycleOk: true,
+          cycle: {
+            people: ((summary.cycle && summary.cycle.people) || []).map((person) => ({
+              display_name: person.name,
+              is_you: !!person.is_you,
+              summary: {
+                cycle_day: person.cycle_day,
+                on_period: !!person.on_period,
+                last_period_start: person.last_period_start || "",
+                predicted_next: person.predicted_next || "",
+              },
+            })),
+          },
+        });
+      });
+    });
+  }).catch((err) => {
+    if (!todayStillCurrent(id)) return;
+    setViewContent(el("p", { className: "error" }, (err && err.message) || "Could not load today."));
+  });
+}
+/* TODAY_HUB_END */
+
+/** Older facet list. The Tracking tab now opens Today instead. */
 function renderTrackingHub(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading tracking…"));
   loadDynamic(dynamicId)
@@ -11381,22 +11889,6 @@ function renderKnowledgeHub(dynamicId) {
           ])
         );
       }
-      if (isFacetEnabled({ id: "gear" }, enabledFeatures)) {
-        stack.appendChild(
-          el("button", {
-            className: "facet-row",
-            type: "button",
-            onClick: () => navigate(`/dynamic/${dynamicId}/gear`),
-          }, [
-            el("span", { className: "facet-icon" }, "🧰"),
-            el("span", { className: "facet-copy" }, [
-              el("span", { className: "facet-title" }, "Gear"),
-              el("span", { className: "facet-subtitle" }, "Vanilla toys, kinky stuff, outfits"),
-            ]),
-            el("span", { className: "facet-chevron" }, "›"),
-          ])
-        );
-      }
       stack.appendChild(
         el("button", {
           className: "ghost-btn",
@@ -11728,7 +12220,17 @@ function renderAssistant(dynamicId) {
             onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
           }, [
             el("strong", {}, "Games"),
-            el("span", { className: "muted" }, "Spin the wheel and other release games"),
+            el("span", { className: "muted" }, "Timer, red light / green light, fates, and the wheel"),
+          ])
+        );
+        stack.appendChild(
+          el("button", {
+            className: "choice-btn playtime-option",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/toys`),
+          }, [
+            el("strong", {}, "Toy spin"),
+            el("span", { className: "muted" }, "Pick an owned toy"),
           ])
         );
       } else {
@@ -11755,7 +12257,17 @@ function renderAssistant(dynamicId) {
             onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
           }, [
             el("strong", {}, "Games"),
-            el("span", { className: "muted" }, "Spin the wheel and other release games"),
+            el("span", { className: "muted" }, "Timer, red light / green light, fates, and the wheel"),
+          ])
+        );
+        stack.appendChild(
+          el("button", {
+            className: "choice-btn playtime-option",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/toys`),
+          }, [
+            el("strong", {}, "Toy spin"),
+            el("span", { className: "muted" }, "Pick an owned toy"),
           ])
         );
       }
@@ -11778,7 +12290,344 @@ function renderAssistant(dynamicId) {
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
 }
 
+let gameClock = null;
+let redLightTimer = null;
+
+function clearGameClock() {
+  if (gameClock) {
+    clearInterval(gameClock);
+    gameClock = null;
+  }
+  if (redLightTimer) {
+    clearTimeout(redLightTimer);
+    redLightTimer = null;
+  }
+}
+
+function formatClock(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function beepGameDone() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = 880;
+    gain.gain.value = 0.05;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.25);
+  } catch {
+    /* sound is optional */
+  }
+}
+
+function appendGameTimer(parent) {
+  let remain = 5 * 60 * 1000;
+  let endsAt = 0;
+  const readout = el("div", { className: "game-timer" }, formatClock(remain));
+  const status = el("p", { className: "muted" }, "Countdown");
+
+  function paint() {
+    readout.textContent = formatClock(remain);
+  }
+
+  function stop(done) {
+    clearGameClock();
+    if (done) {
+      remain = 0;
+      paint();
+      status.textContent = "Time";
+      beepGameDone();
+    } else {
+      status.textContent = "Paused";
+    }
+  }
+
+  function start() {
+    clearGameClock();
+    if (remain <= 0) remain = 5 * 60 * 1000;
+    endsAt = Date.now() + remain;
+    status.textContent = "Running";
+    gameClock = setInterval(() => {
+      remain = Math.max(0, endsAt - Date.now());
+      paint();
+      if (remain <= 0) stop(true);
+    }, 200);
+  }
+
+  const minutes = el("input", { type: "number", min: "1", max: "180", value: "5", style: "width:5rem" });
+  const presets = el("div", { className: "row wrap" });
+  [1, 3, 5, 10, 15, 30].forEach((mins) => {
+    presets.appendChild(el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        clearGameClock();
+        remain = mins * 60 * 1000;
+        minutes.value = String(mins);
+        status.textContent = "Countdown";
+        paint();
+      },
+    }, `${mins}m`));
+  });
+
+  parent.appendChild(el("div", { className: "card stack" }, [
+    el("h2", {}, "Timer"),
+    readout,
+    status,
+    presets,
+    el("div", { className: "row wrap" }, [
+      minutes,
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          clearGameClock();
+          const mins = Math.max(1, Number(minutes.value) || 1);
+          remain = mins * 60 * 1000;
+          status.textContent = "Countdown";
+          paint();
+        },
+      }, "Set minutes"),
+    ]),
+    el("div", { className: "row wrap" }, [
+      el("button", { type: "button", className: "primary-btn", onClick: start }, "Start"),
+      el("button", { type: "button", className: "ghost-btn", onClick: () => stop(false) }, "Pause"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          clearGameClock();
+          remain = (Number(minutes.value) || 5) * 60 * 1000;
+          status.textContent = "Countdown";
+          paint();
+        },
+      }, "Reset"),
+    ]),
+  ]));
+}
+
+function renderRedLightGame(dynamicId) {
+  clearGameClock();
+  let phase = "ready";
+  let caught = 0;
+  let lights = 0;
+  const light = el("div", { className: "rlgl-light ready" }, "Ready");
+  const hint = el("p", { className: "muted" }, "Green means go. Red means freeze.");
+  const score = el("p", {}, "Caught: 0");
+
+  function paint() {
+    light.className = `rlgl-light ${phase}`;
+    light.textContent = phase === "green" ? "GREEN" : phase === "red" ? "RED" : "Ready";
+    hint.textContent = phase === "green" ? "Go." : phase === "red" ? "Freeze." : "Green means go. Red means freeze.";
+    score.textContent = `Lights: ${lights} · Caught: ${caught}`;
+  }
+
+  function schedule() {
+    const wait = phase === "green" ? 1800 + Math.random() * 5200 : 700 + Math.random() * 2200;
+    redLightTimer = setTimeout(() => {
+      phase = phase === "green" ? "red" : "green";
+      lights += 1;
+      paint();
+      schedule();
+    }, wait);
+  }
+
+  viewEl.replaceChildren(el("div", { className: "stack" }, [
+    el("h1", {}, "Red light, green light"),
+    light,
+    hint,
+    score,
+    el("div", { className: "row wrap" }, [
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => {
+          clearGameClock();
+          phase = "green";
+          paint();
+          schedule();
+        },
+      }, "Start"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          if (phase !== "red") return;
+          caught += 1;
+          paint();
+        },
+      }, "Caught"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          clearGameClock();
+          phase = "ready";
+          paint();
+        },
+      }, "Stop"),
+    ]),
+    el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        clearGameClock();
+        navigate(`/dynamic/${dynamicId}/assistant/games`);
+      },
+    }, "Back to games"),
+  ]));
+}
+
+function renderToySpin(dynamicId) {
+  clearGameClock();
+  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading owned toys…"));
+  api(`/dynamics/${dynamicId}/gear`)
+    .then((bundle) => {
+      const toys = [];
+      (bundle.catalog || []).forEach((item) => {
+        if (item.owned) toys.push(item);
+      });
+      (bundle.inventory || []).forEach((item) => {
+        if (item.is_custom && item.owned) toys.push(item);
+      });
+      const nameEl = el("h2", { className: "toy-spin-name" }, toys.length ? "Spin for a toy" : "No owned toys yet");
+      const photo = el("img", { className: "toy-spin-photo hidden", alt: "" });
+      let spinTimer = null;
+      function showToy(item) {
+        nameEl.textContent = item.name;
+        if (item.has_image && item.art_key) {
+          photo.classList.remove("hidden");
+          gearArtBlobUrl(dynamicId, item.art_key).then((url) => {
+            if (url) photo.src = url;
+          });
+        } else {
+          photo.classList.add("hidden");
+          photo.removeAttribute("src");
+        }
+      }
+      viewEl.replaceChildren(el("div", { className: "stack" }, [
+        el("h1", {}, "Toy spin"),
+        el("p", { className: "muted" }, "Spins among toys marked owned."),
+        photo,
+        nameEl,
+        el("button", {
+          type: "button",
+          className: "primary-btn",
+          onClick: () => {
+            if (!toys.length || spinTimer) return;
+            let step = 0;
+            spinTimer = setInterval(() => {
+              showToy(toys[step % toys.length]);
+              step += 1;
+              if (step > 16) {
+                clearInterval(spinTimer);
+                spinTimer = null;
+                showToy(toys[Math.floor(Math.random() * toys.length)]);
+              }
+            }, 90);
+          },
+        }, "Spin"),
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => {
+            if (spinTimer) clearInterval(spinTimer);
+            navigate(`/dynamic/${dynamicId}/assistant`);
+          },
+        }, "Back to Playtime"),
+      ]));
+    })
+    .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
+}
+
+function renderFateGame(dynamicId) {
+  clearGameClock();
+  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading fates…"));
+  const error = el("div", { className: "error hidden" });
+
+  function paint(state) {
+    const revealed = new Map((state.revealed || []).map((card) => [card.n, card]));
+    const grid = el("div", { className: "fate-grid" });
+    (state.numbers || [1, 2, 3, 4, 5, 6]).forEach((number) => {
+      const card = revealed.get(number);
+      if (!card) {
+        grid.appendChild(el("button", {
+          type: "button",
+          className: "choice-btn fate-number",
+          onClick: async () => {
+            error.classList.add("hidden");
+            try {
+              const next = await api(`/dynamics/${dynamicId}/play-games/fate/reveal`, {
+                method: "POST",
+                body: JSON.stringify({ number }),
+              });
+              paint(next);
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, String(number)));
+        return;
+      }
+      const style = card.task_style === "sexual" ? "Sexual" : card.task_style === "sensual" ? "Sensual" : "Domestic";
+      grid.appendChild(el("div", { className: "card stack" }, [
+        el("strong", {}, `${number}. ${card.label}`),
+        el("span", { className: "muted" }, card.detail),
+        el("span", { className: "pill" }, style),
+        el("p", {}, card.task),
+      ]));
+    });
+    viewEl.replaceChildren(el("div", { className: "stack" }, [
+      el("h1", {}, "Fate cards"),
+      el("p", { className: "muted" }, "Six hidden fates. Open a number to see the orgasm, edges, or denial, then the task that follows."),
+      error,
+      state.ready ? grid : el("p", { className: "muted" }, "No cards dealt yet."),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: async () => {
+          error.classList.add("hidden");
+          try {
+            const next = await api(`/dynamics/${dynamicId}/play-games/fate/deal`, { method: "POST", body: "{}" });
+            paint(next);
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+          }
+        },
+      }, state.ready ? "Deal a new set" : "Deal 6 fates"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
+      }, "Back to games"),
+    ]));
+  }
+
+  api(`/dynamics/${dynamicId}/play-games/fate`)
+    .then(paint)
+    .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
+}
+
+
+function voiceFromPartner(partner, fallback) {
+  const sex = String(partner?.biological_sex || "").toLowerCase();
+  const name = (partner?.display_name || "").trim() || fallback;
+  if (sex === "male") return { name, subj: "he", obj: "him", poss: "his" };
+  if (sex === "female") return { name, subj: "she", obj: "her", poss: "her" };
+  return { name, subj: "they", obj: "them", poss: "their" };
+}
+
 function renderPlaytimeGames(dynamicId) {
+  clearGameClock();
   viewEl.replaceChildren(el("p", { className: "muted" }, "Loading games…"));
   Promise.all([
     loadDynamic(dynamicId),
@@ -11788,7 +12637,7 @@ function renderPlaytimeGames(dynamicId) {
       const you = state.currentDynamic?.partners?.find((p) => p.is_you);
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Games"),
-        el("p", { className: "muted" }, "When he's almost earned release or a full orgasm."),
+        el("p", { className: "muted" }, `When ${voiceFromPartner(state.currentDynamic?.partners?.find((p) => p.role === "submissive"), "your partner").name} has almost earned release or a full orgasm.`),
       ]);
       if (game.can_spin_post_orgasm || game.status === "awaiting_post_spin") {
         stack.appendChild(
@@ -11828,11 +12677,29 @@ function renderPlaytimeGames(dynamicId) {
           ])
         );
       }
+      appendGameTimer(stack);
+      [
+        ["Red light, green light", "Green means go. Red means freeze.", "red-light"],
+        ["Toy spin", "Spin among toys marked owned.", "toys"],
+        ["Fate cards", "Six hidden fates, then a task.", "fate"],
+      ].forEach(([title, subtitle, slug]) => {
+        stack.appendChild(el("button", {
+          className: "choice-btn playtime-option",
+          type: "button",
+          onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/${slug}`),
+        }, [
+          el("strong", {}, title),
+          el("span", { className: "muted" }, subtitle),
+        ]));
+      });
       stack.appendChild(
         el("button", {
           className: "ghost-btn",
           type: "button",
-          onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+          onClick: () => {
+            clearGameClock();
+            navigate(`/dynamic/${dynamicId}/assistant`);
+          },
         }, "Back to Playtime")
       );
       viewEl.replaceChildren(stack);
@@ -11885,7 +12752,7 @@ function renderSpinTheWheel(dynamicId) {
         midgameOrgasms: [],
         orgasmShouldHaveBeenGranted: null,
         dominant_name: dominant?.display_name || "the keyholder",
-        submissive_name: submissive?.display_name || "he",
+        submissive_name: submissive?.display_name || "your partner",
       };
 
       function persist() {
@@ -12690,12 +13557,12 @@ function renderSpinTheWheel(dynamicId) {
               el(
                 "p",
                 { className: "muted" },
-                "Tell him only that more ruins are required — do not share the number."
+                `Tell ${flow.submissive_name} only that more ruins are required — do not share the number.`
               ),
               el(
                 "p",
                 { className: "muted" },
-                "Proceed with one ruin (in front of you, or have him ruin himself in front of you), then you'll be asked if he can handle another."
+                `Proceed with one ruin (in front of you, or have ${flow.submissive_name} ruin in front of you), then you will be asked if ${flow.submissive_name} can handle another.`
               ),
             ])
           );
@@ -12720,7 +13587,7 @@ function renderSpinTheWheel(dynamicId) {
               el(
                 "p",
                 { className: "muted" },
-                "Have him ruin once in front of you, or tell him to ruin himself in front of you."
+                `Have ${flow.submissive_name} ruin once in front of you, or tell ${flow.submissive_name} to ruin in front of you.`
               ),
             ])
           );
@@ -12745,7 +13612,7 @@ function renderSpinTheWheel(dynamicId) {
             el("div", { className: "card stack" }, [
               el("h2", {}, "Another ruin?"),
               el("p", {}, `Secret progress: ${flow.ruinsDone} / ${flow.ruinsRequired}`),
-              el("p", { className: "muted" }, "Ask if he can handle another ruin."),
+              el("p", { className: "muted" }, `Ask if ${flow.submissive_name} can handle another ruin.`),
             ])
           );
           body.appendChild(
@@ -12798,7 +13665,7 @@ function renderSpinTheWheel(dynamicId) {
             el("div", { className: "card stack" }, [
               el("h2", {}, "Ruins complete"),
               el("p", {}, `Secret count met (${flow.ruinsRequired}).`),
-              el("p", { className: "muted" }, "Ask if he wants his full orgasm now or later."),
+              el("p", { className: "muted" }, `Ask if ${flow.submissive_name} wants a full orgasm now or later.`),
             ])
           );
           body.appendChild(
@@ -12828,7 +13695,7 @@ function renderSpinTheWheel(dynamicId) {
               el("h2", {}, option.title),
               el("p", {}, `${option.value_label || "Value"}: ${value}`),
               el("p", { className: "muted" }, option.description || ""),
-              el("h3", {}, "What to tell him"),
+              el("h3", {}, `What to tell ${flow.submissive_name}`),
               el("p", { className: "playtime-scene-body" }, subFacingText(option, value)),
               el("h3", {}, "If interrupted / fails"),
               el("p", { className: "muted" }, failCopy(option.fail_behavior) || "Handle as you see fit."),
@@ -12839,7 +13706,7 @@ function renderSpinTheWheel(dynamicId) {
           body.appendChild(
             el("div", { className: "card stack" }, [
               el("h2", {}, "Paused"),
-              el("p", {}, "Lock him up and continue this assignment later. Game stays in play."),
+              el("p", {}, `Lock up and continue this assignment with ${flow.submissive_name} later. Game stays in play.`),
               flow.landed
                 ? el("p", { className: "muted" }, `Active outcome: ${flow.landed.title} · ${flow.value}`)
                 : null,
@@ -17572,6 +18439,11 @@ function renderChastity(dynamicId) {
         onClick: () => navigate(`/dynamic/${dynamicId}/track`),
       }, "Back to tracking"));
       setViewContent(stack);
+      const chastityIntent = parseRoute().query.get("intent");
+      if (chastityIntent === "lock" || chastityIntent === "unlock" || chastityIntent === "break") {
+        const actionRow = stack.querySelector(".chastity-actions");
+        if (actionRow) actionRow.scrollIntoView({ block: "center" });
+      }
     })
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
@@ -19242,138 +20114,6 @@ function renderCycle(dynamicId) {
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
-function renderManga(dynamicId) {
-  setViewContent(el("p", { className: "muted" }, "Loading manga…"));
-  Promise.all([
-    api(`/dynamics/${dynamicId}/manga/modes`),
-    api(`/dynamics/${dynamicId}/manga`).catch((err) => {
-      if (String(err.message || "").includes("not enabled")) return [];
-      throw err;
-    }),
-    loadDynamic(dynamicId),
-  ])
-    .then(([modes, comics]) => {
-      const stack = el("div", { className: "stack" }, [
-        buildHubHeader(dynamicId, "Monthly manga", {
-          subtitle: "One comic per month from your dynamic context. Off by default.",
-          sectionFilter: "playtime",
-        }),
-        el("div", { className: "row wrap" }, [
-          aiConfigBadge("manga_script", { dynamicId }),
-          aiConfigBadge("manga_image", { dynamicId }),
-          el("span", { className: "muted" }, "AI: script / images"),
-        ]),
-        el("button", {
-          className: "ghost-btn",
-          type: "button",
-          onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
-        }, "← Back to Playtime"),
-      ]);
-      if (!modes.feature_enabled) {
-        stack.appendChild(el("div", { className: "card stack" }, [
-          el("p", {}, "Monthly manga is off for this dynamic."),
-          el("button", {
-            className: "primary-btn",
-            type: "button",
-            onClick: () => openAppFeaturesPanel(dynamicId, "playtime"),
-          }, "Enable in Application features"),
-        ]));
-        setViewContent(stack);
-        return;
-      }
-
-      const modeSelect = el("select");
-      (modes.modes || []).forEach((m) => {
-        modeSelect.appendChild(el("option", { value: m.id }, m.label));
-      });
-      const warn = el("p", { className: "muted" }, (modes.modes || [])[0]?.warning || "");
-      modeSelect.addEventListener("change", () => {
-        const m = (modes.modes || []).find((x) => x.id === modeSelect.value);
-        warn.textContent = m?.warning || "";
-      });
-      const error = el("div", { className: "error hidden" });
-      const status = el("p", { className: "muted" }, `Month: ${modes.year_month}`);
-      stack.appendChild(el("div", { className: "card stack" }, [
-        el("h2", {}, "Generate this month"),
-        status,
-        el("label", {}, ["Mode", modeSelect]),
-        warn,
-        error,
-        el("button", {
-          className: "primary-btn ai-only",
-          "data-ai-label": "Monthly manga needs AI for script and images.",
-          type: "button",
-          onClick: async () => {
-            error.classList.add("hidden");
-            status.textContent = "Generating… this can take a minute.";
-            try {
-              await api(`/dynamics/${dynamicId}/manga/generate`, {
-                method: "POST",
-                body: JSON.stringify({ mode: modeSelect.value }),
-              });
-              showToast("Comic draft ready.");
-              renderManga(dynamicId);
-            } catch (err) {
-              error.textContent = err.message;
-              error.classList.remove("hidden");
-              status.textContent = `Month: ${modes.year_month}`;
-            }
-          },
-        }, "Generate comic"),
-      ]));
-
-      (comics || []).forEach((comic) => {
-        const card = el("div", { className: "card stack" }, [
-          el("h2", {}, comic.title || comic.year_month),
-          el("p", { className: "muted" }, `${comic.year_month} · ${comic.mode} · ${comic.status}`),
-        ]);
-        (comic.warnings || []).forEach((w) => {
-          card.appendChild(el("p", { className: "muted" }, w));
-        });
-        (comic.panels || []).forEach((panel, idx) => {
-          const panelEl = el("div", { className: "stack manga-panel" }, [
-            el("strong", {}, `Panel ${idx + 1}`),
-            panel.image_data
-              ? el("img", { src: panel.image_data, alt: panel.caption || `Panel ${idx + 1}`, style: "max-width:100%;border-radius:8px;" })
-              : el("div", { className: "manga-frame muted" }, panel.visual_prompt || "No image — captioned frame"),
-            panel.caption ? el("p", {}, panel.caption) : null,
-            panel.dialogue ? el("p", { className: "muted" }, panel.dialogue) : null,
-            panel.image_error ? el("p", { className: "error" }, panel.image_error) : null,
-          ]);
-          card.appendChild(panelEl);
-        });
-        const actions = el("div", { className: "row wrap" });
-        if (comic.status === "draft") {
-          actions.appendChild(el("button", {
-            className: "primary-btn",
-            type: "button",
-            onClick: async () => {
-              await api(`/dynamics/${dynamicId}/manga/${comic.id}/save`, { method: "POST" });
-              showToast("Comic saved for this month.");
-              renderManga(dynamicId);
-            },
-          }, "Save for this month"));
-        }
-        actions.appendChild(el("button", {
-          className: "ghost-btn",
-          type: "button",
-          onClick: async () => {
-            if (!confirm("Delete this comic?")) return;
-            await api(`/dynamics/${dynamicId}/manga/${comic.id}`, { method: "DELETE" });
-            renderManga(dynamicId);
-          },
-        }, "Delete"));
-        card.appendChild(actions);
-        stack.appendChild(card);
-      });
-      if (!(comics || []).length) {
-        stack.appendChild(el("p", { className: "muted" }, "No comics yet this month."));
-      }
-      setViewContent(stack);
-    })
-    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
-}
-
 function renderFeatureSettings(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading features..."));
   Promise.all([
@@ -19473,6 +20213,17 @@ function renderFeatureSettings(dynamicId) {
 function renderGear(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading gear..."));
   let activeCategory = "vanilla_toys";
+  let artNote = "";
+  let lastReady = -1;
+
+  function gearThumb(item) {
+    if (!item.has_image || !item.art_key) return null;
+    const img = el("img", { className: "gear-thumb", alt: "" });
+    gearArtBlobUrl(dynamicId, item.art_key).then((url) => {
+      if (url) img.src = url;
+    });
+    return img;
+  }
 
   function paint(bundle) {
     const error = el("div", { className: "error hidden" });
@@ -19480,6 +20231,7 @@ function renderGear(dynamicId) {
       el("h1", {}, "Gear"),
       el("p", { className: "muted" }, "Mark what you have and what you want. Catalog includes Artebu-style bondage gear plus common and premium toys."),
       el("p", { className: "muted" }, `${bundle.owned_count} owned · ${bundle.want_count} wanted`),
+      artNote ? el("p", { className: "muted gear-art-status" }, artNote) : null,
     ]);
 
     const tabs = el("div", { className: "tabs" });
@@ -19541,6 +20293,7 @@ function renderGear(dynamicId) {
       customItems.forEach((item) => {
         customList.appendChild(el("div", { className: "card stack gear-item" }, [
           el("div", { className: "row" }, [
+            gearThumb(item),
             el("strong", {}, item.name),
             el("button", {
               className: "ghost-btn",
@@ -19597,6 +20350,7 @@ function renderGear(dynamicId) {
       items.forEach((item) => {
         group.appendChild(el("div", { className: "card stack gear-item" }, [
           el("div", { className: "row" }, [
+            gearThumb(item),
             el("strong", {}, item.name),
             item.tier === "premium" ? el("span", { className: "pill" }, "Premium") : null,
           ]),
@@ -19661,8 +20415,8 @@ function renderGear(dynamicId) {
     stack.appendChild(error);
     stack.appendChild(el("button", {
       className: "ghost-btn",
-      onClick: () => navigate(`/dynamic/${dynamicId}/knowledge`),
-    }, "Back to knowledge"));
+      onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+    }, "Back to Playtime"));
     setViewContent(stack);
   }
 
@@ -19672,7 +20426,242 @@ function renderGear(dynamicId) {
       .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
   }
 
+  function pollArt() {
+    api(`/dynamics/${dynamicId}/gear/art/status`)
+      .then((st) => {
+        const next = st && st.total && st.ready < st.total
+          ? `Drawing pictures ${st.ready} of ${st.total}`
+          : "";
+        const changed = st && st.ready !== lastReady;
+        lastReady = st ? st.ready : lastReady;
+        if (next !== artNote || (changed && st.ready > 0)) {
+          artNote = next;
+          load();
+        }
+        if (st && (st.running || st.ready < st.total)) setTimeout(pollArt, 8000);
+      })
+      .catch(() => {});
+  }
+
+  api(`/dynamics/${dynamicId}/gear/art/generate`, { method: "POST", body: "{}" }).catch(() => {});
   load();
+  setTimeout(pollArt, 4000);
+}
+
+
+function askChatMediaSendChoice({ video = false, youAreDominant = false } = {}) {
+  return new Promise((resolve) => {
+    const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
+    const finish = (value) => {
+      backdrop.remove();
+      resolve(value);
+    };
+    const sheet = el("div", { className: "chat-image-sheet card stack" }, [
+      el("strong", {}, video ? "Send clip to chat" : "Send picture to chat"),
+      el("p", { className: "muted" }, "It stays in the vault. Chat gets the same picture."),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => finish({ locked: false }),
+      }, "Send"),
+      youAreDominant
+        ? el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => finish({ locked: true }),
+        }, "Lock — partner needs permission")
+        : null,
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => finish(null),
+      }, "Cancel"),
+    ]);
+    backdrop.appendChild(sheet);
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) finish(null);
+    });
+    document.body.appendChild(backdrop);
+  });
+}
+
+async function postMediaDataToChat(dynamicId, dataUrl, { locked = false, mediaKind = "image", saveToVault = false } = {}) {
+  const raw = String(dataUrl || "");
+  if (!raw.startsWith("data:")) throw new Error("That vault item is not a picture we can send.");
+  const b64 = raw.split(",")[1] || "";
+  const bytes = Math.floor((b64.length * 3) / 4);
+  if (bytes > 12 * 1024 * 1024) throw new Error("Clip is too large (max 12 MB). Try a shorter recording.");
+  const settings = await api(`/dynamics/${dynamicId}/chat/settings`);
+  const blurImages = localStorage.getItem(chatBlurStorage()) !== "false";
+  let image_data = raw;
+  if (settings.e2e_enabled) {
+    if (!cryptoSubtleAvailable()) throw encryptionUnavailableError();
+    await ensureChatCryptoKey(dynamicId, { createIfMissing: false });
+    image_data = await encryptChatText(dynamicId, raw);
+  } else {
+    await ensureChatCryptoKey(dynamicId, { createIfMissing: false }).catch(() => null);
+  }
+  const lock = !!locked && !!settings.you_are_dominant;
+  const body = {
+    message_type: "image",
+    image_data,
+    image_blurred: blurImages || lock,
+    image_locked: lock,
+    save_to_vault: !!saveToVault,
+    media_kind: mediaKind === "video" ? "video" : "image",
+  };
+  if (saveToVault) body.vault_image_encrypted = await encryptVaultPayload(dynamicId, raw);
+  await api(`/dynamics/${dynamicId}/chat/messages`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+async function sendVaultMediaToChat(dynamicId, { dataUrl, mediaKind = "image" } = {}) {
+  const settings = await api(`/dynamics/${dynamicId}/chat/settings`);
+  const choice = await askChatMediaSendChoice({
+    video: mediaKind === "video",
+    youAreDominant: !!settings.you_are_dominant,
+  });
+  if (!choice) return false;
+  await postMediaDataToChat(dynamicId, dataUrl, {
+    locked: !!choice.locked,
+    mediaKind,
+    saveToVault: false,
+  });
+  return true;
+}
+
+function openVaultFullscreen(src, { video = false, title = "", revealId = "", revealedSet = null, sourceEl = null, onSend } = {}) {
+  closeChatImageViewer();
+  if (revealedSet && revealId) revealedSet.add(revealId);
+  sourceEl?.classList.remove("blurred");
+  const media = video
+    ? el("video", {
+      className: "chat-image-viewer-img",
+      src,
+      controls: "true",
+      playsinline: "true",
+      autoplay: "true",
+    })
+    : el("img", {
+      className: "chat-image-viewer-img",
+      src,
+      alt: title || "Vault image",
+    });
+  media.setAttribute("draggable", "false");
+  const closeBtn = el("button", {
+    type: "button",
+    className: "chat-image-viewer-close",
+    title: "Close",
+    "aria-label": "Close full screen",
+  }, "✕");
+  closeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeChatImageViewer();
+  });
+  const bar = el("div", { className: "vault-fullscreen-bar" });
+  if (onSend) {
+    bar.appendChild(el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: (e) => {
+        e.stopPropagation();
+        const send = onSend;
+        closeChatImageViewer();
+        Promise.resolve(send()).catch(() => {});
+      },
+    }, "Send to chat"));
+  }
+  const viewer = el("div", {
+    className: "chat-image-viewer vault-viewer",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": "Full screen vault image",
+  }, [media, closeBtn, bar]);
+  viewer.addEventListener("click", (e) => {
+    if (e.target === viewer) closeChatImageViewer();
+  });
+  const onKey = (e) => {
+    if (e.key === "Escape") closeChatImageViewer();
+  };
+  viewer._onKey = onKey;
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(viewer);
+  chatImageViewerEl = viewer;
+  return viewer;
+}
+
+function openVaultChatPicker(dynamicId) {
+  return new Promise((resolve) => {
+    const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
+    const grid = el("div", { className: "vault-picker-grid" });
+    const note = el("p", { className: "muted" }, "Loading vault…");
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      backdrop.remove();
+      resolve(value);
+    };
+    const sheet = el("div", { className: "chat-image-sheet vault-picker-sheet card stack" }, [
+      el("strong", {}, "From vault"),
+      note,
+      grid,
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => finish(null),
+      }, "Cancel"),
+    ]);
+    backdrop.appendChild(sheet);
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) finish(null);
+    });
+    document.body.appendChild(backdrop);
+    api(`/dynamics/${dynamicId}/vault`).then(async (images) => {
+      if (done) return;
+      const usable = [];
+      for (const image of images || []) {
+        const dataUrl = await decryptVaultPayload(dynamicId, image.image_encrypted);
+        if (dataUrl) usable.push({ image, dataUrl });
+      }
+      if (!usable.length) {
+        note.textContent = (images || []).length
+          ? "Couldn't unlock these. Set up the chat key in Settings."
+          : "The vault is empty.";
+        return;
+      }
+      note.textContent = "Tap a picture to send it.";
+      usable.forEach((item) => {
+        const video = isVideoSrc(item.dataUrl, item.image.media_kind);
+        const thumb = video
+          ? el("video", {
+            className: "vault-picker-thumb",
+            src: item.dataUrl,
+            muted: "true",
+            playsinline: "true",
+            preload: "metadata",
+          })
+          : el("img", {
+            className: "vault-picker-thumb",
+            src: item.dataUrl,
+            alt: item.image.title || "Vault image",
+          });
+        grid.appendChild(el("button", {
+          type: "button",
+          className: "vault-picker-hit",
+          title: item.image.title || "Send",
+          onClick: () => finish({
+            dataUrl: item.dataUrl,
+            mediaKind: video ? "video" : "image",
+          }),
+        }, [thumb]));
+      });
+    }).catch((err) => {
+      if (!done) note.textContent = err.message || "Couldn't load the vault.";
+    });
+  });
 }
 
 function renderVault(dynamicId) {
@@ -19710,34 +20699,88 @@ function renderVault(dynamicId) {
         id: isHighlight ? "vault-highlight-target" : undefined,
       });
       if (isHighlight) highlightCard = card;
+      const mediaKind = isVideoSrc(decrypted, image.media_kind) ? "video" : "image";
+      let mediaNode = null;
+      const sendThis = async () => {
+        error.classList.add("hidden");
+        try {
+          const sent = await sendVaultMediaToChat(dynamicId, { dataUrl: decrypted, mediaKind });
+          if (sent) navigate(`/chat/${dynamicId}`);
+        } catch (err) {
+          error.textContent = err.message;
+          error.classList.remove("hidden");
+        }
+      };
+      const openThis = () => {
+        openVaultFullscreen(decrypted, {
+          video: mediaKind === "video",
+          title: image.title || "",
+          revealId: image.id,
+          revealedSet: revealed,
+          sourceEl: mediaNode,
+          onSend: sendThis,
+        });
+      };
       if (!decrypted) {
         card.appendChild(el("p", { className: "muted" }, "Encrypted — set up the chat E2E key in Settings to view."));
-      } else if (isVideoSrc(decrypted, image.media_kind)) {
-        const vid = el("video", {
-          className: `vault-image ${image.image_blurred && !revealed.has(image.id) ? "blurred" : ""}`,
-          src: decrypted,
-          controls: "true",
-          playsinline: "true",
-          preload: "metadata",
-        });
-        if (image.image_blurred) {
-          attachBlurReveal(vid, { id: image.id, revealedSet: revealed });
-        }
-        card.appendChild(vid);
       } else {
-        const img = el("img", {
-          className: `vault-image ${image.image_blurred && !revealed.has(image.id) ? "blurred" : ""}`,
-          src: decrypted,
-          alt: image.title || "Vault image",
-        });
+        mediaNode = mediaKind === "video"
+          ? el("video", {
+            className: `vault-image ${image.image_blurred && !revealed.has(image.id) ? "blurred" : ""}`,
+            src: decrypted,
+            controls: "true",
+            playsinline: "true",
+            preload: "metadata",
+          })
+          : el("img", {
+            className: `vault-image ${image.image_blurred && !revealed.has(image.id) ? "blurred" : ""}`,
+            src: decrypted,
+            alt: image.title || "Vault image",
+          });
         if (image.image_blurred) {
-          attachBlurReveal(img, { id: image.id, revealedSet: revealed });
+          attachBlurReveal(mediaNode, { id: image.id, revealedSet: revealed });
         }
-        card.appendChild(img);
+        if (mediaKind !== "video") {
+          let pressedWhileBlurred = false;
+          mediaNode.addEventListener("pointerdown", () => {
+            pressedWhileBlurred = mediaNode.classList.contains("blurred");
+          });
+          mediaNode.addEventListener("click", () => {
+            if (pressedWhileBlurred || mediaNode.classList.contains("blurred")) return;
+            openThis();
+          });
+        }
+        const zoom = el("button", {
+          type: "button",
+          className: "chat-image-zoom-btn",
+          title: "Full screen",
+          "aria-label": "Open full screen",
+        }, "⤢");
+        zoom.addEventListener("pointerdown", (e) => e.stopPropagation());
+        zoom.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openThis();
+        });
+        card.appendChild(el("div", { className: "vault-media-frame" }, [mediaNode, zoom]));
       }
       card.appendChild(el("p", { className: "muted" }, image.title || "Untitled"));
       card.appendChild(el("p", { className: "muted" }, new Date(image.created_at).toLocaleString()));
       card.appendChild(el("div", { className: "row wrap" }, [
+        decrypted
+          ? el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: () => openThis(),
+          }, "Full screen")
+          : null,
+        decrypted
+          ? el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: () => sendThis(),
+          }, "Send to chat")
+          : null,
         el("button", {
           className: "ghost-btn",
           type: "button",
@@ -21186,7 +22229,146 @@ function trimChatUrlMatch(raw) {
   return String(raw || "").replace(/[.,;:!?]+$/g, "");
 }
 
-function linkifyText(text) {
+const gearSlugIndex = new Map();
+const gearArtBlobCache = new Map();
+
+function rememberGearItems(dynamicId, items) {
+  const bucket = gearSlugIndex.get(dynamicId) || new Map();
+  (items || []).forEach((item) => {
+    if (item && item.slug) bucket.set(item.slug, item);
+  });
+  gearSlugIndex.set(dynamicId, bucket);
+}
+
+function gearArtBlobUrl(dynamicId, key) {
+  const cacheKey = `${dynamicId}:${key}`;
+  if (gearArtBlobCache.has(cacheKey)) return gearArtBlobCache.get(cacheKey);
+  const pending = fetch(`${API}/dynamics/${dynamicId}/gear/art/${encodeURIComponent(key)}`, {
+    headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+  })
+    .then((res) => (res.ok ? res.blob() : null))
+    .then((blob) => (blob ? URL.createObjectURL(blob) : ""))
+    .catch(() => "");
+  gearArtBlobCache.set(cacheKey, pending);
+  return pending;
+}
+
+function gearEmojiNode(dynamicId, item) {
+  const img = el("img", {
+    className: "chat-gear-emoji",
+    alt: item.name || item.slug || "",
+    title: item.name || item.slug || "",
+  });
+  if (item.has_image && item.key) {
+    gearArtBlobUrl(dynamicId, item.key).then((url) => {
+      if (url) img.src = url;
+    });
+  }
+  return img;
+}
+
+function attachGearSuggest(dynamicId, input) {
+  const menu = el("div", { className: "gear-suggest hidden" });
+  let items = [];
+  let active = 0;
+  let timer = null;
+
+  function hide() {
+    items = [];
+    menu.classList.add("hidden");
+    menu.replaceChildren();
+  }
+
+  function queryAtCursor() {
+    const pos = input.selectionStart || 0;
+    const before = input.value.slice(0, pos);
+    const colon = before.lastIndexOf(":");
+    if (colon < 0) return null;
+    const frag = before.slice(colon + 1);
+    if (frag.includes(":") || /\s/.test(frag) || frag.length > 40) return null;
+    return { start: colon, query: frag };
+  }
+
+  function paintMenu() {
+    menu.replaceChildren();
+    if (!items.length) {
+      menu.classList.add("hidden");
+      return;
+    }
+    menu.classList.remove("hidden");
+    items.forEach((item, index) => {
+      menu.appendChild(el("button", {
+        type: "button",
+        className: `gear-suggest-row${index === active ? " active" : ""}`,
+        onMouseDown: (ev) => {
+          ev.preventDefault();
+          choose(index);
+        },
+      }, [
+        item.has_image ? gearEmojiNode(dynamicId, item) : el("span", { className: "gear-suggest-fallback" }, "🧰"),
+        el("span", {}, item.name),
+      ]));
+    });
+  }
+
+  function choose(index) {
+    const item = items[index];
+    const found = queryAtCursor();
+    if (!item || !found) return hide();
+    const pos = input.selectionStart || 0;
+    const token = `:${item.slug}: `;
+    input.value = input.value.slice(0, found.start) + token + input.value.slice(pos);
+    const next = found.start + token.length;
+    input.setSelectionRange(next, next);
+    rememberGearItems(dynamicId, [item]);
+    hide();
+    input.focus();
+  }
+
+  function refresh() {
+    const found = queryAtCursor();
+    if (!found) return hide();
+    api(`/dynamics/${dynamicId}/gear/tokens?q=${encodeURIComponent(found.query)}`)
+      .then((data) => {
+        const still = queryAtCursor();
+        if (!still || still.query !== found.query) return;
+        items = data.items || [];
+        rememberGearItems(dynamicId, items);
+        active = 0;
+        paintMenu();
+      })
+      .catch(() => hide());
+  }
+
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(refresh, 80);
+  });
+  input.addEventListener("keydown", (event) => {
+    if (menu.classList.contains("hidden")) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      event.stopPropagation();
+      active = Math.min(items.length - 1, active + 1);
+      paintMenu();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      active = Math.max(0, active - 1);
+      paintMenu();
+    } else if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      choose(active);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      hide();
+    }
+  }, true);
+  return menu;
+}
+
+function linkifyUrls(text) {
   const source = String(text || "");
   const nodes = [];
   const re = /\b((?:https?:\/\/|www\.)[^\s<>"'`)\]]+)/gi;
@@ -21223,6 +22405,26 @@ function linkifyText(text) {
   return nodes;
 }
 
+function linkifyText(text, dynamicId) {
+  const source = String(text || "");
+  const bucket = dynamicId ? gearSlugIndex.get(dynamicId) : null;
+  if (!bucket || !bucket.size) return linkifyUrls(source);
+  const nodes = [];
+  const gearRe = /:([a-z0-9]+(?:-[a-z0-9]+)*):/g;
+  let last = 0;
+  let match;
+  while ((match = gearRe.exec(source)) !== null) {
+    const item = bucket.get(match[1]);
+    if (!item || !item.has_image) continue;
+    if (match.index > last) nodes.push(...linkifyUrls(source.slice(last, match.index)));
+    nodes.push(gearEmojiNode(dynamicId, item));
+    last = match.index + match[0].length;
+  }
+  if (last < source.length) nodes.push(...linkifyUrls(source.slice(last)));
+  if (!nodes.length) nodes.push(...linkifyUrls(source));
+  return nodes;
+}
+
 function stripChatMarkers(body) {
   return String(body || "")
     .replace(/\[\[from:[^\]]+\]\]\s*/g, "")
@@ -21245,7 +22447,7 @@ function parseChatActionBody(body, dynamicId) {
   let match;
   while ((match = re.exec(text)) !== null) {
     if (match.index > last) {
-      nodes.push(...linkifyText(text.slice(last, match.index)));
+      nodes.push(...linkifyText(text.slice(last, match.index), dynamicId));
     }
     const path = match[1].trim();
     const label = match[2].trim() || "Open";
@@ -21268,10 +22470,10 @@ function parseChatActionBody(body, dynamicId) {
     last = match.index + match[0].length;
   }
   if (last < text.length) {
-    nodes.push(...linkifyText(text.slice(last)));
+    nodes.push(...linkifyText(text.slice(last), dynamicId));
   }
   if (!nodes.length) {
-    nodes.push(...linkifyText(text));
+    nodes.push(...linkifyText(text, dynamicId));
   }
   return nodes;
 }
@@ -21595,7 +22797,7 @@ function buildSettingsSetupChecklist({ user, llmSettings, googleStatus, dynamics
     items.push({
       id: "llm",
       title: "Configure AI provider / API key",
-      why: "Powers the assistant, suggested agreements, acts, and interviews.",
+      why: "Paste one OpenRouter key. It is shared with your partner.",
       focus: "ai",
     });
   }
@@ -21791,6 +22993,149 @@ function createSettingsSaveBar({ isSubmissive }) {
   });
 
   return { bar, register, refresh, bind, error, status };
+}
+
+
+function dataUrlToFile(dataUrl, name) {
+  const parts = String(dataUrl || "").split(",");
+  const head = parts[0] || "";
+  const b64 = parts[1] || "";
+  const mime = (head.match(/data:(.*?);/) || [])[1] || "image/png";
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], name || "generated.png", { type: mime });
+}
+
+function openGenerateImageSheet(dynamicId, { onPost } = {}) {
+  const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
+  const error = el("div", { className: "error hidden" });
+  const prompt = el("textarea", {
+    rows: "4",
+    placeholder: "Describe the picture…",
+  });
+  const modelSelect = el("select");
+  const styleSelect = el("select");
+  const templates = el("div", { className: "image-prompt-templates" });
+  const preview = el("img", { className: "image-prompt-preview hidden", alt: "Generated picture" });
+  const actions = el("div", { className: "row wrap hidden" });
+  let lastData = "";
+
+  function close() {
+    backdrop.remove();
+  }
+
+  const generateBtn = el("button", {
+    type: "button",
+    className: "primary-btn",
+    onClick: async () => {
+      error.classList.add("hidden");
+      generateBtn.disabled = true;
+      generateBtn.textContent = "Drawing…";
+      try {
+        const data = await api(`/dynamics/${dynamicId}/images/generate`, {
+          method: "POST",
+          body: JSON.stringify({
+            model: modelSelect.value,
+            style: styleSelect.value,
+            prompt: prompt.value,
+          }),
+        });
+        lastData = data.image_data || "";
+        if (!lastData) throw new Error("No image came back.");
+        preview.src = lastData;
+        preview.classList.remove("hidden");
+        actions.classList.remove("hidden");
+      } catch (err) {
+        error.textContent = err.message;
+        error.classList.remove("hidden");
+      } finally {
+        generateBtn.disabled = false;
+        generateBtn.textContent = "Generate";
+      }
+    },
+  }, "Generate");
+
+  actions.append(
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: async () => {
+        error.classList.add("hidden");
+        try {
+          await ensureChatCryptoKey(dynamicId, { createIfMissing: false });
+          const encrypted = await encryptVaultPayload(dynamicId, lastData);
+          await api(`/dynamics/${dynamicId}/vault`, {
+            method: "POST",
+            body: JSON.stringify({
+              title: "Generated image",
+              image_encrypted: encrypted,
+              image_blurred: localStorage.getItem(chatBlurStorage()) !== "false",
+              media_kind: "image",
+            }),
+          });
+          showToast("Saved to the image vault.");
+        } catch (err) {
+          error.textContent = err.message;
+          error.classList.remove("hidden");
+        }
+      },
+    }, "Save"),
+    el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        const file = dataUrlToFile(lastData, "generated.png");
+        close();
+        if (onPost) onPost(file);
+      },
+    }, "Post in chat"),
+  );
+
+  const sheet = el("div", { className: "chat-image-sheet image-prompt-sheet card stack" }, [
+    el("strong", {}, "Generate image"),
+    el("label", { className: "stack" }, [el("span", { className: "muted" }, "Model"), modelSelect]),
+    el("label", { className: "stack" }, [el("span", { className: "muted" }, "Style"), styleSelect]),
+    el("span", { className: "muted" }, "Start from"),
+    templates,
+    prompt,
+    generateBtn,
+    error,
+    preview,
+    actions,
+    el("button", { type: "button", className: "ghost-btn", onClick: close }, "Close"),
+  ]);
+  backdrop.appendChild(sheet);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) close();
+  });
+  document.body.appendChild(backdrop);
+
+  api(`/dynamics/${dynamicId}/images/options`)
+    .then((opts) => {
+      (opts.models || []).forEach((row) => {
+        modelSelect.appendChild(el("option", { value: row.id, title: row.note || "" }, row.label));
+      });
+      (opts.styles || []).forEach((row) => {
+        styleSelect.appendChild(el("option", { value: row.id }, row.label));
+      });
+      if (opts.default_model) modelSelect.value = opts.default_model;
+      if (opts.default_style) styleSelect.value = opts.default_style;
+      (opts.templates || []).forEach((row) => {
+        templates.appendChild(el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => {
+            prompt.value = row.prompt || "";
+            prompt.focus();
+          },
+        }, row.label));
+      });
+    })
+    .catch((err) => {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    });
 }
 
 function renderChat(dynamicId) {
@@ -22091,7 +23436,7 @@ function renderChat(dynamicId) {
         const textKids = [
           isCryptoPlaceholder(text)
             ? renderCryptoPlaceholder(id, text)
-            : el("span", { className: "chat-bubble-text" }, linkifyText(text)),
+            : el("span", { className: "chat-bubble-text" }, linkifyText(text, id)),
         ];
         if (msg.edited_at) {
           textKids.push(el("span", { className: "muted chat-edited-flag" }, "edited"));
@@ -22322,6 +23667,7 @@ function renderChat(dynamicId) {
       }, "➤");
 
       const composer = el("div", { className: "chat-composer-wrap" }, [
+        attachGearSuggest(id, input),
         el("div", { className: "chat-composer" }, [attachBtn, input, sendBtn]),
       ]);
 
@@ -22478,6 +23824,32 @@ function renderChat(dynamicId) {
               imageInput.click();
             },
           }, "Choose from library"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              backdrop.remove();
+              openVaultChatPicker(id).then(async (picked) => {
+                if (!picked) return;
+                error.classList.add("hidden");
+                try {
+                  const sent = await sendVaultMediaToChat(id, picked);
+                  if (sent) await refresh({ forceScroll: true });
+                } catch (err) {
+                  error.textContent = err.message;
+                  error.classList.remove("hidden");
+                }
+              });
+            },
+          }, "From vault"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              backdrop.remove();
+              openGenerateImageSheet(id, { onPost: (file) => handleImageFile(file) });
+            },
+          }, "Generate image"),
           el("button", {
             type: "button",
             className: "ghost-btn",
@@ -22939,6 +24311,9 @@ function renderChat(dynamicId) {
         },
         { once: false }
       );
+      await api(`/dynamics/${id}/gear/tokens?all_items=true`)
+        .then((data) => rememberGearItems(id, data.items || []))
+        .catch(() => {});
       await paintMessages(messages, { forceScroll: true });
       paintTyping();
 
@@ -23128,7 +24503,406 @@ function renderHelpWiki() {
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
+function buildPhoneServerCard() {
+  const status = el("p", { className: "muted", id: "phone-server-status" }, "Checking this phone…");
+  const urlInput = el("input", {
+    type: "url",
+    placeholder: "https://your-ubetra.example",
+    autocomplete: "off",
+    spellcheck: "false",
+  });
+  const card = el("div", { className: "card stack", id: "phone-server-card" }, [
+    el("h2", {}, "Server"),
+    el("p", { className: "muted" }, "Self-host only. Leave this blank to keep the log on the phone. Chat, Play, video, and the vault need a reachable server."),
+    status,
+    el("label", {}, ["Server URL", urlInput]),
+    el("div", { className: "row wrap" }, [
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: async () => {
+          const plugin = nativePlugin("UbetraLocalStore");
+          const url = (urlInput.value || "").trim();
+          if (!url) {
+            showToast("Enter a server URL or choose phone-only");
+            return;
+          }
+          try {
+            if (plugin && plugin.setServerUrl) await plugin.setServerUrl({ url: url });
+            if (plugin && plugin.openServer) await plugin.openServer({ url: url });
+            else window.location.href = url;
+          } catch (err) {
+            showToast(err.message || "Could not save that URL");
+          }
+        },
+      }, "Save and open"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          const plugin = nativePlugin("UbetraLocalStore");
+          if (plugin && plugin.setPhoneOnly) await plugin.setPhoneOnly();
+          if (plugin && plugin.showServerSetup) await plugin.showServerSetup();
+          else showToast("Phone-only logging stays on this device");
+        },
+      }, "Phone only"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          if (window.UbetraPhone) await window.UbetraPhone.onForeground();
+          fill();
+        },
+      }, "Try reconnect"),
+    ]),
+  ]);
+  async function fill() {
+    if (!window.UbetraPhone) {
+      status.textContent = "This browser is using the server that opened this page.";
+      return;
+    }
+    const caps = await window.UbetraPhone.refresh();
+    if (caps.serverUrl) urlInput.value = caps.serverUrl;
+    const when = caps.lastSyncAt ? " Last sync " + caps.lastSyncAt + "." : "";
+    const pending = caps.pendingCount ? " " + caps.pendingCount + " waiting to send." : "";
+    if (!caps.serverConfigured) status.textContent = "Phone-only. Logging stays on this device." + pending;
+    else if (!caps.serverReachable) status.textContent = "Server offline. Logging on this phone." + when + pending;
+    else status.textContent = "Server reachable." + when + pending;
+  }
+  fill();
+  return card;
+}
+
+function buildWearOsCard() {
+  return el("div", { className: "card stack", id: "wear-os-card" }, [
+    el("h2", {}, "Wear OS"),
+    el("p", { className: "muted" }, "The watch talks only to this phone. It does not store a sign-in token or call the server."),
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => navigate("/settings/wear"),
+    }, "Connect watch"),
+  ]);
+}
+
+function renderWearPairing() {
+  const error = el("p", { className: "error hidden" });
+  const codeEl = el("p", { className: "wear-pair-code", "aria-live": "polite" }, "—");
+  const expiryEl = el("p", { className: "muted wear-pair-expiry" }, "Expires in about 5 minutes.");
+  const apiBaseEl = el("p", { className: "wear-pair-base" }, "");
+  const apiBaseWrap = el("div", { className: "stack wear-pair-base-wrap hidden" }, [
+    el("p", { className: "muted" }, "API base"),
+    apiBaseEl,
+  ]);
+  const deviceList = el("div", { className: "stack wear-device-list" }, [
+    el("p", { className: "muted" }, "Loading watches…"),
+  ]);
+  const refreshBtn = el("button", { type: "button", className: "primary-btn" }, "Refresh code");
+  let pairTimer = null;
+  let codeTicket = 0;
+  let deviceTicket = 0;
+
+  function stopPairTimer() {
+    if (pairTimer) {
+      clearInterval(pairTimer);
+      pairTimer = null;
+    }
+  }
+
+  function formatPairCountdown(msLeft) {
+    const total = Math.max(0, Math.ceil(msLeft / 1000));
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    return mins + ":" + (secs < 10 ? "0" : "") + secs;
+  }
+
+  function currentWatchApiBase() {
+    let origin = "";
+    try {
+      origin = window.location && window.location.origin ? window.location.origin : "";
+    } catch (err) {
+      origin = "";
+    }
+    if (!/^https?:\/\//i.test(origin)) return "";
+    return origin.replace(/\/$/, "");
+  }
+
+  function armCountdown(data) {
+    stopPairTimer();
+    if (!expiryEl.isConnected) return;
+    const seconds = Number(data && data.expires_in);
+    let ends = 0;
+    if (Number.isFinite(seconds) && seconds > 0) ends = Date.now() + seconds * 1000;
+    else if (data && data.expires_at) {
+      const parsed = parseServerDate(data.expires_at);
+      if (parsed) ends = parsed.getTime();
+    }
+    if (!ends) {
+      expiryEl.textContent = "Expires in about 5 minutes.";
+      return;
+    }
+    const tick = () => {
+      if (!expiryEl.isConnected) {
+        releaseWearPairing();
+        return;
+      }
+      const left = ends - Date.now();
+      if (left <= 0) {
+        expiryEl.textContent = "Code expired. Refresh to get a new one.";
+        stopPairTimer();
+        return;
+      }
+      expiryEl.textContent = "Expires in " + formatPairCountdown(left) + ".";
+    };
+    tick();
+    pairTimer = setInterval(tick, 1000);
+  }
+
+  async function requestCode() {
+    const ticket = ++codeTicket;
+    error.classList.add("hidden");
+    refreshBtn.disabled = true;
+    try {
+      const plugin = nativePlugin("UbetraLocalStore");
+      let data;
+      if (plugin && plugin.startWatchPairing) {
+        data = await plugin.startWatchPairing();
+      } else if (window.UbetraPhone && window.UbetraPhone.serverFeaturesGrey()) {
+        throw new Error("Connect the watch from the UBETRA Android app.");
+      } else {
+        data = await api("/devices/watch/pair-code", {
+          method: "POST",
+          body: JSON.stringify({ api_base: currentWatchApiBase() }),
+        });
+      }
+      if (ticket !== codeTicket || !codeEl.isConnected) return;
+      codeEl.textContent = data && data.code ? String(data.code) : "—";
+      const base = data && data.api_base ? String(data.api_base) : "";
+      if (base) {
+        apiBaseEl.textContent = base;
+        apiBaseWrap.classList.remove("hidden");
+      } else {
+        apiBaseEl.textContent = "";
+        apiBaseWrap.classList.add("hidden");
+      }
+      armCountdown(data);
+    } catch (err) {
+      if (ticket !== codeTicket || !codeEl.isConnected) return;
+      error.textContent = err.message || "Could not create a pairing code.";
+      error.classList.remove("hidden");
+      if (!codeEl.textContent || codeEl.textContent === "—") {
+        expiryEl.textContent = "No code yet. Tap Refresh code to try again.";
+      }
+    } finally {
+      if (ticket === codeTicket && refreshBtn.isConnected) refreshBtn.disabled = false;
+    }
+  }
+
+  function deviceWhen(value) {
+    if (!value) return "";
+    const text = formatLocalDateTime(value, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    if (!text || text === "—") return "";
+    return text;
+  }
+
+  function confirmRevokeWatch(device) {
+    const backdrop = el("div", { className: "modal-backdrop" });
+    const errorLine = el("p", { className: "error hidden" });
+    const label = device && device.label ? String(device.label) : "This watch";
+    const revokeBtn = el("button", {
+      type: "button",
+      className: "ghost-btn danger-btn",
+      onClick: async () => {
+        revokeBtn.disabled = true;
+        errorLine.classList.add("hidden");
+        try {
+          await api("/devices/watch/revoke", {
+            method: "POST",
+            body: JSON.stringify({ device_id: device.id }),
+          });
+          backdrop.remove();
+          showToast("Watch revoked");
+          loadDevices();
+        } catch (err) {
+          errorLine.textContent = err.message || "Could not revoke this watch.";
+          errorLine.classList.remove("hidden");
+          revokeBtn.disabled = false;
+        }
+      },
+    }, "Revoke");
+    const card = el("div", { className: "card stack modal-card" }, [
+      el("h3", {}, "Revoke watch?"),
+      el("p", {}, label + " will be signed out. Pair it again to reconnect."),
+      errorLine,
+      el("div", { className: "row wrap" }, [
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => backdrop.remove(),
+        }, "Cancel"),
+        revokeBtn,
+      ]),
+    ]);
+    backdrop.appendChild(card);
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) backdrop.remove();
+    });
+    document.body.appendChild(backdrop);
+  }
+
+  function renderDeviceRow(device) {
+    const revoked = !!(device && device.revoked);
+    const bits = [];
+    const paired = deviceWhen(device.created_at);
+    const seen = deviceWhen(device.last_seen_at);
+    const revokedAt = deviceWhen(device.revoked_at);
+    if (paired) bits.push("Paired " + paired);
+    if (seen) bits.push("Last seen " + seen);
+    if (revoked) bits.push(revokedAt ? "Revoked " + revokedAt : "Revoked");
+    return el("div", { className: revoked ? "wear-device-row revoked" : "wear-device-row" }, [
+      el("div", { className: "stack" }, [
+        el("strong", {}, device.label ? String(device.label) : "Wear OS"),
+        el("p", { className: "muted" }, bits.join(" · ") || "Wear OS"),
+      ]),
+      revoked ? null : el("button", {
+        type: "button",
+        className: "ghost-btn danger-btn",
+        onClick: () => confirmRevokeWatch(device),
+      }, "Revoke"),
+    ]);
+  }
+
+  async function loadDevices() {
+    const ticket = ++deviceTicket;
+    const plugin = nativePlugin("UbetraLocalStore");
+    if (plugin && plugin.watchStatus) {
+      try {
+        const status = await plugin.watchStatus();
+        if (ticket !== deviceTicket || !deviceList.isConnected) return;
+        deviceList.replaceChildren();
+        if (!status || !status.paired) {
+          deviceList.appendChild(el("p", { className: "muted" }, "No watch is paired with this phone."));
+          return;
+        }
+        deviceList.appendChild(el("div", { className: "wear-device-row" }, [
+          el("div", { className: "stack" }, [
+            el("strong", {}, "This phone"),
+            el("p", { className: "muted" }, "Encrypted link. The watch has no server token."),
+          ]),
+          el("button", {
+            type: "button",
+            className: "ghost-btn danger-btn",
+            onClick: async () => {
+              await plugin.forgetWatch();
+              showToast("Watch unpaired");
+              loadDevices();
+            },
+          }, "Unpair"),
+        ]));
+      } catch (err) {
+        if (ticket !== deviceTicket || !deviceList.isConnected) return;
+        deviceList.replaceChildren(el("p", { className: "error" }, err.message || "Could not read the watch link."));
+      }
+      return;
+    }
+    try {
+      const rows = await api("/devices/watch");
+      if (ticket !== deviceTicket || !deviceList.isConnected) return;
+      const list = Array.isArray(rows) ? rows : [];
+      const active = [];
+      const revoked = [];
+      list.forEach((device) => {
+        if (!device || !device.id) return;
+        if (device.revoked) revoked.push(device);
+        else active.push(device);
+      });
+      deviceList.replaceChildren();
+      if (!active.length && !revoked.length) {
+        deviceList.appendChild(el("p", { className: "muted" }, "No watches paired with this account yet."));
+        return;
+      }
+      active.concat(revoked).forEach((device) => {
+        deviceList.appendChild(renderDeviceRow(device));
+      });
+    } catch (err) {
+      if (ticket !== deviceTicket || !deviceList.isConnected) return;
+      deviceList.replaceChildren(el("p", { className: "error" }, err.message || "Could not load watches."));
+    }
+  }
+
+  let leaveWatch = null;
+
+  function releaseWearPairing() {
+    stopPairTimer();
+    document.removeEventListener("visibilitychange", onDevicesVisible);
+    if (leaveWatch) {
+      clearInterval(leaveWatch);
+      leaveWatch = null;
+    }
+  }
+
+  function onDevicesVisible() {
+    if (!deviceList.isConnected) {
+      releaseWearPairing();
+      return;
+    }
+    if (document.visibilityState === "visible") loadDevices();
+  }
+
+  refreshBtn.addEventListener("click", () => {
+    requestCode();
+  });
+
+  const stack = el("div", { className: "stack wear-pair-screen" }, [
+    el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        releaseWearPairing();
+        navigate("/settings?focus=permissions");
+      },
+    }, "← Settings"),
+    el("h1", {}, "Connect watch"),
+    el("p", { className: "muted" }, "On the watch, open UBETRA and enter this code. The watch only talks to this phone. It expires in about 5 minutes."),
+    error,
+    el("div", { className: "card stack wear-pair-card" }, [
+      el("p", { className: "muted" }, "Pairing code"),
+      codeEl,
+      expiryEl,
+      apiBaseWrap,
+      refreshBtn,
+    ]),
+    el("div", { className: "card stack" }, [
+      el("h2", {}, "Paired watches"),
+      el("p", { className: "muted" }, "Unpair removes the phone's copy of the watch key."),
+      deviceList,
+    ]),
+  ]);
+
+  setViewContent(stack);
+  document.addEventListener("visibilitychange", onDevicesVisible);
+  leaveWatch = setInterval(() => {
+    if (!stack.isConnected) releaseWearPairing();
+  }, 1000);
+  requestCode();
+  loadDevices();
+}
+
 function renderSettings() {
+  if (window.UbetraPhone && window.UbetraPhone.usingLocalSession()) {
+    setViewContent(el("div", { className: "stack" }, [
+      el("h1", {}, "Settings"),
+      buildPhoneServerCard(),
+      buildWearOsCard(),
+      el("p", { className: "muted" }, "Account, chat, and AI settings need a reachable self-host server."),
+    ]));
+    return;
+  }
   viewEl.replaceChildren(el("p", { className: "muted" }, "Loading settings..."));
   const { query } = parseRoute();
   const initialDynamicId = query.get("dynamic") || getActiveDynamicId();
@@ -23236,6 +25010,16 @@ function renderSettings() {
       modelSelect.addEventListener("change", () => {
         modelCustom.value = modelSelect.value;
       });
+      const aiUnconfigured = !(
+        settings.shared_configured
+        || settings.active_key_source === "shared"
+        || settings.configured
+        || settings.api_key_set
+      );
+      if (aiUnconfigured && (!providerSelect.value || providerSelect.value === "server") && providerMap.openrouter) {
+        providerSelect.value = "openrouter";
+        modelCustom.value = providerMap.openrouter.default_model || "openrouter/auto";
+      }
       refreshProviderUi();
 
       function refreshLlmStatus() {
@@ -23703,10 +25487,8 @@ function renderSettings() {
       ]));
       appendAndroidAppCard(stack, androidInfo);
       stack.appendChild(buildDevicePermissionsCard());
-      stack.appendChild(buildEdgeGuardCard(initialDynamicId));
-      if (policy?.you_are_dominant && initialDynamicId) {
-        stack.appendChild(buildEdgeGuardManageCard(initialDynamicId));
-      }
+      stack.appendChild(buildPhoneServerCard());
+      stack.appendChild(buildWearOsCard());
 
       const usernameInput = el("input", {
         type: "text",
@@ -24082,16 +25864,36 @@ function renderSettings() {
         el("label", {}, ["Custom model (optional)", modelCustom]),
         baseUrlLabel,
         el("label", {}, ["API key", apiKeyInput]),
-        el("p", { className: "muted" }, "Keys are never shown again after saving. Prefer gemini-3.5-flash (Gemini 2.0/2.5 IDs are retired). Use a dedicated key you can revoke."),
+        el("p", { className: "muted" }, "One key is enough. Saving copies it to this dynamic so your partner uses the same assistant. The key is not shown again."),
       ]);
-      const llmBody = el("details", { className: "stack llm-api-config" }, [
-        el("summary", {}, "Show keys and connections"),
+      const llmBody = el("details", {
+        className: "stack llm-api-config",
+        ...(aiUnconfigured ? { open: true } : {}),
+      }, [
+        el("summary", {}, aiUnconfigured ? "Paste your key" : "Show keys and connections"),
       ]);
       const llmCard = el("div", { className: "card stack" }, [
-        el("h2", {}, "LLM API Configuration"),
-        el("p", { className: "muted" }, "Providers, API keys, and named connections. Collapsed so this page stays short."),
+        el("h2", {}, aiUnconfigured ? "Connect OpenRouter" : "LLM API Configuration"),
+        el("p", { className: "muted" }, aiUnconfigured
+          ? "Three steps. Leave the model on openrouter/auto. You do not need a second key or a named connection."
+          : "The key is saved. Open the section below to change it, test it, or add another connection."),
         llmBody,
       ]);
+      if (aiUnconfigured) {
+        llmBody.appendChild(el("ol", { className: "setup-steps" }, [
+          el("li", {}, [
+            "Create a key at ",
+            el("a", {
+              href: "https://openrouter.ai/keys",
+              target: "_blank",
+              rel: "noopener noreferrer",
+            }, "openrouter.ai/keys"),
+            ".",
+          ]),
+          el("li", {}, "Paste it in API key. Leave the model on openrouter/auto."),
+          el("li", {}, "Save and test. Both partners then use this key."),
+        ]));
+      }
       const activeDyn =
         dynamics.find((d) => d.id === (initialDynamicId || settings.active_dynamic_id))
         || dynamics.find((d) => d.shared_llm_configured)
@@ -24139,35 +25941,68 @@ function renderSettings() {
         },
         save: async () => {
           error.classList.add("hidden");
-          const body = {
-            provider: providerSelect.value,
-            model: modelCustom.value || modelSelect.value,
-            base_url: baseUrlInput.value.trim(),
-          };
-          if (apiKeyInput.value.trim()) body.api_key = apiKeyInput.value.trim();
-          const llmPath = initialDynamicId
-            ? `/settings/llm?dynamic_id=${encodeURIComponent(initialDynamicId)}`
-            : "/settings/llm";
-          const updated = await api(llmPath, {
-            method: "PUT",
-            body: JSON.stringify(body),
-          });
-          Object.assign(settings, updated);
-          refreshLlmStatus();
-          apiKeyInput.value = "";
-          apiKeyInput.placeholder = updated.api_key_set
-            ? `Saved key ${updated.api_key_hint || ""} — leave blank to keep`
-            : "Paste API key";
-          baseUrlInput.value = updated.base_url || "";
-          llmBaseline = {
-            provider: providerSelect.value,
-            model: (modelCustom.value || modelSelect.value || "").trim(),
-            base_url: (baseUrlInput.value || "").trim(),
-          };
+          await saveLlmFromForm();
           return "AI settings saved";
         },
       });
+      async function saveLlmFromForm() {
+        const body = {
+          provider: providerSelect.value,
+          model: modelCustom.value || modelSelect.value,
+          base_url: baseUrlInput.value.trim(),
+        };
+        if (apiKeyInput.value.trim()) body.api_key = apiKeyInput.value.trim();
+        const llmPath = initialDynamicId
+          ? `/settings/llm?dynamic_id=${encodeURIComponent(initialDynamicId)}`
+          : "/settings/llm";
+        const updated = await api(llmPath, {
+          method: "PUT",
+          body: JSON.stringify(body),
+        });
+        Object.assign(settings, updated);
+        refreshLlmStatus();
+        apiKeyInput.value = "";
+        apiKeyInput.placeholder = updated.api_key_set
+          ? `Saved key ${updated.api_key_hint || ""} — leave blank to keep`
+          : "Paste API key";
+        baseUrlInput.value = updated.base_url || "";
+        llmBaseline = {
+          provider: providerSelect.value,
+          model: (modelCustom.value || modelSelect.value || "").trim(),
+          base_url: (baseUrlInput.value || "").trim(),
+        };
+        return updated;
+      }
       llmBody.appendChild(el("div", { className: "row wrap" }, [
+        el("button", {
+          className: "primary-btn",
+          type: "button",
+          onClick: async () => {
+            error.classList.add("hidden");
+            try {
+              if (!apiKeyInput.value.trim() && !settings.api_key_set && !settings.shared_configured) {
+                throw new Error("Paste your OpenRouter key, then Save and test.");
+              }
+              if (apiKeyInput.value.trim() || providerSelect.value !== llmBaseline.provider) {
+                await saveLlmFromForm();
+              }
+              const testPath = initialDynamicId
+                ? `/settings/llm/test?dynamic_id=${encodeURIComponent(initialDynamicId)}`
+                : "/settings/llm/test";
+              const result = await api(testPath, { method: "POST" });
+              if (result.ok) {
+                status.textContent = `AI test OK · ${result.provider} / ${result.model} · ${result.active_key_source} key · ${result.reply || "UBETRA_OK"}`;
+              } else {
+                error.textContent = result.detail || "AI test failed";
+                error.classList.remove("hidden");
+                status.textContent = `AI test failed · ${result.provider} / ${result.model}`;
+              }
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, "Save and test"),
         el("button", {
           className: "ghost-btn",
           type: "button",
@@ -24315,7 +26150,7 @@ function renderSettings() {
       const addPurpose = el("select", {}, [
         el("option", { value: "general" }, "General text"),
         el("option", { value: "adult" }, "Adult / NSFW text"),
-        el("option", { value: "images" }, "Images / manga panels"),
+        el("option", { value: "images" }, "Images"),
       ]);
       const addModel = el("input", { placeholder: "Model id" });
       const addImageModel = el("input", { placeholder: "Image model (optional)" });
@@ -24390,7 +26225,11 @@ function renderSettings() {
           ),
         }, "Advanced AI routing →"),
       );
-      llmBody.appendChild(aiConnCard);
+      llmBody.appendChild(el("details", { className: "stack" }, [
+        el("summary", {}, "More connections and routing"),
+        el("p", { className: "muted" }, "Optional. A fresh install only needs the OpenRouter key above."),
+        aiConnCard,
+      ]));
       stack.appendChild(llmCard);
 
       const assistantDomOnly = !!(assistantSettings.dynamic_id && assistantSettings.you_are_dominant === false);
@@ -25527,9 +27366,9 @@ function renderSettings() {
       const bucketHelp = {
         You: "Account, appearance, backup, and optional tips. Theme and icon stay on this device.",
         "This dynamic": "The same feature index as onboarding, plus settings for modules you turned on.",
-        "AI & assistant": "Gemini: Google AI Studio → Create API key. OpenAI: platform.openai.com → API keys. Powers scenes, interviews, and Assistant Domme.",
+        "AI & assistant": "Fresh install: open Connect OpenRouter, paste one key from openrouter.ai/keys, then Save and test. That key is shared with your partner.",
         "Chat & privacy": "History retention, encryption, and push for this device.",
-        "This device": "Camera, microphone, notifications, Android extras, and Edge Guard.",
+        "This device": "Camera, microphone, notifications, Android extras, server, and Wear OS.",
         Help: "In-app wiki for this install.",
       };
       const titleMap = {
@@ -25551,7 +27390,6 @@ function renderSettings() {
         "Feelings notifications": "This dynamic",
         "Chastity policy": "This dynamic",
         "Sex & orgasm tracking details": "This dynamic",
-        "Edge Guard list": "This dynamic",
         "Privacy & security": "Chat & privacy",
         "Assistant domme": "AI & assistant",
         "LLM API Configuration": "AI & assistant",
@@ -25559,7 +27397,8 @@ function renderSettings() {
         "Android app": "This device",
         "Update app": "This device",
         Permissions: "This device",
-        "Edge Guard": "This device",
+        "Server": "This device",
+        "Wear OS": "This device",
         Wiki: "Help",
         About: "Help",
       };
@@ -25606,7 +27445,7 @@ function renderSettings() {
         const id = bucketIds[name] || "";
         grouped.appendChild(settingsSection(name, items, {
           id,
-          open: focus === id || (focus === "setup" && id === "account"),
+          open: focus === id || (focus === "setup" && id === "account") || (id === "ai" && !(settings.configured || settings.shared_configured)),
           help: bucketHelp[name] || "",
         }));
       });
@@ -25617,24 +27456,28 @@ function renderSettings() {
 
       if (focus) {
         setTimeout(() => {
-          const target = document.getElementById(focus === "edge-guard" ? "settings-features" : `settings-${focus}`);
+          const target = document.getElementById(`settings-${focus}`);
           if (target) {
             target.open = true;
             target.scrollIntoView({ behavior: "smooth", block: "start" });
           }
-          if (focus === "edge-guard") {
-            document.getElementById("edge-guard-manage")?.scrollIntoView({ behavior: "smooth", block: "start" });
-          }
         }, 50);
       }
       setViewContent(grouped);
+      if (window.UbetraPhone) window.UbetraPhone.paint();
     })
-    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+    .catch((err) => setViewContent(el("div", { className: "stack" }, [
+      el("h1", {}, "Settings"),
+      el("p", { className: "error" }, err.message || "Could not load settings"),
+      buildPhoneServerCard(),
+      buildWearOsCard(),
+    ])));
 }
 
 async function renderRoute() {
   const hashPath = (location.hash.replace(/^#/, "") || "/");
   rememberRoute(hashPath.startsWith("/") ? hashPath : `/${hashPath}`);
+  closeNavSheets();
   const { parts } = parseRoute();
   if (!state.token && parts[0] !== "login" && parts[0] !== "register"
       && parts[0] !== "forgot-password" && parts[0] !== "reset-password") {
@@ -25643,6 +27486,11 @@ async function renderRoute() {
   }
   if (state.token && state.user && ["login", "forgot-password", "reset-password"].includes(parts[0])) {
     navigateAfterAuth();
+    return;
+  }
+  if (window.UbetraPhone && window.UbetraPhone.blockedRoute(parts)) {
+    window.UbetraPhone.renderNeedsServer();
+    updateBottomNav();
     return;
   }
 
@@ -25661,6 +27509,7 @@ async function renderRoute() {
   if (parts[0] === "settings") {
     if (parts[1] === "ai-routing") return renderAiRoutingSettings();
     if (parts[1] === "help" || parts[1] === "wiki") return renderHelpWiki();
+    if (parts[1] === "wear") return renderWearPairing();
     return renderSettings();
   }
   // Legacy History URL — keep Dynamic tab active, never a bottom-nav item.
@@ -25670,8 +27519,24 @@ async function renderRoute() {
     return;
   }
   if (parts[0] === "chat") return renderChat(parts[1]);
+  if (parts[0] === "quick") {
+    const quickId = preferredDynamicId();
+    if (!quickId) {
+      if (state.user) return renderHome();
+      setViewContent(el("p", { className: "muted" }, "Loading…"));
+      return;
+    }
+    if (parts[1] === "lock") {
+      history.replaceState(null, "", `#/dynamic/${quickId}/chastity`);
+      return renderChastity(quickId);
+    }
+    history.replaceState(null, "", `#/dynamic/${quickId}/track`);
+    renderToday(quickId);
+    openQuickLogSheet(quickId);
+    return;
+  }
   if (parts[0] === "home" || parts.length === 0) {
-    if (state.dynamics.length) return renderTrackingHub(state.dynamics[0].id);
+    if (state.dynamics.length) return renderToday(state.dynamics[0].id);
     return renderHome();
   }
 
@@ -25696,13 +27561,16 @@ async function renderRoute() {
       if (parts[3] === "chat") return renderAssistantChatPage(dynamicId);
       if (parts[3] === "scene") return renderPlaytimeScene(dynamicId);
       if (parts[3] === "games" && parts[4] === "spin") return renderSpinTheWheel(dynamicId);
+      if (parts[3] === "games" && parts[4] === "red-light") return renderRedLightGame(dynamicId);
+      if (parts[3] === "games" && parts[4] === "toys") return renderToySpin(dynamicId);
+      if (parts[3] === "games" && parts[4] === "fate") return renderFateGame(dynamicId);
       if (parts[3] === "games") return renderPlaytimeGames(dynamicId);
       return renderAssistant(dynamicId);
     }
     if (parts[2] === "interview") return renderInterview(dynamicId);
     if (parts[2] === "context") return renderContext(dynamicId);
     if (parts[2] === "journal") return renderJournal(dynamicId);
-    if (parts[2] === "track") return renderTrackingHub(dynamicId);
+    if (parts[2] === "track") return renderToday(dynamicId);
     if (parts[2] === "tracking") {
       if (parts[3] === "history") return renderOrgasmPriorHistory(dynamicId);
       return renderTracking(dynamicId);
@@ -25710,7 +27578,6 @@ async function renderRoute() {
     if (parts[2] === "feelings") return renderFeelings(dynamicId);
     if (parts[2] === "sleep") return renderSleep(dynamicId);
     if (parts[2] === "cycle") return renderCycle(dynamicId);
-    if (parts[2] === "manga") return renderManga(dynamicId);
     if (parts[2] === "instructor" || parts[2] === "web-play") return renderInstructor(dynamicId);
     if (parts[2] === "wiki") {
       history.replaceState(null, "", "#/settings/help");
@@ -25728,7 +27595,8 @@ async function renderRoute() {
     if (parts[2] === "gear") return renderGear(dynamicId);
     if (parts[2] === "vault") return renderVault(dynamicId);
     if (parts[2] === "features") return renderFeatureSettings(dynamicId);
-    return renderTrackingHub(dynamicId);
+    navigate(`/dynamic/${dynamicId}/track`);
+    return;
   }
 
   renderHome();

@@ -13,8 +13,8 @@ Six groups (not a long list of accordions):
 | **You** | Username, appearance, email, password, backup, log out |
 | **This dynamic** | Same **feature index** as onboarding, plus settings for modules that are on |
 | **Chat & privacy** | Retention, encryption, push |
-| **AI & assistant** | Collapsed **LLM API Configuration** (keys + named connections), routing, Assistant Domme |
-| **This device** | Permissions, Android, Edge Guard, Google Tasks (hidden until ready) |
+| **AI & assistant** | **Connect OpenRouter** when no key is saved. Extra providers sit under **More connections and routing**. Assistant tone and access toggles stay in this group |
+| **This device** | Permissions, Android app, server URL, Wear OS. Google Tasks stays hidden until ready |
 | **Help** | Wiki, About |
 
 For the full module map and “how to use it,” see **[Features & Settings](Features-and-Settings)**.
@@ -45,7 +45,9 @@ Feature toggles are Dom-controlled except partner-enableable sleep / cycle / man
 
 ## AI & assistant
 
-**LLM API Configuration** is collapsed by default. Open it for the shared/personal key, named connections (text / adult / images), Batch test, and **Advanced AI routing**.
+On a fresh install this group opens on **Connect OpenRouter**. Provider and model are already OpenRouter and `openrouter/auto`. Paste the key from [openrouter.ai/keys](https://openrouter.ai/keys) and tap **Save and test**. One key is shared with your partner.
+
+**Use a different model** and **More connections and routing** stay closed until you need them.
 
 - Dom: assistant tone and extra instructions  
 - **What to share with AI** (journals, stories, scenes, agreements, tracking) — full map: [AI context](AI-context)  
@@ -62,7 +64,7 @@ Feature toggles are Dom-controlled except partner-enableable sleep / cycle / man
 
 ## This device
 
-Camera, microphone, notifications, Android extras. **Edge Guard** (Android APK): local DNS filter that blocks chosen websites system-wide, including Microsoft Edge long-press Preview. Google Tasks UI is currently hidden until ready. Sleep/cycle Health Connect lives in the Android APK. Garmin OAuth appears when Sleep tracking is enabled.
+Camera, microphone, notifications, Android extras. The phone can log on its own, or send that log to a self-hosted server when the URL answers. The watch pairs with the phone and does not call the server. Google Tasks UI is currently hidden until ready. Sleep/cycle Health Connect lives in the Android app. Garmin OAuth appears when Sleep tracking is enabled.
 
 ## Help
 

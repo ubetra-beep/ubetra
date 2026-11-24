@@ -45,6 +45,7 @@ from ..services.chastity_release import event_goal_kind, maybe_relock_after_orga
 
 from ..services.feelings import feelings_status, has_recent_context_checkin
 
+from ..services.tracking import recent_orgasm_glance
 from ..services.tracking_calendar import build_tracking_calendar
 
 from ..services.org_tracking_prefs import prefs_for_dynamic, serialize_org_tracking_prefs
@@ -267,39 +268,11 @@ def tracking_stats(
 ) -> OrgTrackingStatsOut:
     get_membership(dynamic_id, user, db)
     memberships = db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
+    glance = recent_orgasm_glance(db, dynamic_id, memberships)
+    partners = glance["partners"]
+    label = glance["recent_orgasm_label"]
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    since_7 = today - timedelta(days=6)
     since_30 = today - timedelta(days=29)
-
-    partners = []
-    label_bits = []
-    for membership in memberships:
-        entries = (
-            db.query(OrgTrackingEntry)
-            .options(joinedload(OrgTrackingEntry.orgasms))
-            .filter(
-                OrgTrackingEntry.dynamic_id == dynamic_id,
-                OrgTrackingEntry.for_membership_id == membership.id,
-                OrgTrackingEntry.occurred_at >= since_7,
-            )
-            .all()
-        )
-        orgasm_count_total = sum(
-            orgasm_count(entry) for entry in entries if is_orgasm_event(entry.event_type)
-        )
-        partners.append(
-            {
-                "membership_id": membership.id,
-                "name": membership.display_name,
-                "orgasm_count": orgasm_count_total,
-            }
-        )
-        label_bits.append(f"{membership.display_name}: {orgasm_count_total}")
-
-    if any(p["orgasm_count"] for p in partners):
-        label = f"{' · '.join(label_bits)} (last 7 days)"
-    else:
-        label = "No orgasms in the last 7 days"
 
     # Preload 30-day entries once
     entries_30 = (
@@ -458,6 +431,24 @@ def log_tracking_entry(
 
     membership = get_membership(dynamic_id, user, db)
 
+    from ..services.client_events import clean_client_event_id, stamp_updated_at
+
+    cid = clean_client_event_id(payload.client_event_id)
+    if cid:
+        prior = (
+            db.query(OrgTrackingEntry)
+            .options(joinedload(OrgTrackingEntry.orgasms))
+            .filter(OrgTrackingEntry.client_event_id == cid)
+            .first()
+        )
+        if prior is not None:
+            if prior.dynamic_id != dynamic_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="client_event_id belongs to another dynamic",
+                )
+            return _entry_out(prior, _membership_map(db, dynamic_id), viewer=membership)
+
     target = (
 
         db.query(Membership)
@@ -533,6 +524,8 @@ def log_tracking_entry(
         edging_count=payload.edging_count,
 
         notes_private=bool(payload.notes_private),
+        client_event_id=cid or None,
+        updated_at=stamp_updated_at(None, payload.updated_at),
 
     )
 

@@ -176,6 +176,7 @@ class PartnerOut(BaseModel):
     spti_completed: bool = False
     chastity_enabled: bool = False
     chastity_max_lock_hours: int | None = None
+    biological_sex: str = ""
     is_you: bool = False
 
 
@@ -1537,6 +1538,8 @@ class OrgTrackingEntryCreate(BaseModel):
     satisfaction: int | None = Field(default=None, ge=1, le=5)
     edging_count: int | None = Field(default=None, ge=0, le=100)
     notes_private: bool = False
+    client_event_id: str | None = Field(default=None, max_length=64)
+    updated_at: datetime | None = None
 
 
 class OrgTrackingEntryUpdate(BaseModel):
@@ -1789,6 +1792,8 @@ class ChastityLockupStart(BaseModel):
     planned_end_at: datetime | None = None
     show_planned_end: bool = False
     tags: list[str] = Field(default_factory=list)
+    client_event_id: str | None = Field(default=None, max_length=64)
+    updated_at: datetime | None = None
 
 
 class ChastityLockupEnd(BaseModel):
@@ -1797,6 +1802,8 @@ class ChastityLockupEnd(BaseModel):
     tags: list[str] | None = None
     # unlocked | released_orgasm | released_timer
     ended_kind: Literal["unlocked", "released_orgasm", "released_timer"] = "released_orgasm"
+    client_event_id: str | None = Field(default=None, max_length=64)
+    updated_at: datetime | None = None
 
 
 class ChastityTimerExtend(BaseModel):
@@ -1841,12 +1848,16 @@ class ChastityBreakCreate(BaseModel):
     ended_at: datetime | None = None
     note: str = Field(default="", max_length=500)
     tags: list[str] = Field(default_factory=list)
+    client_event_id: str | None = Field(default=None, max_length=64)
+    updated_at: datetime | None = None
 
 
 class ChastityBreakFinish(BaseModel):
     ended_at: datetime | None = None
     break_type: str | None = None
     break_reason: str = Field(default="", max_length=255)
+    client_event_id: str | None = Field(default=None, max_length=64)
+    updated_at: datetime | None = None
 
 
 class ChastityBreakUpdate(BaseModel):
@@ -2072,6 +2083,8 @@ class GearCatalogItemOut(BaseModel):
     owned: bool = False
     want: bool = False
     inventory_id: str | None = None
+    has_image: bool = False
+    art_key: str = ""
 
 
 class GearInventoryItemOut(BaseModel):
@@ -2085,6 +2098,8 @@ class GearInventoryItemOut(BaseModel):
     is_custom: bool = False
     tier: str = "common"
     created_at: datetime
+    has_image: bool = False
+    art_key: str = ""
 
     class Config:
         from_attributes = True

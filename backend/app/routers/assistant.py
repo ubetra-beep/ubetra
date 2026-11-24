@@ -11,6 +11,7 @@ from ..models import (
     ActOfSubmission,
     ActStatus,
     Dynamic,
+    PartnerRole,
     Task,
     TaskApprovalStatus,
     TaskList,
@@ -67,6 +68,7 @@ from ..services.spin_wheel import (
     generate_spin_extra_ideas,
     next_wait_day_choices,
     partner_names,
+    submissive_membership,
 )
 from ..services.tags import tags_to_string
 from ..services.tasks_service import task_list_out
@@ -300,7 +302,14 @@ def playtime_spin_suggestions(
 
     memberships = get_memberships(db, dynamic_id)
     dominant_name, submissive_name = partner_names(memberships)
-    options = build_spin_presets(dominant_name=dominant_name)
+    dominant = next((m for m in memberships if m.role == PartnerRole.dominant), None)
+    submissive = submissive_membership(memberships)
+    options = build_spin_presets(
+        dominant_name=dominant_name,
+        submissive_name=submissive_name,
+        sub_sex=getattr(getattr(submissive, "user", None), "biological_sex", "") or "",
+        dom_sex=getattr(getattr(dominant, "user", None), "biological_sex", "") or "",
+    )
     try:
         extras = generate_spin_extra_ideas(
             user=user,
@@ -336,18 +345,37 @@ def playtime_spin_post_orgasm_tasks(
     memberships = get_memberships(db, dynamic_id)
     dominant_name, submissive_name = partner_names(memberships)
     try:
+        dominant = next((m for m in memberships if m.role == PartnerRole.dominant), None)
+        submissive = submissive_membership(memberships)
+        sub_sex = getattr(getattr(submissive, "user", None), "biological_sex", "") or ""
+        dom_sex = getattr(getattr(dominant, "user", None), "biological_sex", "") or ""
         tasks = generate_post_orgasm_tasks(
             user=user,
             dynamic_context=_playtime_context(db, dynamic, membership, user),
             dynamic=dynamic,
             dominant_name=dominant_name,
             submissive_name=submissive_name,
+            sub_sex=sub_sex,
+            dom_sex=dom_sex,
             db=db,
         )
     except HTTPException:
-        from ..services.spin_wheel import POST_ORGASM_PRESETS
+        from ..services.pronouns import personalize_items, role_tokens
+        from ..services.spin_wheel import POST_ORGASM_ADDONS, POST_ORGASM_PRESETS
 
-        tasks = [dict(item, source="preset") for item in POST_ORGASM_PRESETS]
+        dominant = next((m for m in memberships if m.role == PartnerRole.dominant), None)
+        submissive = submissive_membership(memberships)
+        tokens = role_tokens(
+            sub_name=submissive_name,
+            dom_name=dominant_name,
+            sub_sex=getattr(getattr(submissive, "user", None), "biological_sex", "") or "",
+            dom_sex=getattr(getattr(dominant, "user", None), "biological_sex", "") or "",
+        )
+        tasks = personalize_items(
+            [dict(item, source="preset") for item in POST_ORGASM_PRESETS]
+            + [dict(item, source="addon") for item in POST_ORGASM_ADDONS],
+            tokens,
+        )
 
     return SpinPostOrgasmTasksOut(
         dominant_name=dominant_name,

@@ -1,0 +1,16 @@
+{
+  "name": "@ubetra/local-store",
+  "version": "1.0.0",
+  "private": true,
+  "description": "On-phone chastity and orgasm log, sync, and encrypted Wear relay",
+  "main": "src/index.js",
+  "files": ["android", "src"],
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=7.0.0"
+  }
+}

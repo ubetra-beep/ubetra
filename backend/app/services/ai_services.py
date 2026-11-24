@@ -127,29 +127,13 @@ AI_TOOLS: dict[str, AiToolSpec] = {
         needs=(CAP_TEXT, CAP_TEXT_NSFW),
         recommend_providers=(LlmProvider.lmstudio.value, LlmProvider.openrouter.value),
     ),
-    "manga_script": AiToolSpec(
-        id="manga_script",
-        label="Monthly manga (script)",
-        description="Storyboard / captions for monthly manga.",
-        needs=(CAP_TEXT, CAP_TEXT_NSFW),
-        recommend_providers=(LlmProvider.lmstudio.value, LlmProvider.openrouter.value),
-        recommend_note="Use an uncensored text model — Gemini/OpenAI often refuse explicit scripts.",
-    ),
-    "manga_image": AiToolSpec(
-        id="manga_image",
-        label="Monthly manga (images)",
-        description="Panel image generation for hybrid/full modes.",
+    "image_gen": AiToolSpec(
+        id="image_gen",
+        label="Image generation",
+        description="Pictures from the chat + menu, and gear icons.",
         needs=(CAP_IMAGE, CAP_IMAGE_NSFW),
-        recommend_providers=(
-            LlmProvider.lmstudio.value,
-            LlmProvider.openai_compatible.value,
-            LlmProvider.openrouter.value,
-        ),
-        recommend_note=(
-            "Hosted DALL·E / many OpenRouter image models refuse NSFW. "
-            "Best: local Automatic1111 / ComfyUI / Forge behind an OpenAI-compatible /v1, "
-            "or a known NSFW image host."
-        ),
+        recommend_providers=(LlmProvider.openrouter.value, LlmProvider.lmstudio.value),
+        recommend_note="Use an image model that will draw adult stills. Gemini image models on OpenRouter have done that here.",
     ),
 }
 
@@ -577,7 +561,7 @@ def run_capability_probe(
     }
     if svc.provider in image_capable_providers:
         img_model = (svc.image_model or "").strip() or (
-            "dall-e-3" if svc.provider == LlmProvider.openai.value else (svc.model or "dall-e-3")
+            "gpt-image-1.5" if svc.provider == LlmProvider.openai.value else (svc.model or "gpt-image-1.5")
         )
         key = cfg.api_key if cfg.api_key != "local" else ""
 
@@ -588,7 +572,7 @@ def run_capability_probe(
                     prompt=prompt,
                     model=img_model,
                     base_url=cfg.base_url or None,
-                    size="512x512",
+                    size="1024x1024",
                 )
                 ok = bool(url)
                 log.append({"probe": label, "ok": ok, "detail": "image ok" if ok else "empty"})
@@ -603,12 +587,12 @@ def run_capability_probe(
 
         svc.cap_image = _try_image(
             CAP_IMAGE,
-            "Simple line-art sketch of two coffee mugs on a table, clean manga style, SFW",
+            "Simple line-art sketch of two coffee mugs on a table, clean illustration, SFW",
         )
         svc.cap_image_nsfw = _try_image(
             CAP_IMAGE_NSFW,
             (
-                "Consensual adult manga panel: clothed dominant and kneeling adult submissive, "
+                "Consensual adult illustration: clothed dominant and kneeling adult submissive, "
                 "tasteful erotic tension, no minors, private artistic study"
             ),
         )

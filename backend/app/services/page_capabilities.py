@@ -110,7 +110,7 @@ PAGE_CAPABILITIES: dict[str, dict] = {
         "title": "Playtime",
         "feature_id": "scene_workshop",
         "actions": [
-            "Open scene builder, spin the wheel, Instructor, manga, or tasks",
+            "Open scene builder, spin the wheel, Instructor, or tasks",
         ],
     },
     "assistant/scene": {
@@ -132,11 +132,6 @@ PAGE_CAPABILITIES: dict[str, dict] = {
         "title": "Instructor",
         "feature_id": "scene_workshop",
         "actions": ["Start or control a stroke-to-the-beat session"],
-    },
-    "manga": {
-        "title": "Monthly manga",
-        "feature_id": "manga_comics",
-        "actions": ["Generate this month's comic (AI)"],
     },
     "ground-rules": {
         "title": "Ground rules",
@@ -187,7 +182,7 @@ PAGE_CAPABILITIES: dict[str, dict] = {
 
 HUB_LABELS = {
     "tracking": "Tracking tab — history, lockups, play, feelings, punishment, journal",
-    "playtime": "Playtime tab — tasks, scenes, games, Instructor, manga",
+    "playtime": "Playtime tab — tasks, scenes, games, Instructor",
     "chat": "Chat tab — partner messages (never sent to the assistant)",
 }
 

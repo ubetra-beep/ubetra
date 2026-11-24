@@ -27,6 +27,45 @@ def lockup_duration_seconds(started_at: datetime, ended_at: datetime) -> float:
     return max(0.0, (ended_at - started_at).total_seconds())
 
 
+def recent_orgasm_glance(db: Session, dynamic_id: str, memberships: list[Membership]) -> dict:
+    """7 calendar days of orgasm counts and the same label as GET /tracking/stats.
+
+    The window starts at UTC midnight six days ago, including today. This does
+    not build the 30-day cumulative series.
+    """
+    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    since_7 = today - timedelta(days=6)
+    partners = []
+    label_bits = []
+    for membership in memberships:
+        entries = (
+            db.query(OrgTrackingEntry)
+            .options(joinedload(OrgTrackingEntry.orgasms))
+            .filter(
+                OrgTrackingEntry.dynamic_id == dynamic_id,
+                OrgTrackingEntry.for_membership_id == membership.id,
+                OrgTrackingEntry.occurred_at >= since_7,
+            )
+            .all()
+        )
+        orgasm_count_total = sum(
+            orgasm_count(entry) for entry in entries if is_orgasm_event(entry.event_type)
+        )
+        partners.append(
+            {
+                "membership_id": membership.id,
+                "name": membership.display_name,
+                "orgasm_count": orgasm_count_total,
+            }
+        )
+        label_bits.append(f"{membership.display_name}: {orgasm_count_total}")
+    if any(partner["orgasm_count"] for partner in partners):
+        label = f"{' · '.join(label_bits)} (last 7 days)"
+    else:
+        label = "No orgasms in the last 7 days"
+    return {"partners": partners, "recent_orgasm_label": label}
+
+
 def partner_orgasm_counts(
     db: Session, dynamic_id: str, memberships: list[Membership], *, days: int = 90
 ) -> dict[str, int]:

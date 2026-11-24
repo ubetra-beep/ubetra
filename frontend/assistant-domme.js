@@ -40,7 +40,6 @@
     "assistant/games": "Playtime games",
     "assistant/games/spin": "Spin the wheel",
     instructor: "Instructor",
-    manga: "Monthly manga",
     "ground-rules": "Ground rules",
     interview: "Dynamic interview",
     survey: "Kink list",
