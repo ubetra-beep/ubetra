@@ -201,6 +201,9 @@ class User(Base):
     password_reset_challenges: Mapped[list["PasswordResetChallenge"]] = relationship(
         back_populates="user"
     )
+    email_signin_challenges: Mapped[list["EmailSignInChallenge"]] = relationship(
+        back_populates="user"
+    )
 
 
 class MfaChallenge(Base):
@@ -228,6 +231,22 @@ class PasswordResetChallenge(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped[User] = relationship(back_populates="password_reset_challenges")
+
+
+class EmailSignInChallenge(Base):
+    """One-time email code or link that signs the account in without a password."""
+
+    __tablename__ = "email_signin_challenges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(255))
+    token_hash: Mapped[str] = mapped_column(String(255))
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped[User] = relationship(back_populates="email_signin_challenges")
 
 
 class PushSubscription(Base):
@@ -1456,4 +1475,17 @@ class WatchDevice(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="watch_devices")
+
+
+class RouletteCampaign(Base):
+    """Orgasm Roulette marble bag for one dynamic."""
+
+    __tablename__ = "roulette_campaigns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    mode: Mapped[str] = mapped_column(String(16), default="virtual")
+    state_json: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

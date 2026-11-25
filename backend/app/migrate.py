@@ -54,6 +54,25 @@ def run_migrations() -> None:
       conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_mfa_challenges_user_id ON mfa_challenges (user_id)")
       )
+    if "email_signin_challenges" not in tables:
+      conn.execute(
+        text(
+          "CREATE TABLE email_signin_challenges ("
+          "id VARCHAR(36) PRIMARY KEY, "
+          "user_id VARCHAR(36) NOT NULL REFERENCES users(id), "
+          "code_hash VARCHAR(255) NOT NULL, "
+          "token_hash VARCHAR(255) NOT NULL, "
+          "expires_at DATETIME NOT NULL, "
+          "consumed_at DATETIME, "
+          "created_at DATETIME)"
+        )
+      )
+      conn.execute(
+        text(
+          "CREATE INDEX IF NOT EXISTS ix_email_signin_challenges_user_id "
+          "ON email_signin_challenges (user_id)"
+        )
+      )
 
     membership_columns = {
       row[1]

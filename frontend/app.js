@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v170";
+const CLIENT_SW_CACHE = "ubetra-v175";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -447,7 +447,7 @@ function navigateAfterAuth() {
   syncUserTimezone().catch(() => {});
   const { parts } = parseRoute();
   const here = parts[0] || "";
-  const leavingAuth = ["", "login", "register", "forgot-password", "reset-password"].includes(here);
+  const leavingAuth = ["", "login", "register", "forgot-password", "reset-password", "email-signin"].includes(here);
   // After login, finish setup. A direct link to Settings or the survey stays put.
   if (!state.user?.onboarding_completed) {
     const survey = here === "dynamic" && parts[2] === "survey";
@@ -481,7 +481,7 @@ function shouldRememberRoute(path) {
   const clean = String(path || "").split("?")[0];
   const parts = clean.replace(/^#/, "").split("/").filter(Boolean);
   if (!parts.length) return false;
-  if (["settings", "login", "register", "onboarding", "forgot-password", "reset-password", "quick"].includes(parts[0])) return false;
+  if (["settings", "login", "register", "onboarding", "forgot-password", "reset-password", "email-signin", "quick"].includes(parts[0])) return false;
   return true;
 }
 
@@ -528,7 +528,7 @@ function onboardingStep(status) {
   return "finish";
 }
 
-const PUBLIC_AUTH_PATHS = /^\/auth\/(login|register|claim-email|config|mfa\/|password-reset\/)/;
+const PUBLIC_AUTH_PATHS = /^\/auth\/(login|register|claim-email|config|mfa\/|password-reset\/|email-signin\/)/;
 const SESSION_RENEWED_KEY = "ubetra_session_renewed_at";
 const SESSION_RENEW_MS = 12 * 60 * 60 * 1000;
 
@@ -4899,7 +4899,7 @@ function facetBadge(facet, dynamic) {
 
 function updateBottomNav() {
   const { parts } = parseRoute();
-  const authPages = ["login", "register", "onboarding", "forgot-password", "reset-password"];
+  const authPages = ["login", "register", "onboarding", "forgot-password", "reset-password", "email-signin"];
   const hide = !state.token || authPages.includes(parts[0]) || parts[0] === "settings";
   bottomNavEl.classList.toggle("hidden", hide);
   if (hide) return;
@@ -5607,11 +5607,19 @@ function renderLogin() {
   const error = el("div", { className: "error hidden" });
   const form = el("form", { className: "stack auth-card" }, [
     el("h1", {}, "Sign in"),
-    el("p", { className: "muted" }, "Use your email or username."),
+    el("p", { className: "muted" }, "Use your password, or get a sign-in code and link by email."),
     el("label", {}, ["Email or username", el("input", { name: "email", type: "text", required: "true", autocomplete: "username" })]),
     el("label", {}, ["Password", el("input", { name: "password", type: "password", required: "true", autocomplete: "current-password" })]),
     error,
     el("button", { className: "primary-btn", type: "submit" }, "Continue"),
+    el("button", {
+      className: "ghost-btn",
+      type: "button",
+      onClick: () => {
+        const email = String(new FormData(form).get("email") || "").trim();
+        navigate(email.includes("@") ? `/email-signin?email=${encodeURIComponent(email)}` : "/email-signin");
+      },
+    }, "Email me a sign-in link"),
     el("button", {
       className: "ghost-btn",
       type: "button",
@@ -5666,6 +5674,93 @@ function renderLogin() {
   });
 
   viewEl.replaceChildren(el("div", { className: "auth-splash" }, [form]));
+}
+
+function renderEmailSignIn() {
+  setAuthVisible(false);
+  const { query } = parseRoute();
+  const prefillEmail = query.get("email") || "";
+  const prefillToken = query.get("token") || "";
+  const prefillCode = query.get("code") || "";
+  const error = el("div", { className: "error hidden" });
+  const ok = el("div", { className: "muted hidden" });
+  const form = el("form", { className: "stack auth-card" }, [
+    el("h1", {}, "Sign in by email"),
+    el("p", { className: "muted" }, "We’ll email a one-time code and a link. Opening the link signs you in. You can set a password later in Settings."),
+    el("label", {}, ["Email", el("input", {
+      name: "email",
+      type: "email",
+      required: "true",
+      autocomplete: "email",
+      value: prefillEmail,
+    })]),
+    el("label", {}, ["One-time code", el("input", {
+      name: "code",
+      inputmode: "numeric",
+      autocomplete: "one-time-code",
+      placeholder: "Optional if you opened the link",
+      value: prefillCode,
+    })]),
+    el("input", { name: "token", type: "hidden", value: prefillToken }),
+    error,
+    ok,
+    el("button", { className: "primary-btn", type: "submit", name: "send" }, "Email me a link"),
+    el("button", { className: "ghost-btn", type: "submit", name: "code" }, "Sign in with code"),
+    el("button", { className: "ghost-btn", type: "button", onClick: () => navigate("/login") }, "Back to sign in"),
+  ]);
+
+  async function finishSignIn(body) {
+    const result = await api("/auth/email-signin/confirm", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (!result?.access_token) throw new Error("Sign-in did not start. Request a new link.");
+    setToken(result.access_token);
+    localStorage.setItem(SESSION_RENEWED_KEY, String(Date.now()));
+    localStorage.removeItem(LAST_ROUTE_KEY);
+    state.user = await api("/auth/me");
+    state.dynamics = await api("/dynamics");
+    showToast("Signed in.");
+    navigateAfterAuth();
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    error.classList.add("hidden");
+    ok.classList.add("hidden");
+    const data = new FormData(form);
+    const email = String(data.get("email") || "").trim();
+    const code = String(data.get("code") || "").trim();
+    const token = String(data.get("token") || "").trim();
+    const useCode = event.submitter && event.submitter.name === "code";
+    try {
+      if (useCode) {
+        const body = { email };
+        if (code) body.code = code;
+        if (token) body.token = token;
+        if (!body.code && !body.token) throw new Error("Enter the code from the email.");
+        await finishSignIn(body);
+        return;
+      }
+      const result = await api("/auth/email-signin/request", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      ok.textContent = result.detail || "If that email is registered, a sign-in message was sent.";
+      ok.classList.remove("hidden");
+    } catch (err) {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    }
+  });
+
+  viewEl.replaceChildren(el("div", { className: "auth-splash" }, [form]));
+  if (prefillToken && prefillEmail) {
+    finishSignIn({ email: prefillEmail, token: prefillToken, code: prefillCode || undefined }).catch((err) => {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    });
+  }
 }
 
 function renderForgotPassword() {
@@ -8852,7 +8947,7 @@ function openMoreSheet(dynamicId) {
       },
     }, [
       el("span", {}, "Games"),
-      el("span", { className: "muted" }, "Wheel, timers, and fates"),
+      el("span", { className: "muted" }, "Orgasm Roulette and toy spin"),
     ]));
   }
   buttons.push(el("button", {
@@ -9952,6 +10047,22 @@ function renderTaskGoals(dynamicId) {
         renderTasksActsSwitcher(dynamicId, "goals"),
         el("p", { className: "muted" }, "Keyholder goals for grants and gifts. Progress also shows in the header."),
       ]);
+      const marbleHost = el("div");
+      stack.appendChild(marbleHost);
+      api(`/dynamics/${dynamicId}/play-games/roulette`).then((game) => {
+        if (!game || !game.enabled) return;
+        marbleHost.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Marble pulls"),
+          el("p", { className: "muted" }, "Orgasm Roulette is on. These events earn a pull or add an orgasm marble."),
+          ...((game.grant_rules || []).map((rule) => el("p", {}, `${rouletteRuleLabel(rule)} ${rule.progress || 0} of ${rule.every || 1}.`))),
+          !(game.grant_rules || []).length ? el("p", { className: "muted" }, "No pull rules yet.") : null,
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/roulette`),
+          }, "Edit on Orgasm Roulette"),
+        ].filter(Boolean)));
+      }).catch(() => {});
       if (confession) {
         stack.appendChild(el("div", { className: "card stack" }, [
           el("h2", {}, "Confession"),
@@ -12443,7 +12554,7 @@ function renderAssistant(dynamicId) {
             onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
           }, [
             el("strong", {}, "Games"),
-            el("span", { className: "muted" }, "Timer, red light / green light, fates, and the wheel"),
+            el("span", { className: "muted" }, "Orgasm Roulette and toy spin"),
           ])
         );
         stack.appendChild(
@@ -12480,7 +12591,7 @@ function renderAssistant(dynamicId) {
             onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
           }, [
             el("strong", {}, "Games"),
-            el("span", { className: "muted" }, "Timer, red light / green light, fates, and the wheel"),
+            el("span", { className: "muted" }, "Orgasm Roulette and toy spin"),
           ])
         );
         stack.appendChild(
@@ -12851,84 +12962,325 @@ function voiceFromPartner(partner, fallback) {
 
 function renderPlaytimeGames(dynamicId) {
   clearGameClock();
-  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading games…"));
-  Promise.all([
-    loadDynamic(dynamicId),
-    api(`/dynamics/${dynamicId}/playtime/spin/game`).catch(() => ({ status: "none", can_spin_post_orgasm: false })),
-  ])
-    .then(([_, game]) => {
-      const you = state.currentDynamic?.partners?.find((p) => p.is_you);
-      const stack = el("div", { className: "stack" }, [
-        el("h1", {}, "Games"),
-        el("p", { className: "muted" }, `When ${voiceFromPartner(state.currentDynamic?.partners?.find((p) => p.role === "submissive"), "your partner").name} has almost earned release or a full orgasm.`),
-      ]);
-      if (game.can_spin_post_orgasm || game.status === "awaiting_post_spin") {
-        stack.appendChild(
-          el("div", { className: "card stack" }, [
-            el("h2", {}, "Post-orgasm wheel waiting"),
-            el("p", { className: "muted" }, "Open the current game and spin for post-orgasm task(s)."),
-            el("button", {
-              className: "primary-btn",
-              type: "button",
-              onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/spin?post=1`),
-            }, "Spin now"),
-          ])
-        );
-      }
-      if (you?.role === "dominant" || you?.role === "submissive") {
-        stack.appendChild(
-          el("button", {
-            className: "choice-btn playtime-option",
-            type: "button",
-            onClick: () =>
-              navigate(
-                game.status === "awaiting_post_spin"
-                  ? `/dynamic/${dynamicId}/assistant/games/spin?post=1`
-                  : `/dynamic/${dynamicId}/assistant/games/spin`
-              ),
-          }, [
-            el("strong", {}, "Spin the wheel"),
-            el(
-              "span",
-              { className: "muted" },
-              game.status === "awaiting_post_spin"
-                ? "Continue the current post-orgasm spin"
-                : you?.role === "dominant"
-                ? "Dice → outcomes → fate (secrets stay keyholder-only)"
-                : "Shared outcomes only — secrets stay with the keyholder"
-            ),
-          ])
-        );
-      }
-      appendGameTimer(stack);
-      [
-        ["Red light, green light", "Green means go. Red means freeze.", "red-light"],
-        ["Toy spin", "Spin among toys marked owned.", "toys"],
-        ["Fate cards", "Six hidden fates, then a task.", "fate"],
-      ].forEach(([title, subtitle, slug]) => {
-        stack.appendChild(el("button", {
-          className: "choice-btn playtime-option",
-          type: "button",
-          onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/${slug}`),
-        }, [
-          el("strong", {}, title),
-          el("span", { className: "muted" }, subtitle),
-        ]));
-      });
-      stack.appendChild(
-        el("button", {
-          className: "ghost-btn",
-          type: "button",
-          onClick: () => {
-            clearGameClock();
-            navigate(`/dynamic/${dynamicId}/assistant`);
-          },
-        }, "Back to Playtime")
-      );
-      viewEl.replaceChildren(stack);
-      updateBottomNav();
-    })
+  const stack = el("div", { className: "stack" }, [
+    el("h1", {}, "Games"),
+    el("p", { className: "muted" }, "Orgasm Roulette and toy spin."),
+  ]);
+  stack.appendChild(el("button", {
+    className: "choice-btn playtime-option",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/roulette`),
+  }, [
+    el("strong", {}, "Orgasm Roulette"),
+    el("span", { className: "muted" }, "Rules decide what earns a pull. Logged orgasms, ruins, and denials move the marbles."),
+  ]));
+  stack.appendChild(el("button", {
+    className: "choice-btn playtime-option",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/toys`),
+  }, [
+    el("strong", {}, "Toy spin"),
+    el("span", { className: "muted" }, "Spin among toys marked owned."),
+  ]));
+  stack.appendChild(el("button", {
+    className: "ghost-btn",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+  }, "Back to Playtime"));
+  viewEl.replaceChildren(stack);
+  updateBottomNav();
+}
+
+const ROULETTE_MARBLES = {
+  R: { name: "Ruin", color: "#a855f7" },
+  D: { name: "Denial", color: "#d64545" },
+  O: { name: "Orgasm", color: "#f4f4f4" },
+};
+
+function renderRoulette(dynamicId) {
+  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading Orgasm Roulette…"));
+  api(`/dynamics/${dynamicId}/play-games/roulette`)
+    .then((game) => paintRoulette(dynamicId, game))
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
+}
+
+function paintRoulette(dynamicId, game) {
+  const odds = game.probabilities || {};
+  const stack = el("div", { className: "stack" });
+  stack.appendChild(el("h1", {}, "Orgasm Roulette"));
+  stack.appendChild(el("p", { className: "muted" }, game.enabled
+    ? `Day ${game.campaign_day || 1} of 90. Started ${game.started_on || ""}.`
+    : "The marble bag is off."));
+  stack.appendChild(el("p", { className: "muted" }, "Choose what earns a pull. Logged orgasms, ruins, and denials still move the marbles. Bag and reserve share one set of each color."));
+  const toggle = el("input", { type: "checkbox" });
+  toggle.checked = !!game.enabled;
+  toggle.addEventListener("change", () => {
+    api(`/dynamics/${dynamicId}/play-games/roulette`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: toggle.checked, mode: game.mode || "virtual" }),
+    })
+      .then((next) => paintRoulette(dynamicId, next))
+      .catch((err) => {
+        toggle.checked = !!game.enabled;
+        showToast(err.message);
+      });
+  });
+  stack.appendChild(el("label", { className: "row" }, [toggle, el("span", {}, "Game on")]));
+  stack.appendChild(rouletteChart(game));
+  stack.appendChild(rouletteGrantEditor(dynamicId, game));
+  stack.appendChild(el("div", { className: "card stack" }, [
+    el("h2", {}, "Bag"),
+    rouletteCounts(dynamicId, game, "bag", odds),
+    el("p", { className: "muted" }, `${game.pending_count || 0} pull${game.pending_count === 1 ? "" : "s"} waiting${game.pending_reason ? ` · ${game.pending_reason}` : ""}`),
+  ]));
+  stack.appendChild(rouletteReserveCard(dynamicId, game));
+  const session = game.session || {};
+  const draws = session.draws || [];
+  if (draws.length) {
+    const last = draws[draws.length - 1];
+    const meta = ROULETTE_MARBLES[last.marble];
+    stack.appendChild(el("div", { className: "card stack" }, [
+      el("h2", {}, meta ? meta.name : "Pull"),
+      el("p", {}, (last.notes || []).join(" ")),
+    ]));
+  }
+  if (game.enabled && game.can_draw) {
+    stack.appendChild(rouletteSlide(game.session?.bonus ? "Slide to pull again" : "Slide to pull", () =>
+      api(`/dynamics/${dynamicId}/play-games/roulette/draw`, { method: "POST" })
+        .then((next) => paintRoulette(dynamicId, next))
+    ));
+  } else if (game.enabled && !game.can_end) {
+    stack.appendChild(el("p", { className: "muted" }, "No pull is open."));
+  }
+  if (game.enabled && game.can_end) {
+    stack.appendChild(rouletteSlide("Slide to end the session", () =>
+      api(`/dynamics/${dynamicId}/play-games/roulette/end`, { method: "POST" })
+        .then((next) => paintRoulette(dynamicId, next))
+    ));
+  }
+  const history = game.history || [];
+  if (history.length) {
+    stack.appendChild(el("div", { className: "card stack" }, [
+      el("h2", {}, "Recent"),
+      ...history.slice(0, 8).map((row) => el("p", { className: "muted" }, (row.notes || []).join(" ") || row.marble || "")),
+    ]));
+  }
+  stack.appendChild(el("button", {
+    className: "ghost-btn",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
+  }, "Back to Games"));
+  viewEl.replaceChildren(stack);
+  updateBottomNav();
+}
+
+function rouletteCounts(dynamicId, game, which, odds) {
+  const source = game[which] || {};
+  const wrap = el("div", { className: "roulette-bag" });
+  ["R", "D", "O"].forEach((key) => {
+    const meta = ROULETTE_MARBLES[key];
+    const send = (delta) => {
+      const bag = { R: 0, D: 0, O: 0, ...(game.bag || {}) };
+      const reserve = { R: 0, D: 0, O: 0, ...(game.reserve || {}) };
+      const target = which === "reserve" ? reserve : bag;
+      target[key] = Math.max(0, Math.min(24, (Number(target[key]) || 0) + delta));
+      api(`/dynamics/${dynamicId}/play-games/roulette/bag`, {
+        method: "PUT",
+        body: JSON.stringify({ bag, reserve, focus: which === "reserve" ? "reserve" : "bag" }),
+      })
+        .then((next) => paintRoulette(dynamicId, next))
+        .catch((err) => showToast(err.message));
+    };
+    wrap.appendChild(el("div", { className: "roulette-count" }, [
+      el("span", { className: "roulette-dot", style: `background:${meta.color}` }),
+      el("span", { className: "roulette-name" }, meta.name + (odds && odds[key] != null ? ` · ${odds[key]}%` : "")),
+      el("button", { type: "button", className: "ghost-btn roulette-step", onClick: () => send(-1) }, "−"),
+      el("strong", {}, String(source[key] || 0)),
+      el("button", { type: "button", className: "ghost-btn roulette-step", onClick: () => send(1) }, "+"),
+    ]));
+  });
+  return wrap;
+}
+
+function rouletteChart(game) {
+  const rows = game.chart || [];
+  const card = el("div", { className: "card stack" }, [
+    el("h2", {}, "Marbles"),
+    el("p", { className: "muted" }, "Total is the bag plus the reserve. Next-pull odds come from the bag. Pull share is how often that color has been drawn."),
+  ]);
+  rows.forEach((row) => {
+    const meta = ROULETTE_MARBLES[row.key] || { name: row.name, color: "#ccc" };
+    card.appendChild(el("div", { className: "roulette-chart-row" }, [
+      el("span", { className: "roulette-dot", style: `background:${meta.color}` }),
+      el("strong", {}, meta.name),
+      el("span", {}, `${row.total} total`),
+      el("span", {}, `${row.bag} in bag`),
+      el("span", {}, `${row.reserve} reserve`),
+      row.removed ? el("span", {}, `${row.removed} drawn out`) : null,
+      el("span", {}, `${row.pulled} pulled · ${row.pulled_pct}%`),
+      el("span", {}, `next ${row.next_pct}%`),
+    ]));
+    card.appendChild(el("div", { className: "roulette-odds" }, [
+      el("span", {
+        className: "roulette-odds-pulled",
+        style: `width:${Math.max(0, Math.min(100, row.pulled_pct || 0))}%;background:${meta.color}`,
+      }),
+    ]));
+  });
+  return card;
+}
+
+function rouletteReserveCard(dynamicId, game) {
+  const card = el("div", { className: "card stack" });
+  const reserve = game.reserve || {};
+  const inputs = {};
+  card.appendChild(el("h2", {}, "Reserve"));
+  card.appendChild(rouletteCounts(dynamicId, game, "reserve"));
+  card.appendChild(el("p", { className: "muted" }, "Plus and minus move marbles between the bag and the reserve. Edit reserve to add or remove marbles."));
+  const editor = el("div", { className: "stack hidden" });
+  ["R", "D", "O"].forEach((key) => {
+    const meta = ROULETTE_MARBLES[key];
+    inputs[key] = el("input", {
+      type: "number",
+      min: "0",
+      max: "24",
+      value: String(reserve[key] || 0),
+    });
+    editor.appendChild(el("label", { className: "roulette-count" }, [
+      el("span", { className: "roulette-dot", style: `background:${meta.color}` }),
+      el("span", { className: "roulette-name" }, meta.name),
+      inputs[key],
+    ]));
+  });
+  editor.appendChild(el("button", {
+    type: "button",
+    className: "primary-btn",
+    onClick: () => {
+      const next = { R: 0, D: 0, O: 0 };
+      ["R", "D", "O"].forEach((key) => {
+        next[key] = Math.max(0, Math.min(24, Number(inputs[key].value) || 0));
+      });
+      api(`/dynamics/${dynamicId}/play-games/roulette/bag`, {
+        method: "PUT",
+        body: JSON.stringify({ bag: game.bag || {}, reserve: next, focus: "reserve-set" }),
+      })
+        .then((updated) => paintRoulette(dynamicId, updated))
+        .catch((err) => showToast(err.message));
+    },
+  }, "Save reserve"));
+  card.appendChild(editor);
+  card.appendChild(el("button", {
+    type: "button",
+    className: "ghost-btn",
+    onClick: () => editor.classList.toggle("hidden"),
+  }, "Edit reserve"));
+  return card;
+}
+
+function rouletteRuleLabel(rule) {
+  const every = Number(rule.every) || 1;
+  const count = every === 1 ? "Each" : `Every ${every}`;
+  const effect = rule.effect === "add_orgasm" ? "adds an orgasm marble from reserve" : "earns a marble pull";
+  if (rule.kind === "domme_orgasm") return `${count} orgasm for the keyholder ${effect}.`;
+  const tag = (rule.tag || "").trim();
+  return tag ? `${count} task tagged ${tag} ${effect}.` : `${count} completed task ${effect}.`;
+}
+
+function rouletteGrantEditor(dynamicId, game) {
+  const rules = (game.grant_rules || []).map((rule) => ({ ...rule }));
+  const card = el("div", { className: "card stack" }, [
+    el("h2", {}, "What earns a pull"),
+    el("p", { className: "muted" }, "These count while the game is on. A task can match more than one rule."),
+  ]);
+  if (!rules.length) card.appendChild(el("p", { className: "muted" }, "Nothing earns a pull until you add a rule."));
+  rules.forEach((rule) => {
+    const every = Number(rule.every) || 1;
+    card.appendChild(el("div", { className: "roulette-rule" }, [
+      el("p", {}, rouletteRuleLabel(rule)),
+      el("p", { className: "muted" }, `${rule.progress || 0} of ${every}`),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => saveRouletteGrants(dynamicId, rules.filter((item) => item.id !== rule.id)),
+      }, "Remove"),
+    ]));
+  });
+  const kind = el("select", {}, [
+    el("option", { value: "domme_orgasm" }, "Orgasm for the keyholder"),
+    el("option", { value: "task_tag" }, "Completed task"),
+  ]);
+  const tag = el("input", { type: "text", placeholder: "Tag, or blank for any task" });
+  const every = el("input", { type: "number", min: "1", max: "50", value: "1" });
+  const effect = el("select", {}, [
+    el("option", { value: "pull" }, "Earn a marble pull"),
+    el("option", { value: "add_orgasm" }, "Add an orgasm marble from reserve"),
+  ]);
+  const syncTag = () => {
+    tag.disabled = kind.value !== "task_tag";
+  };
+  kind.addEventListener("change", syncTag);
+  syncTag();
+  card.appendChild(el("div", { className: "stack" }, [
+    el("label", {}, ["When", kind]),
+    el("label", {}, ["Tag", tag]),
+    el("label", {}, ["How many", every]),
+    el("label", {}, ["Then", effect]),
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => {
+        const next = rules.concat([{
+          id: "g" + Date.now(),
+          kind: kind.value,
+          tag: kind.value === "task_tag" ? tag.value.trim() : "",
+          every: Math.max(1, Math.min(50, Number(every.value) || 1)),
+          effect: effect.value,
+        }]);
+        saveRouletteGrants(dynamicId, next);
+      },
+    }, "Add rule"),
+  ]));
+  return card;
+}
+
+function saveRouletteGrants(dynamicId, rules) {
+  api(`/dynamics/${dynamicId}/play-games/roulette/grants`, {
+    method: "PUT",
+    body: JSON.stringify({
+      rules: rules.map((rule) => ({
+        id: rule.id || "",
+        kind: rule.kind,
+        tag: rule.tag || "",
+        every: Number(rule.every) || 1,
+        effect: rule.effect || "pull",
+      })),
+    }),
+  })
+    .then((next) => paintRoulette(dynamicId, next))
+    .catch((err) => showToast(err.message));
+}
+
+function rouletteSlide(label, action) {
+  const input = el("input", { className: "roulette-slide", type: "range", min: "0", max: "100", value: "0" });
+  let busy = false;
+  input.addEventListener("change", () => {
+    if (Number(input.value) < 100) {
+      input.value = "0";
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    Promise.resolve(action())
+      .catch((err) => showToast(err.message))
+      .finally(() => {
+        busy = false;
+        input.value = "0";
+      });
+  });
+  return el("label", { className: "roulette-slide-wrap" }, [
+    el("span", {}, label),
+    input,
+  ]);
 }
 
 function renderSpinTheWheel(dynamicId) {
@@ -25886,7 +26238,7 @@ function renderSettings() {
       const currentPassword = el("input", {
         type: "password",
         autocomplete: "current-password",
-        placeholder: "Current password",
+        placeholder: "Current password (optional)",
       });
       const newPassword = el("input", {
         type: "password",
@@ -25896,8 +26248,8 @@ function renderSettings() {
       });
       const passwordError = el("div", { className: "error hidden" });
       stack.appendChild(el("div", { className: "card stack" }, [
-        el("h2", {}, "Change password"),
-        el("p", { className: "muted" }, "Update your sign-in password. Forgot it? Use Forgot password on the sign-in screen."),
+        el("h2", {}, "Password"),
+        el("p", { className: "muted" }, "Set or change your password any time. Leave the current password blank if you signed in by email."),
         el("label", {}, ["Current password", currentPassword]),
         el("label", {}, ["New password", newPassword]),
         passwordError,
@@ -25906,8 +26258,8 @@ function renderSettings() {
         isDirty: () => !!(currentPassword.value || newPassword.value),
         save: async () => {
           passwordError.classList.add("hidden");
-          if (!currentPassword.value || !newPassword.value) {
-            throw new Error("Enter current and new password.");
+          if (!newPassword.value || newPassword.value.length < 6) {
+            throw new Error("Enter a new password of at least 6 characters.");
           }
           await api("/auth/password", {
             method: "PUT",
@@ -27704,11 +28056,11 @@ async function renderRoute() {
   closeNavSheets();
   const { parts } = parseRoute();
   if (!state.token && parts[0] !== "login" && parts[0] !== "register"
-      && parts[0] !== "forgot-password" && parts[0] !== "reset-password") {
+      && parts[0] !== "forgot-password" && parts[0] !== "reset-password" && parts[0] !== "email-signin") {
     renderLogin();
     return;
   }
-  if (state.token && state.user && ["login", "forgot-password", "reset-password"].includes(parts[0])) {
+  if (state.token && state.user && ["login", "forgot-password", "reset-password", "email-signin"].includes(parts[0])) {
     navigateAfterAuth();
     return;
   }
@@ -27720,6 +28072,7 @@ async function renderRoute() {
 
   if (parts[0] === "login") return renderLogin();
   if (parts[0] === "register") return renderRegister();
+  if (parts[0] === "email-signin") return renderEmailSignIn();
   if (parts[0] === "forgot-password") return renderForgotPassword();
   if (parts[0] === "reset-password") return renderResetPassword();
   if (parts[0] === "onboarding") return renderOnboarding();
@@ -27785,6 +28138,7 @@ async function renderRoute() {
     if (parts[2] === "assistant") {
       if (parts[3] === "chat") return renderAssistantChatPage(dynamicId);
       if (parts[3] === "scene") return renderPlaytimeScene(dynamicId);
+      if (parts[3] === "games" && parts[4] === "roulette") return renderRoulette(dynamicId);
       if (parts[3] === "games" && parts[4] === "spin") return renderSpinTheWheel(dynamicId);
       if (parts[3] === "games" && parts[4] === "red-light") return renderRedLightGame(dynamicId);
       if (parts[3] === "games" && parts[4] === "toys") return renderToySpin(dynamicId);

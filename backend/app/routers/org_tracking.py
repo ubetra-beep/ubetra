@@ -607,6 +607,10 @@ def log_tracking_entry(
             orgasm_counts=orgasm_counts,
         )
 
+    from ..services.roulette import note_tracking_entry
+
+    note_tracking_entry(db, dynamic_id, target, entry)
+
     db.commit()
 
     db.refresh(entry)

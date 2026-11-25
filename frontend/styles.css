@@ -5924,3 +5924,73 @@ details[open] summary {
   opacity: 0.7;
 }
 
+.roulette-bag {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.roulette-count {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.roulette-name {
+  flex: 1;
+}
+
+.roulette-step {
+  min-width: 2.4rem;
+  padding: 0.2rem 0.45rem;
+}
+
+.roulette-dot {
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+}
+
+.roulette-slide-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.roulette-slide {
+  width: 100%;
+}
+
+.roulette-chart-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.7rem;
+}
+
+.roulette-odds {
+  height: 0.35rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.roulette-odds-pulled {
+  display: block;
+  height: 100%;
+}
+
+.roulette-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.8rem;
+}
+
+.roulette-rule p {
+  margin: 0;
+}
+

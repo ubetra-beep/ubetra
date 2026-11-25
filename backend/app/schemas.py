@@ -83,8 +83,18 @@ class UserEmailUpdate(BaseModel):
 
 
 class UserPasswordUpdate(BaseModel):
-    current_password: str = Field(min_length=1, max_length=128)
+    current_password: str = ""
     new_password: str = Field(min_length=6, max_length=128)
+
+
+class EmailSignInRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+
+
+class EmailSignInConfirm(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    code: str | None = Field(default=None, max_length=12)
+    token: str | None = Field(default=None, max_length=128)
 
 
 class PasswordResetRequest(BaseModel):
