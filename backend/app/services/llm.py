@@ -112,7 +112,7 @@ PROVIDER_CATALOG = {
     LlmProvider.gemini.value: {
         "label": "Google Gemini",
         "description": "API key from Google AI Studio. Strong general model; check Google's safety settings for adult content.",
-        "policy_notes": "Google applies safety filters by default. Consensual adult/BDSM text may still be blocked. Best for structured tasks when content is mild. For explicit scene writing or manga, prefer LM Studio (local uncensored) or OpenRouter models marketed as uncensored. Gemini 2.0/2.5 Flash IDs are retired — use gemini-3.5-flash.",
+        "policy_notes": "Google applies safety filters by default. Consensual adult/BDSM text may still be blocked. Best for structured tasks when content is mild. For explicit scene writing, prefer LM Studio (local uncensored) or OpenRouter models marketed as uncensored. Gemini 2.0/2.5 Flash IDs are retired — use gemini-3.5-flash.",
         "default_model": DEFAULT_GEMINI_MODEL,
         "models": list(GEMINI_MODELS),
         "key_url": "https://aistudio.google.com/apikey",
@@ -123,7 +123,7 @@ PROVIDER_CATALOG = {
     LlmProvider.openai.value: {
         "label": "OpenAI",
         "description": "API key from platform.openai.com. Widely used; content may be filtered under usage policies.",
-        "policy_notes": "OpenAI restricts some explicit sexual content in API use. Often more permissive for consensual adult scene planning than consumer ChatGPT, but still policy-bound. Image models (DALL·E) frequently refuse NSFW manga panels — use script/hybrid modes or a local image pipeline.",
+        "policy_notes": "OpenAI restricts some explicit sexual content in API use. Often more permissive for consensual adult scene planning than consumer ChatGPT, but still policy-bound. OpenAI image models often refuse adult pictures.",
         "default_model": "gpt-4o",
         "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
         "key_url": "https://platform.openai.com/api-keys",
@@ -393,6 +393,7 @@ def generate_text_with_config(
     dynamic_context: str,
     system_instruction: str | None = None,
     dynamic: Dynamic | None = None,
+    image_data_urls: list[str] | None = None,
 ) -> str:
     if not config.api_key:
         if config.using_server_default:
@@ -436,6 +437,7 @@ def generate_text_with_config(
             user_prompt=prompt,
             base_url=config.base_url or None,
             extra_headers=extra or None,
+            image_data_urls=image_data_urls,
         )
 
     from .gemini import generate_gemini_text
@@ -457,6 +459,7 @@ def generate_text(
     dynamic: Dynamic | None = None,
     tool_id: str | None = None,
     db: Session | None = None,
+    image_data_urls: list[str] | None = None,
 ) -> str:
     config = resolve_llm_config(user, dynamic)
     if tool_id and db is not None:
@@ -478,6 +481,7 @@ def generate_text(
         dynamic_context=dynamic_context,
         system_instruction=system_instruction,
         dynamic=dynamic,
+        image_data_urls=image_data_urls,
     )
 
 

@@ -3,6 +3,13 @@
 All notable changes to UBETRA are documented here.
 Versioning follows SemVer while the app is in **beta (`0.x`)**. `1.0.0` will be tagged when the maintainer declares it ready.
 
+## [1.19] — 2026-10-24
+
+### Added
+- Switch mode on Playtime. The keyholder can offer a timed switch, a one-session switch, or a switch that lasts until a goal the sub drafts is met. A goal can also gift a switch: the sub drafts one goal or directs one scene, and the switch starts only after the keyholder approves it
+- Tasks, chastity, and the sub's existing goals keep running. Stored roles do not change
+- Service worker cache `ubetra-v165`
+
 ## [1.18] — 2026-10-20
 
 ### Fixed

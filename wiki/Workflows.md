@@ -1,5 +1,9 @@
 # Workflows
 
+The full list, including OpenRouter setup and the day-to-day screens, is [How to](How-to). The diagrams below are the paths that overlap and are easy to misread as bugs.
+
+
+
 Troubleshooting maps of how UBETRA actually runs. Open Settings → Help → Wiki → **Workflows**. Related: [Feature map](Feature-map) (how modules talk), [AI context](AI-context) (what the model is allowed to see), and [Context maps](Context-maps) (which live packs load per screen).
 
 If a screen “does nothing,” start at the **spine**, then jump to the module flowchart.

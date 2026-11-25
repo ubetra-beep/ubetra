@@ -24,8 +24,10 @@ from .sleep_nights import group_sleep_nights_by_subject, merged_sleep_intervals
 from .tags import entry_all_tags, entry_matches_selected_tags, tags_to_list
 from ..timeutil import as_naive_utc
 from .tracking_events import (
+    counts_as_full_orgasm,
+    entry_counts_as_full_orgasm,
+    entry_orgasm_tag_lists,
     has_denial_tag,
-    has_full_orgasm_tag,
     has_milking_tag,
     has_ruined_orgasm_tag,
     is_orgasm_event,
@@ -83,6 +85,29 @@ def _month_keys(period_start: date, period_end: date) -> list[str]:
     return keys
 
 
+def _last_full_orgasm_date(db: Session, dynamic_id: str, membership_id: str) -> date | None:
+    rows = (
+        db.query(OrgTrackingEntry)
+        .options(joinedload(OrgTrackingEntry.orgasms))
+        .filter(
+            OrgTrackingEntry.dynamic_id == dynamic_id,
+            OrgTrackingEntry.for_membership_id == membership_id,
+        )
+        .all()
+    )
+    latest = None
+    for entry in rows:
+        if not is_orgasm_event(entry.event_type) or not entry_counts_as_full_orgasm(entry):
+            continue
+        occurred = as_naive_utc(entry.occurred_at) or entry.occurred_at
+        if occurred is None:
+            continue
+        day = occurred.date()
+        if latest is None or day > latest:
+            latest = day
+    return latest
+
+
 def _chastity_days_bounds(
     db: Session,
     dynamic_id: str,
@@ -119,17 +144,32 @@ def build_chastity_days_report(
     *,
     year: int,
     since_first: bool = False,
+    since_recent: bool = False,
 ) -> dict:
     now = datetime.utcnow()
     tracked_subs = chastity_subs(memberships)
-    period_start, period_end, year, since_first, range_start = _chastity_days_bounds(
-        db,
-        dynamic_id,
-        [s.id for s in tracked_subs],
-        year,
-        since_first,
-        now,
-    )
+    partner_start: dict[str, date] = {}
+    if since_recent:
+        today = now.date()
+        floor = today - timedelta(days=21)
+        for sub in tracked_subs:
+            last = _last_full_orgasm_date(db, dynamic_id, sub.id)
+            partner_start[sub.id] = floor if last is None else min(floor, last)
+        earliest = min(partner_start.values()) if partner_start else floor
+        period_start = datetime(earliest.year, earliest.month, earliest.day)
+        period_end = now
+        year = earliest.year
+        since_first = False
+        range_start = earliest.isoformat()
+    else:
+        period_start, period_end, year, since_first, range_start = _chastity_days_bounds(
+            db,
+            dynamic_id,
+            [s.id for s in tracked_subs],
+            year,
+            since_first,
+            now,
+        )
     lockups = (
         db.query(ChastityLockup)
         .options(joinedload(ChastityLockup.breaks))
@@ -193,14 +233,15 @@ def build_chastity_days_report(
     )
     dots_by_member_day: dict[tuple[str, str], set[str]] = defaultdict(set)
     for entry in tracking_rows:
-        tags = entry_all_tags(entry)
         dots = dots_by_member_day[(entry.for_membership_id, entry.occurred_at.date().isoformat())]
-        if has_denial_tag(tags) or has_milking_tag(tags):
-            dots.add("denied")
-        if has_ruined_orgasm_tag(tags):
-            dots.add("ruined")
-        if has_full_orgasm_tag(tags):
-            dots.add("full")
+        tag_lists = entry_orgasm_tag_lists(entry) if is_orgasm_event(entry.event_type) else [entry_all_tags(entry)]
+        for tags in tag_lists:
+            if has_denial_tag(tags) or has_milking_tag(tags):
+                dots.add("denied")
+            if has_ruined_orgasm_tag(tags):
+                dots.add("ruined")
+            if is_orgasm_event(entry.event_type) and counts_as_full_orgasm(tags):
+                dots.add("full")
 
     day_list = _days_in_range(period_start.date(), period_end.date())
     partners = []
@@ -208,7 +249,21 @@ def build_chastity_days_report(
         days_payload = []
         partial_days = free_days = 0
         whole_days = count_rolling_full_days(lockups, sub.id, until=period_end)
+        first_lock = None
+        for lockup in lockups:
+            if lockup.for_membership_id != sub.id or lockup.started_at is None:
+                continue
+            started = as_naive_utc(lockup.started_at) or lockup.started_at
+            if first_lock is None or started < first_lock:
+                first_lock = started
+        first_day = first_lock.date() if first_lock is not None else None
         for day in day_list:
+            window = partner_start.get(sub.id)
+            if window is not None:
+                if day < window:
+                    continue
+            elif first_day is None or day < first_day:
+                continue
             status, locked = calendar_day_status(
                 lockups, sub.id, day, period_end=period_end
             )
@@ -347,24 +402,20 @@ def build_orgasm_report(
                 orgasms_during_own_lockup += count
             if ctx["during_partner_lockup"]:
                 orgasms_while_partner_locked += count
-            rows = entry.orgasms or []
-            is_full = False
-            if rows:
-                is_full = any(has_full_orgasm_tag(tags_to_list(row.tags)) for row in rows)
-            else:
-                is_full = has_full_orgasm_tag(tags_to_list(entry.tags))
-            if is_full:
+            if entry_counts_as_full_orgasm(entry):
                 full_orgasm_dates.add(entry.occurred_at.date())
                 if month_key in month_full:
                     month_full[month_key] += 1
             if month_key in month_ruined:
-                tag_ruin = 0
+                rows = entry.orgasms or []
                 if rows:
                     tag_ruin = sum(
                         1 for row in rows if has_ruined_orgasm_tag(tags_to_list(row.tags))
                     )
                 elif has_ruined_orgasm_tag(tags_to_list(entry.tags)):
                     tag_ruin = 1
+                else:
+                    tag_ruin = 0
                 month_ruined[month_key] += tag_ruin
 
         play_dates = {e.occurred_at.date() for e in play_entries}
@@ -449,7 +500,7 @@ def build_orgasm_report(
         "total_days": total_days,
         "selected_tags": selected_tags,
         "partners": partners,
-        "note": "Charts use year-to-date totals. Averages divide by elapsed weeks/months. Orgasm days count sessions with orgasms; each orgasm row is tagged separately. Play days are no-orgasm sessions.",
+        "note": "Charts use year-to-date totals. Averages divide by elapsed weeks/months. Older orgasm rows without a ruined, denied, or milking tag count as full orgasms. Play days are no-orgasm sessions.",
     }
 
 

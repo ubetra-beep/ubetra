@@ -63,7 +63,7 @@ OPTIONAL_FEATURES = {
     },
     "gear": {
         "title": "Gear",
-        "section": "knowledge",
+        "section": "playtime",
         "blurb": "Inventory of toys, outfits, and kinky stuff.",
     },
     "org_tracking": {
@@ -123,13 +123,6 @@ OPTIONAL_FEATURES = {
         "title": "Playtime",
         "section": "playtime",
         "blurb": "Scene builder, spin the wheel, and Instructor.",
-    },
-    "manga_comics": {
-        "title": "Monthly manga",
-        "section": "playtime",
-        "blurb": "One generated comic a month. Either partner can enable.",
-        "default_enabled": False,
-        "partner_enableable": True,
     },
     "journal": {
         "title": "Journal",

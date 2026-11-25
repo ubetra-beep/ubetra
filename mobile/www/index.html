@@ -5,27 +5,103 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>UBETRA</title>
     <style>
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        font-family: system-ui, sans-serif;
-        background: #1a1a1a;
-        color: #f2f2f2;
-      }
-      p { opacity: 0.7; }
+      body { margin: 0; min-height: 100vh; font-family: system-ui, sans-serif; background: #1a1a1a; color: #f2f2f2; }
+      main { max-width: 28rem; margin: 0 auto; padding: 2.5rem 1.25rem; }
+      h1 { font-size: 1.6rem; margin-bottom: 0.4rem; }
+      p { color: #c8c8c8; line-height: 1.45; }
+      label { display: block; margin: 1rem 0 0.35rem; }
+      input { width: 100%; box-sizing: border-box; padding: 0.7rem 0.8rem; border-radius: 10px; border: 1px solid #444; background: #111; color: #fff; }
+      button { margin-top: 0.8rem; width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 0; font: inherit; }
+      .primary { background: #d7b4ff; color: #1a1a1a; }
+      .ghost { background: transparent; color: #f2f2f2; border: 1px solid #555; }
+      .error { color: #ff8f8f; }
     </style>
   </head>
   <body>
     <main>
       <h1>UBETRA</h1>
-      <p>Loading secure app…</p>
+      <p id="lead">Where should this phone log? You can use it alone, or point it at your own server.</p>
+      <p id="error" class="error" hidden></p>
+      <label for="url">Server URL</label>
+      <input id="url" type="url" placeholder="https://your-ubetra.example" autocomplete="off" spellcheck="false" />
+      <button id="save" class="primary" type="button">Use this server</button>
+      <button id="phone" class="ghost" type="button">Continue phone-only</button>
     </main>
     <script>
-      // Production builds use capacitor.config.json server.url and never show this page.
-      // Keep a local fallback for `npx cap run` without network.
-      location.replace("https://ubeneeko.duckdns.org/");
+      var urlInput = document.getElementById("url");
+      var errorEl = document.getElementById("error");
+
+      function plugin() {
+        try {
+          return window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.UbetraLocalStore;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function showError(message) {
+        errorEl.hidden = !message;
+        errorEl.textContent = message || "";
+      }
+
+      function validUrl(value) {
+        var text = (value || "").trim().replace(/\/$/, "");
+        if (!/^https?:\/\/[^/\s]+/i.test(text)) return "";
+        return text;
+      }
+
+      async function boot() {
+        var store = plugin();
+        if (!store || !store.getServerConfig) return;
+        var config = await store.getServerConfig();
+        if (config.serverUrl) urlInput.value = config.serverUrl;
+        if (config.serverConfigured && config.serverUrl) {
+          var reachable = false;
+          try {
+            var probe = await store.probeServer();
+            reachable = !!(probe && probe.reachable);
+          } catch (err) {
+            reachable = false;
+          }
+          if (reachable && store.openServer) {
+            await store.openServer({ url: config.serverUrl });
+            return;
+          }
+          if (!reachable) location.replace("/shell.html");
+          return;
+        }
+        if (config.phoneOnly) location.replace("/shell.html");
+      }
+
+      document.getElementById("save").addEventListener("click", async function () {
+        var url = validUrl(urlInput.value);
+        if (!url) {
+          showError("Enter a full http or https URL.");
+          return;
+        }
+        showError("");
+        var store = plugin();
+        if (!store || !store.setServerUrl) {
+          showError("This page saves the URL inside the Android app.");
+          return;
+        }
+        try {
+          await store.setServerUrl({ url: url });
+          var probe = await store.probeServer();
+          if (probe && probe.reachable && store.openServer) await store.openServer({ url: url });
+          else location.replace("/shell.html");
+        } catch (err) {
+          showError(err && err.message ? err.message : "Could not save that URL.");
+        }
+      });
+
+      document.getElementById("phone").addEventListener("click", async function () {
+        var store = plugin();
+        if (store && store.setPhoneOnly) await store.setPhoneOnly();
+        location.replace("/shell.html");
+      });
+
+      document.addEventListener("DOMContentLoaded", function () { boot(); });
     </script>
   </body>
 </html>

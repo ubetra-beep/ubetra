@@ -756,12 +756,10 @@ def build_inbox(db: Session, dynamic_id: str, membership: Membership) -> dict:
         items = [*gift_items, *punish_items, *items]
 
     missing = apply_due_auto_punish(db, dynamic_id)
-    from .edge_guard import removal_inbox_items
 
     extra = [
         *auto_punish_inbox_items(dynamic_id, membership, missing),
         *change_request_inbox_items(db, dynamic_id, membership),
-        *removal_inbox_items(db, dynamic_id, membership),
     ]
     if extra:
         items = [*extra, *items]

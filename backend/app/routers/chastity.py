@@ -487,6 +487,10 @@ def get_chastity_goals(
     dynamic = db.get(Dynamic, dynamic_id)
     if dynamic is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dynamic not found")
+    from ..services.switch_mode import sync_earned_gifts
+
+    sync_earned_gifts(db, dynamic)
+    db.commit()
     progress = build_goals_progress(db, dynamic)
     # Only keyholder sees live progress / countdown
     if not is_dominant(membership):
@@ -800,6 +804,23 @@ def start_lockup(
 
     from ..services.chastity import as_naive_utc, assert_no_lockup_overlap, validate_planned_end
 
+    from ..services.client_events import (
+        clean_client_event_id,
+        remember_client_event,
+        stamp_updated_at,
+    )
+
+    cid = clean_client_event_id(payload.client_event_id)
+    if cid:
+        prior = db.query(ChastityLockup).filter(ChastityLockup.client_event_id == cid).first()
+        if prior is not None:
+            if prior.dynamic_id != dynamic_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="client_event_id belongs to another dynamic",
+                )
+            return _lockup_out(_load_lockup(db, dynamic_id, prior.id), _membership_map(db, dynamic_id))
+
     started_at = as_naive_utc(payload.started_at) or datetime.utcnow()
     planned_end_at = as_naive_utc(payload.planned_end_at)
 
@@ -823,6 +844,8 @@ def start_lockup(
         status=LockupStatus.active,
         record_type=ChastityRecordType.normal,
         tags=tags_to_string(payload.tags),
+        client_event_id=cid or None,
+        updated_at=stamp_updated_at(None, payload.updated_at),
     )
     db.add(lockup)
     dynamic = db.get(Dynamic, dynamic_id)
@@ -833,6 +856,14 @@ def start_lockup(
         dynamic_id,
         membership,
         f"started chastity lockup for {target.display_name}",
+    )
+    remember_client_event(
+        db,
+        dynamic_id=dynamic_id,
+        client_event_id=cid,
+        kind="chastity_start",
+        resource_id=lockup.id,
+        updated_at=lockup.updated_at,
     )
     db.commit()
     lockup = _load_lockup(db, dynamic_id, lockup.id)
@@ -1302,9 +1333,37 @@ def end_lockup(
 ) -> ChastityLockupOut:
     require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
+    from ..services.client_events import (
+        clean_client_event_id,
+        incoming_is_older,
+        remember_client_event,
+        remembered_resource_id,
+        stamp_updated_at,
+    )
+
     lockup = _load_lockup(db, dynamic_id, lockup_id)
+    cid = clean_client_event_id(payload.client_event_id)
+    prior_id = remembered_resource_id(db, dynamic_id, cid)
+    if prior_id:
+        return _lockup_out(_load_lockup(db, dynamic_id, prior_id), _membership_map(db, dynamic_id))
     if lockup.status != LockupStatus.active:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Lockup is already ended")
+        newer = payload.updated_at is not None and not incoming_is_older(lockup.updated_at, payload.updated_at)
+        if newer:
+            lockup.ended_at = payload.ended_at or lockup.ended_at
+            if payload.release_notes.strip():
+                lockup.release_notes = payload.release_notes.strip()
+            lockup.ended_kind = payload.ended_kind
+            lockup.updated_at = stamp_updated_at(lockup.updated_at, payload.updated_at)
+        remember_client_event(
+            db,
+            dynamic_id=dynamic_id,
+            client_event_id=cid,
+            kind="chastity_end",
+            resource_id=lockup.id,
+            updated_at=lockup.updated_at,
+        )
+        db.commit()
+        return _lockup_out(_load_lockup(db, dynamic_id, lockup.id), _membership_map(db, dynamic_id))
 
     dynamic = db.get(Dynamic, dynamic_id)
     if dynamic is not None:
@@ -1349,6 +1408,15 @@ def end_lockup(
         path=f"/dynamic/{dynamic_id}/chastity",
         link_label="Open chastity",
         subject_membership_id=lockup.for_membership_id,
+    )
+    lockup.updated_at = stamp_updated_at(lockup.updated_at, payload.updated_at)
+    remember_client_event(
+        db,
+        dynamic_id=dynamic_id,
+        client_event_id=cid,
+        kind="chastity_end",
+        resource_id=lockup.id,
+        updated_at=lockup.updated_at,
     )
     db.commit()
     lockup = _load_lockup(db, dynamic_id, lockup.id)
@@ -1413,10 +1481,33 @@ def create_break(
 ) -> ChastityLockupOut:
     require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
+    from ..services.client_events import (
+        clean_client_event_id,
+        incoming_is_older,
+        remember_client_event,
+        remembered_resource_id,
+        stamp_updated_at,
+    )
+
     lockup = _load_lockup(db, dynamic_id, lockup_id)
+    cid = clean_client_event_id(payload.client_event_id)
+    prior_id = remembered_resource_id(db, dynamic_id, cid)
+    if prior_id:
+        return _lockup_out(_load_lockup(db, dynamic_id, prior_id), _membership_map(db, dynamic_id))
     if lockup.status != LockupStatus.active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Lockup is not active")
     if active_break(lockup):
+        if incoming_is_older(lockup.updated_at, payload.updated_at):
+            remember_client_event(
+                db,
+                dynamic_id=dynamic_id,
+                client_event_id=cid,
+                kind="chastity_break",
+                resource_id=lockup.id,
+                updated_at=lockup.updated_at,
+            )
+            db.commit()
+            return _lockup_out(_load_lockup(db, dynamic_id, lockup.id), _membership_map(db, dynamic_id))
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A break is already active")
 
     break_type = _parse_break_type(payload.break_type)
@@ -1465,6 +1556,15 @@ def create_break(
         dynamic_id,
         membership,
         f"started chastity break ({reason}) for {target.display_name}",
+    )
+    lockup.updated_at = stamp_updated_at(lockup.updated_at, payload.updated_at)
+    remember_client_event(
+        db,
+        dynamic_id=dynamic_id,
+        client_event_id=cid,
+        kind="chastity_break",
+        resource_id=lockup.id,
+        updated_at=lockup.updated_at,
     )
     db.commit()
     lockup = _load_lockup(db, dynamic_id, lockup.id)
@@ -1552,13 +1652,36 @@ def finish_break(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChastityLockupOut:
+    from ..services.client_events import (
+        clean_client_event_id,
+        incoming_is_older,
+        remember_client_event,
+        remembered_resource_id,
+        stamp_updated_at,
+    )
+
     require_chastity_feature(db, dynamic_id)
     membership = get_membership(dynamic_id, user, db)
     lockup = _load_lockup(db, dynamic_id, lockup_id)
+    cid = clean_client_event_id(payload.client_event_id)
+    prior_id = remembered_resource_id(db, dynamic_id, cid)
+    if prior_id:
+        return _lockup_out(_load_lockup(db, dynamic_id, prior_id), _membership_map(db, dynamic_id))
     brk = next((b for b in lockup.breaks if b.id == break_id), None)
     if brk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Break not found")
     if brk.ended_at is not None:
+        if incoming_is_older(lockup.updated_at, payload.updated_at) or payload.updated_at is None:
+            remember_client_event(
+                db,
+                dynamic_id=dynamic_id,
+                client_event_id=cid,
+                kind="chastity_relock",
+                resource_id=lockup.id,
+                updated_at=lockup.updated_at,
+            )
+            db.commit()
+            return _lockup_out(_load_lockup(db, dynamic_id, lockup.id), _membership_map(db, dynamic_id))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Break is already finished")
 
     target = db.get(Membership, lockup.for_membership_id)
@@ -1586,6 +1709,15 @@ def finish_break(
         dynamic_id,
         membership,
         f"finished chastity break for {sub_name}",
+    )
+    lockup.updated_at = stamp_updated_at(lockup.updated_at, payload.updated_at)
+    remember_client_event(
+        db,
+        dynamic_id=dynamic_id,
+        client_event_id=cid,
+        kind="chastity_relock",
+        resource_id=lockup.id,
+        updated_at=lockup.updated_at,
     )
     db.commit()
     lockup = _load_lockup(db, dynamic_id, lockup.id)

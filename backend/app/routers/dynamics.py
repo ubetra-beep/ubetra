@@ -39,8 +39,10 @@ _MEMBERSHIPS_WITH_USERS = joinedload(Dynamic.memberships).joinedload(Membership.
 
 def _partner_out(m: Membership, current_user_id: str) -> PartnerOut:
     username = ""
+    biological_sex = ""
     if getattr(m, "user", None) is not None:
         username = m.user.username or ""
+        biological_sex = (getattr(m.user, "biological_sex", None) or "").strip()
     elif m.display_name:
         username = m.display_name
     return PartnerOut(
@@ -55,6 +57,7 @@ def _partner_out(m: Membership, current_user_id: str) -> PartnerOut:
         spti_completed=bool(m.spti_completed_at),
         chastity_enabled=m.chastity_enabled,
         chastity_max_lock_hours=m.chastity_max_lock_hours,
+        biological_sex=biological_sex,
         is_you=m.user_id == current_user_id,
     )
 

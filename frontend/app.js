@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v164";
+const CLIENT_SW_CACHE = "ubetra-v182";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -142,9 +142,10 @@ function showIconStylePicker({ title, confirmLabel, initial } = {}) {
 applyIconStyle(getIconStyle(), { persist: true });
 
 const NAV_TABS = [
-  { id: "tracking", label: "Tracking", icon: "📈", enabled: true, requiresDynamic: true },
-  { id: "workshop", label: "Playtime", icon: "✨", enabled: true, requiresDynamic: true },
-  { id: "chat", label: "Chat", icon: "💬", enabled: true, requiresDynamic: true },
+  { id: "today", label: "Today", icon: "◎", requiresDynamic: true },
+  { id: "play", label: "Play", icon: "▶", requiresDynamic: true },
+  { id: "chat", label: "Chat", icon: "💬", requiresDynamic: true },
+  { id: "more", label: "More", icon: "⋯", requiresDynamic: false },
 ];
 
 /** Facets shown on the Dynamic overview / Setup section. */
@@ -157,6 +158,7 @@ const FACET_SECTIONS = [
       { id: "interview", icon: "🎙", title: "Dynamic interview", subtitle: "Tell the AI what you want here", core: true, route: "interview", badge: "interview" },
       { id: "check_in", icon: "🪞", title: "Relationship check-in", subtitle: "Quarterly AI review for both of you", core: true, route: "check-in" },
       { id: "kink_list", icon: "📋", title: "Kink list", subtitle: "Want / if partner / not into", core: true, route: "survey", badge: "survey" },
+      { id: "gear", icon: "🧰", title: "Gear", subtitle: "Vanilla toys, kinky stuff, outfits", route: "gear" },
     ],
   },
   {
@@ -166,16 +168,15 @@ const FACET_SECTIONS = [
       { id: "core_knowledge", icon: "🧠", title: "Core knowledge", subtitle: "Relationship context for AI", core: true, route: "knowledge" },
       { id: "spti", icon: "🧬", title: "SPTI profile", subtitle: "Personality test for AI", route: "knowledge/spti" },
       { id: "context_library", icon: "📎", title: "Context library", subtitle: "Stories, scenes, and files for AI", route: "context" },
-      { id: "gear", icon: "🧰", title: "Gear", subtitle: "Vanilla toys, kinky stuff, outfits", route: "gear" },
     ],
   },
 ];
 
-/** Facets shown on the Tracking bottom-nav hub. */
+/** Facets linked from Today under More tracking. */
 const TRACKING_FACETS = [
-  { id: "history", icon: "📊", title: "History", subtitle: "Reports and logs", route: "history", core: true },
-  { id: "chastity", icon: "🔒", title: "Chastity tracking", subtitle: "Lockup stats and current lock time", route: "chastity" },
-  { id: "org_tracking", icon: "📈", title: "Sex & orgasm tracking", subtitle: "Counts and recent activity", route: "tracking" },
+  { id: "history", icon: "📊", title: "History", subtitle: "Days in chastity", route: "history", core: true },
+  { id: "chastity", icon: "🔒", title: "Tracking", subtitle: "Calendar", route: "chastity" },
+  { id: "org_tracking", icon: "📈", title: "Sex tracking", subtitle: "Counts and recent activity", route: "tracking" },
   { id: "feelings", icon: "💫", title: "Feelings tracking", subtitle: "Wheel check-ins before/after play", route: "feelings" },
   {
     id: "sleep_tracking",
@@ -221,13 +222,6 @@ const PLAYTIME_FACETS = [
     route: "instructor",
     core: true,
   },
-  {
-    id: "manga_comics",
-    icon: "📚",
-    title: "Monthly manga",
-    subtitle: "AI comic from your dynamic context",
-    route: "manga",
-  },
 ];
 
 const PLAYTIME_EXTRA_FACETS = [];
@@ -246,6 +240,23 @@ const settingsBtn = document.getElementById("settings-btn");
 const updateBadgeBtn = document.getElementById("update-badge-btn");
 const installPwaBtn = document.getElementById("install-pwa-btn");
 const bottomNavEl = document.getElementById("bottom-nav");
+
+if (viewEl) {
+  viewEl.addEventListener("scroll", (event) => {
+    const scroller = event.target;
+    if (!bottomNavEl || !scroller || typeof scroller.scrollTop !== "number") return;
+    if (bottomNavEl.classList.contains("hidden")) return;
+    const y = scroller.scrollTop;
+    const previous = Number(scroller.dataset.navScrollY || "0");
+    scroller.dataset.navScrollY = String(y);
+    const delta = y - previous;
+    const canScroll = scroller.scrollHeight > scroller.clientHeight + 8;
+    const nearEnd = canScroll && y + scroller.clientHeight >= scroller.scrollHeight - 48;
+    if (y < 12) bottomNavEl.classList.remove("nav-away");
+    else if (nearEnd || delta > 8) bottomNavEl.classList.add("nav-away");
+    else if (delta < -8) bottomNavEl.classList.remove("nav-away");
+  }, { passive: true, capture: true });
+}
 const topBarEl = document.getElementById("top-bar");
 const appBrandEl = document.getElementById("app-brand");
 const domGoalMetersEl = document.getElementById("dom-goal-meters");
@@ -437,15 +448,29 @@ function setToken(token) {
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
   setAuthVisible(!!token);
+  if (window.UbetraPhone) window.UbetraPhone.noteSession(state);
 }
 
 let mfaSession = { token: null, emailHint: null };
 
 function navigateAfterAuth() {
   syncUserTimezone().catch(() => {});
-  // Soft sex prompt later — don't hard-land on Settings after login.
+  const { parts } = parseRoute();
+  const here = parts[0] || "";
+  const leavingAuth = ["", "login", "register", "forgot-password", "reset-password", "email-signin"].includes(here);
+  // After login, finish setup. A direct link to Settings or the survey stays put.
   if (!state.user?.onboarding_completed) {
-    navigate("/onboarding");
+    const survey = here === "dynamic" && parts[2] === "survey";
+    if (here !== "onboarding" && here !== "settings" && !survey) navigate("/onboarding");
+    else renderRoute();
+    return;
+  }
+  // A refresh on Settings, Chat, or a game stays there. Only the login screen
+  // falls through to the last page or Tracking.
+  if (!leavingAuth) {
+    renderRoute();
+    maybeShowPunishmentReminders();
+    refreshAppUpdates().catch(() => {});
     return;
   }
   const last = getLastRoute();
@@ -466,7 +491,7 @@ function shouldRememberRoute(path) {
   const clean = String(path || "").split("?")[0];
   const parts = clean.replace(/^#/, "").split("/").filter(Boolean);
   if (!parts.length) return false;
-  if (["settings", "login", "register", "onboarding", "forgot-password", "reset-password"].includes(parts[0])) return false;
+  if (["settings", "login", "register", "onboarding", "forgot-password", "reset-password", "email-signin", "quick"].includes(parts[0])) return false;
   return true;
 }
 
@@ -513,7 +538,7 @@ function onboardingStep(status) {
   return "finish";
 }
 
-const PUBLIC_AUTH_PATHS = /^\/auth\/(login|register|claim-email|config|mfa\/|password-reset\/)/;
+const PUBLIC_AUTH_PATHS = /^\/auth\/(login|register|claim-email|config|mfa\/|password-reset\/|email-signin\/)/;
 const SESSION_RENEWED_KEY = "ubetra_session_renewed_at";
 const SESSION_RENEW_MS = 12 * 60 * 60 * 1000;
 
@@ -533,9 +558,22 @@ async function renewSession({ force = false } = {}) {
 }
 
 async function api(path, options = {}) {
+  const phone = window.UbetraPhone;
+  if (phone && phone.shouldServeLocal(path, options)) {
+    return phone.serveLocal(path, options);
+  }
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (state.token && !PUBLIC_AUTH_PATHS.test(path)) headers.Authorization = `Bearer ${state.token}`;
-  const response = await fetch(`${API}${path}`, { ...options, headers });
+  let response;
+  try {
+    response = await fetch(`${API}${path}`, { ...options, headers });
+  } catch (err) {
+    if (phone && phone.canFallback(path, options)) {
+      phone.markUnreachable();
+      return phone.serveLocal(path, options);
+    }
+    throw err;
+  }
   const text = await response.text();
   let data = null;
   if (text) {
@@ -560,6 +598,8 @@ async function api(path, options = {}) {
     err.status = response.status;
     throw err;
   }
+  if (phone) phone.markReachable();
+  if (phone && state.token) phone.noteSession(state);
   return data;
 }
 
@@ -747,7 +787,7 @@ function inboxToneClass(kind) {
   if (k === "task_due_soon") return "tone-blue";
   if (k === "goal_ready") return "tone-green";
   if (k.startsWith("lockup") || k.includes("chastity") || k === "orgasm_logged") return "tone-purple";
-  if (k === "edge_guard_removal" || k.includes("approval")) return "tone-green";
+  if (k.includes("approval")) return "tone-green";
   return "tone-grey";
 }
 
@@ -757,7 +797,6 @@ function groupInboxItems(items) {
   (items || []).forEach((item) => {
     const special =
       item.kind === "task_completed_late" ||
-      item.kind === "edge_guard_removal" ||
       item.kind === "goal_ready" ||
       isPunishmentInboxItem(item);
     const key = special ? `one:${item.id}` : `${item.kind}|${item.title || ""}`;
@@ -848,42 +887,6 @@ function showInboxOverlay(dynamicId, items) {
             className: "ghost-btn",
             onClick: () => ackLate("ack"),
           }, "Close notification"),
-        ]),
-      ]);
-      log.appendChild(row);
-      return;
-    }
-    if (item.kind === "edge_guard_removal" && item.edge_guard_domain_id) {
-      const decide = async (decision) => {
-        try {
-          await api(`/dynamics/${dynamicId}/edge-guard/domains/${item.edge_guard_domain_id}/decision`, {
-            method: "POST",
-            body: JSON.stringify({ decision }),
-          });
-        } catch (err) {
-          error.textContent = err.message || "Could not update.";
-          error.classList.remove("hidden");
-          return;
-        }
-        row.remove();
-        showToast(decision === "approve" ? "Site removed" : "Request denied");
-        if (!log.querySelector(".inbox-log-item")) overlay.remove();
-      };
-      const row = el("div", { className: `inbox-log-item ${inboxToneClass(item.kind)} ${item.kind}` }, [
-        el("div", { className: "inbox-log-title" }, item.count > 1 ? `${item.title || "Edge Guard removal requested"} x${item.count}` : (item.title || "Edge Guard removal requested")),
-        item.body ? el("div", { className: "inbox-log-body" }, item.body) : null,
-        when ? el("div", { className: "inbox-log-when" }, when) : null,
-        el("div", { className: "row wrap" }, [
-          el("button", {
-            type: "button",
-            className: "primary-btn",
-            onClick: () => decide("approve"),
-          }, "Approve removal"),
-          el("button", {
-            type: "button",
-            className: "ghost-btn",
-            onClick: () => decide("deny"),
-          }, "Deny"),
         ]),
       ]);
       log.appendChild(row);
@@ -2407,9 +2410,8 @@ function parseTimeOfDay(value) {
 function formatTimeOfDay(value) {
   const t = parseTimeOfDay(value);
   if (!t) return "";
-  const d = new Date();
-  d.setHours(t.h, t.min, 0, 0);
-  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const d = new Date(Date.UTC(2020, 0, 1, t.h, t.min, 0));
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: "UTC" });
 }
 
 function isSleepUnlockRecord(brk) {
@@ -2423,10 +2425,33 @@ function isSleepPreset(preset) {
   return String(preset?.break_type || "").includes("sleep") || String(preset?.name || "").toLowerCase().includes("sleep");
 }
 
+function zonedDateParts(date) {
+  const tz = displayTimeZone();
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz || undefined,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = {};
+  fmt.formatToParts(date).forEach((part) => {
+    if (part.type !== "literal") parts[part.type] = part.value;
+  });
+  if (parts.hour === "24") parts.hour = "00";
+  return parts;
+}
+
 function localMinutesOf(iso) {
   const d = parseServerDate(iso);
   if (!d || Number.isNaN(d.getTime())) return null;
-  return d.getHours() * 60 + d.getMinutes();
+  const parts = zonedDateParts(d);
+  const hour = Number(parts.hour);
+  const minute = Number(parts.minute);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return hour * 60 + minute;
 }
 
 function circularMeanMinutes(minutes) {
@@ -2451,19 +2476,15 @@ function minutesToTimeOfDay(mins) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function averageSleepUnlockTimes(lockups, membershipId) {
+function averageFromClockPairs(pairs) {
   const starts = [];
   const ends = [];
-  (lockups || []).forEach((lockup) => {
-    if (membershipId && lockup.for_membership_id !== membershipId) return;
-    (lockup.breaks || []).forEach((brk) => {
-      if (!brk.ended_at || !isSleepUnlockRecord(brk)) return;
-      const start = localMinutesOf(brk.started_at);
-      const end = localMinutesOf(brk.ended_at);
-      if (start == null || end == null) return;
-      starts.push(start);
-      ends.push(end);
-    });
+  pairs.forEach((pair) => {
+    const start = localMinutesOf(pair.start);
+    const end = localMinutesOf(pair.end);
+    if (start == null || end == null) return;
+    starts.push(start);
+    ends.push(end);
   });
   if (!starts.length) return null;
   return {
@@ -2473,15 +2494,45 @@ function averageSleepUnlockTimes(lockups, membershipId) {
   };
 }
 
-function sleepPresetWithAverage(preset, lockups, membershipId) {
+function averageSleepUnlockTimes(lockups, membershipId, sessions) {
+  const nights = typeof groupSleepNights === "function" ? groupSleepNights(sessions || []) : [];
+  const fromNights = averageFromClockPairs(
+    nights
+      .filter((night) => !membershipId || night.subject_membership_id === membershipId)
+      .filter((night) => (Number(night.duration_min) || 0) >= 180)
+      .slice(0, 30)
+      .map((night) => ({ start: night.start_at, end: night.end_at }))
+  );
+  if (fromNights) return { ...fromNights, from: "nights" };
+  const breaks = [];
+  (lockups || []).forEach((lockup) => {
+    if (membershipId && lockup.for_membership_id !== membershipId) return;
+    (lockup.breaks || []).forEach((brk) => {
+      if (!brk.ended_at || !isSleepUnlockRecord(brk)) return;
+      breaks.push({ start: brk.started_at, end: brk.ended_at });
+    });
+  });
+  const fromBreaks = averageFromClockPairs(breaks.slice(-30));
+  if (!fromBreaks) return null;
+  return { ...fromBreaks, from: "unlocks" };
+}
+
+function sleepPresetWithAverage(preset, lockups, membershipId, sessions) {
   const base = preset || { name: "Sleep", break_type: "authorized_sleep", start: "23:00", end: "07:00" };
   if (!isSleepPreset(base)) return { preset: base, average: null };
-  const average = averageSleepUnlockTimes(lockups, membershipId);
+  const average = averageSleepUnlockTimes(lockups, membershipId, sessions);
   if (!average) return { preset: base, average: null };
   return {
     preset: { ...base, start: average.start, end: average.end },
     average,
   };
+}
+
+function sleepAverageSentence(average) {
+  if (!average) return "";
+  const noun = average.from === "nights" ? "night" : "Sleep unlock";
+  const plural = average.count === 1 ? noun : `${noun}s`;
+  return `Sleep times are the average of ${average.count} past ${plural}: unlock ${formatTimeOfDay(average.start)}, locked again ${formatTimeOfDay(average.end)}.`;
 }
 
 function presetWindowForDate(day, preset) {
@@ -3675,7 +3726,7 @@ async function downloadNativeApk(abs) {
     canShareFile = false;
   }
   if (!canShareFile) {
-    throw new Error("Open ubeneeko.duckdns.org in Chrome and download the APK there.");
+    throw new Error("Open this UBETRA server in Chrome and download the APK there.");
   }
   try {
     await navigator.share({ files: [file], title: "ubetra.apk" });
@@ -4012,494 +4063,8 @@ function domainsFromRegexScan(text) {
   return out;
 }
 
-function domainsFromEdgeGuardFile(text) {
-  const trimmed = String(text || "").replace(/^\uFEFF/, "").trim();
-  if (!trimmed) return [];
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      const data = JSON.parse(trimmed);
-      const fromFields = [];
-      collectMindfulFields(data, fromFields, new Set(), 0);
-      if (fromFields.length) return fromFields;
-    } catch {
-      /* regex fallback */
-    }
-  }
-  return domainsFromRegexScan(trimmed);
-}
-
-function edgeGuardDynamic(preferredId) {
-  const list = state.dynamics || [];
-  const youAreSub = (d) => (d.partners || []).some((p) => p.is_you && p.role === "submissive");
-  if (preferredId) {
-    const chosen = list.find((d) => d.id === preferredId);
-    if (chosen) return chosen;
-  }
-  const active = list.find((d) => d.id === getActiveDynamicId());
-  if (active && youAreSub(active)) return active;
-  return list.find(youAreSub) || active || list[0] || null;
-}
-
-let edgeGuardSyncing = null;
 function syncEdgeGuardFromServer() {
-  if (!state.token || !isNativeApp()) return Promise.resolve();
-  if (edgeGuardSyncing) return edgeGuardSyncing;
-  edgeGuardSyncing = syncEdgeGuardFromServerInner().finally(() => {
-    edgeGuardSyncing = null;
-  });
-  return edgeGuardSyncing;
-}
-
-async function syncEdgeGuardFromServerInner() {
-  const dynamic = edgeGuardDynamic();
-  const plugin = nativePlugin("UbetraEdgeGuard");
-  if (!dynamic || !plugin?.getStatus || !plugin?.setBlockedDomains) return;
-  const remote = await api(`/dynamics/${dynamic.id}/edge-guard`);
-  let domains = (remote.you?.domains || []).map((row) => row.domain);
-  const seedKey = `ubetra_edge_guard_seeded_${dynamic.id}`;
-  let seeded = false;
-  try {
-    seeded = localStorage.getItem(seedKey) === "1";
-  } catch {
-    seeded = true;
-  }
-  if (!seeded) {
-    const local = await plugin.getStatus().catch(() => ({ domains: [] }));
-    const have = new Set(domains);
-    const extra = (local.domains || [])
-      .map((d) => normalizeEdgeDomain(d))
-      .filter((d) => d && !have.has(d));
-    if (extra.length) {
-      const added = await api(`/dynamics/${dynamic.id}/edge-guard/domains`, {
-        method: "POST",
-        body: JSON.stringify({ domains: extra }),
-      });
-      domains = (added.you?.domains || domains.map((domain) => ({ domain }))).map((row) => row.domain || row);
-    }
-    try {
-      localStorage.setItem(seedKey, "1");
-    } catch {
-      /* ignore */
-    }
-  }
-  await plugin.setBlockedDomains({
-    domains,
-    serverSync: true,
-    locked: !!remote.you?.locked,
-  });
-  const info = await plugin.getStatus();
-  await api(`/dynamics/${dynamic.id}/edge-guard/heartbeat`, {
-    method: "POST",
-    body: JSON.stringify({
-      enabled: !!info.enabled,
-      running: !!info.running,
-      vpn_permission: !!info.vpnPermissionGranted,
-      domain_count: info.domainCount || (info.domains || []).length || 0,
-    }),
-  });
-}
-
-function showEdgeGuardImportPreview(text, existing, onAdd) {
-  const found = domainsFromEdgeGuardFile(text);
-  if (!found.length) {
-    showToast("No domains found in that file");
-    return;
-  }
-  const have = new Set((existing || []).map((d) => normalizeEdgeDomain(d)).filter(Boolean));
-  const checks = found.map((domain) => {
-    const already = have.has(domain);
-    const box = el("input", { type: "checkbox", checked: !already, disabled: already });
-    return { domain, box, already };
-  });
-  const backdrop = el("div", { className: "modal-backdrop" });
-  const addBtn = el("button", {
-    type: "button",
-    className: "primary-btn",
-    onClick: async () => {
-      const picked = checks.filter((row) => row.box.checked && !row.already).map((row) => row.domain);
-      if (!picked.length) {
-        showToast("Select at least one new site");
-        return;
-      }
-      addBtn.disabled = true;
-      try {
-        await onAdd(picked);
-        backdrop.remove();
-      } catch (err) {
-        addBtn.disabled = false;
-        showToast(err.message || "Could not add sites");
-      }
-    },
-  }, "Add selected");
-  backdrop.appendChild(el("div", { className: "card stack modal-card" }, [
-    el("h3", {}, "Import sites"),
-    el("p", { className: "muted" }, "Mindful export field names are unconfirmed until a sample file is available. Known names are tried first, then any domain-like text. Uncheck anything that should stay off the list."),
-    el("div", { className: "stack", style: "max-height:40vh;overflow:auto;" }, checks.map(({ domain, box, already }) =>
-      el("label", { className: "checkbox-label" }, [box, ` ${domain}${already ? " (already blocked)" : ""}`])
-    )),
-    el("div", { className: "row wrap" }, [
-      addBtn,
-      el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Cancel"),
-    ]),
-  ]));
-  backdrop.addEventListener("click", (ev) => {
-    if (ev.target === backdrop) backdrop.remove();
-  });
-  document.body.appendChild(backdrop);
-}
-
-function edgeGuardImportInput(existing, onAdd) {
-  return el("label", {}, [
-    "Import Mindful, JSON, CSV, or TXT",
-    el("input", {
-      type: "file",
-      accept: ".json,.csv,.txt,.backup,application/json,text/csv,text/plain",
-      onChange: async (event) => {
-        const file = event.target.files?.[0];
-        event.target.value = "";
-        if (!file) return;
-        try {
-          showEdgeGuardImportPreview(await file.text(), existing, onAdd);
-        } catch (err) {
-          showToast(err.message || "Could not read that file");
-        }
-      },
-    }),
-  ]);
-}
-
-function edgeGuardDomainList(dynamicId, member, { canRemove, canRequest, onDone }) {
-  const domains = member?.domains || [];
-  if (!domains.length) return el("p", { className: "muted" }, "No sites yet.");
-  return el("ul", { className: "stack", style: "list-style:none;padding:0;margin:0;" }, domains.map((row) => {
-    const actions = [];
-    if (canRemove) {
-      actions.push(el("button", {
-        type: "button",
-        className: "ghost-btn",
-        onClick: async () => {
-          try {
-            await api(`/dynamics/${dynamicId}/edge-guard/domains/${row.id}`, { method: "DELETE" });
-            showToast(`Removed ${row.domain}`);
-            await onDone();
-          } catch (err) {
-            showToast(err.message || "Could not remove");
-          }
-        },
-      }, row.removal_requested_at ? "Approve removal" : "Remove"));
-    }
-    if (canRemove && row.removal_requested_at) {
-      actions.push(el("button", {
-        type: "button",
-        className: "ghost-btn",
-        onClick: async () => {
-          try {
-            await api(`/dynamics/${dynamicId}/edge-guard/domains/${row.id}/decision`, {
-              method: "POST",
-              body: JSON.stringify({ decision: "deny" }),
-            });
-            showToast("Request denied");
-            await onDone();
-          } catch (err) {
-            showToast(err.message || "Could not deny");
-          }
-        },
-      }, "Deny"));
-    }
-    if (canRequest) {
-      const pending = !!row.removal_requested_at;
-      actions.push(el("button", {
-        type: "button",
-        className: "ghost-btn",
-        disabled: pending,
-        onClick: async () => {
-          try {
-            await api(`/dynamics/${dynamicId}/edge-guard/domains/${row.id}/removal-request`, { method: "POST" });
-            showToast("Removal requested");
-            await onDone();
-          } catch (err) {
-            showToast(err.message || "Could not request removal");
-          }
-        },
-      }, pending ? "Requested" : "Request removal"));
-    }
-    return el("li", { className: "row wrap", style: "justify-content:space-between;gap:0.5rem;" }, [
-      el("code", {}, row.domain),
-      el("div", { className: "row wrap" }, actions),
-    ]);
-  }));
-}
-
-function edgeGuardCheckinLine(member) {
-  if (!member?.last_heartbeat) return "No phone check-in yet.";
-  const st = member.last_status || {};
-  const when = formatLocalDateTime(member.last_heartbeat, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  const bits = [`Last check-in ${when}`, st.enabled ? "reported on" : "reported off"];
-  if (st.vpn_permission === false) bits.push("VPN permission missing");
-  bits.push(`${st.domain_count || 0} on the phone`);
-  return bits.join(" · ");
-}
-
-function buildEdgeGuardCard(dynamicId) {
-  const native = isNativeApp();
-  const dynamic = edgeGuardDynamic(dynamicId);
-  const status = el("p", { className: "muted" }, dynamic ? "Loading Edge Guard…" : "");
-  const controls = el("div", { className: "stack" });
-  const card = el("div", { className: "card stack", id: "edge-guard-card" }, [
-    el("h2", {}, "Edge Guard"),
-    el(
-      "p",
-      { className: "muted" },
-      native
-        ? "Local DNS filter that blocks sites system-wide — including Microsoft Edge’s long-press Preview. Google Drive uploads stay available. The VPN stays on this phone. The blocklist is saved here so a keyholder can lock it."
-        : "Website blocking runs in the UBETRA Android app. Install the APK from this Settings page. A locked list can still be viewed here."
-    ),
-    status,
-    controls,
-  ]);
-  if (!dynamic) return card;
-
-  async function refresh() {
-    let remote = null;
-    let info = null;
-    try {
-      remote = await api(`/dynamics/${dynamic.id}/edge-guard`);
-    } catch (err) {
-      status.textContent = err.message || "Could not load the Edge Guard list";
-    }
-    const plugin = nativePlugin("UbetraEdgeGuard");
-    if (native) {
-      if (!plugin?.getStatus) {
-        status.textContent = "Edge Guard is not in this APK build. Install 0.88.0 or newer.";
-      } else {
-        try {
-          info = await plugin.getStatus();
-        } catch (err) {
-          status.textContent = err.message || "Could not read Edge Guard status";
-        }
-      }
-    }
-    const you = remote?.you;
-    const keyholder = !!remote?.you_are_keyholder;
-    const locked = !!(you?.locked || (info && info.locked));
-    const subLocked = locked && !keyholder;
-    if (info) {
-      const parts = [];
-      if (info.running) parts.push("filtering now");
-      else if (info.enabled) parts.push("enabled, waiting for VPN");
-      else parts.push("off");
-      parts.push(`${(you?.domains || info.domains || []).length} site(s)`);
-      if (subLocked) parts.push("locked by your keyholder");
-      if (!info.vpnPermissionGranted && info.enabled) parts.push("needs VPN permission");
-      status.textContent = parts.join(" · ");
-    } else if (you) {
-      status.textContent = subLocked ? "Locked by your keyholder." : edgeGuardCheckinLine(you);
-    }
-    const showToggle = native && !!plugin?.setEnabled && !(subLocked && (info ? info.enabled : true));
-    const domainInput = el("input", {
-      type: "text",
-      placeholder: "example.com",
-      autocomplete: "off",
-      spellcheck: "false",
-    });
-    const kids = [];
-    if (showToggle) {
-      const enableToggle = el("input", { type: "checkbox", checked: !!info?.enabled });
-      enableToggle.addEventListener("change", async () => {
-        const want = enableToggle.checked;
-        try {
-          const out = await plugin.setEnabled({ enabled: want });
-          if (want && out && out.vpnPermissionGranted === false) {
-            showToast("VPN permission is required for Edge Guard");
-          } else if (want && !out?.running && (out?.domainCount || 0) === 0) {
-            showToast("Add at least one website first");
-          } else {
-            showToast(want ? "Edge Guard on" : "Edge Guard off");
-          }
-        } catch (err) {
-          showToast(err.message || "Could not change Edge Guard");
-        }
-        try {
-          await syncEdgeGuardFromServer();
-        } catch {
-          /* status refresh still runs */
-        }
-        await refresh();
-      });
-      kids.push(el("label", { className: "row wrap", style: "gap:0.5rem;align-items:center;" }, [
-        enableToggle,
-        el("span", {}, "Block websites on this phone"),
-      ]));
-    } else if (subLocked && native) {
-      kids.push(el("p", {}, "Locked on by your keyholder. This phone cannot turn Edge Guard off or remove sites."));
-    }
-    const addDomains = async (domains) => {
-      const result = await api(`/dynamics/${dynamic.id}/edge-guard/domains`, {
-        method: "POST",
-        body: JSON.stringify({ domains }),
-      });
-      const added = result.added || [];
-      showToast(added.length ? `Added ${added.length} site(s)` : "No new sites to add");
-      if (native) await syncEdgeGuardFromServer().catch(() => {});
-      await refresh();
-    };
-    if (!keyholder || native) {
-      kids.push(el("label", {}, ["Add website", domainInput]));
-      kids.push(el("div", { className: "row wrap" }, [
-        el("button", {
-          type: "button",
-          className: "primary-btn",
-          onClick: async () => {
-            const domain = (domainInput.value || "").trim();
-            if (!domain) {
-              showToast("Enter a domain like reddit.com");
-              return;
-            }
-            try {
-              await addDomains([domain]);
-              domainInput.value = "";
-            } catch (err) {
-              showToast(err.message || "Could not add site");
-            }
-          },
-        }, "Add"),
-      ]));
-      kids.push(edgeGuardImportInput((you?.domains || []).map((row) => row.domain), addDomains));
-      kids.push(el("p", { className: "muted" }, "Mindful field names are unconfirmed until a sample export is provided."));
-      kids.push(edgeGuardDomainList(dynamic.id, you || { domains: [] }, {
-        canRemove: keyholder || !subLocked,
-        canRequest: subLocked,
-        onDone: async () => {
-          if (native) await syncEdgeGuardFromServer().catch(() => {});
-          await refresh();
-        },
-      }));
-    }
-    if (native) {
-      kids.push(permHowTo([
-        "Add domains you want blocked (e.g. reddit.com). Subdomains are included.",
-        "Turn on Block websites. Android will ask to allow a VPN connection — Allow. This is a local DNS sinkhole, not a remote VPN.",
-        "When your keyholder locks the list, Remove and the off switch disappear. Use Request removal instead.",
-        "Uninstalling the app or revoking the VPN cannot be blocked. UBETRA can only tell your keyholder.",
-      ]));
-    }
-    controls.replaceChildren(...kids);
-  }
-
-  refresh();
-  return card;
-}
-
-function buildEdgeGuardManageCard(dynamicId) {
-  const status = el("p", { className: "muted" }, "Loading Edge Guard…");
-  const body = el("div", { className: "stack" });
-  const card = el("div", { className: "card stack", id: "edge-guard-manage" }, [
-    el("h2", {}, "Edge Guard list"),
-    el("p", { className: "muted" }, "Blocklist for this dynamic, on any device. Locking stops the sub from removing sites or turning the filter off in the app. If the list has sites or is locked, you are told once when the phone reports Edge Guard off, and once if it misses a check-in for 6 hours. Uninstall and VPN revoke can only be detected."),
-    status,
-    body,
-  ]);
-
-  async function refresh() {
-    let remote;
-    try {
-      remote = await api(`/dynamics/${dynamicId}/edge-guard`);
-    } catch (err) {
-      status.textContent = err.message || "Could not load Edge Guard";
-      return;
-    }
-    const subs = (remote.members || []).filter((m) => m.role === "submissive");
-    const people = subs.length ? subs : (remote.members || []).filter((m) => m.membership_id !== remote.you?.membership_id);
-    if (!people.length) {
-      status.textContent = "No submissive partner in this dynamic yet.";
-      body.replaceChildren();
-      return;
-    }
-    status.textContent = "";
-    body.replaceChildren(...people.map((member) => {
-      const domainInput = el("input", {
-        type: "text",
-        placeholder: "example.com",
-        autocomplete: "off",
-        spellcheck: "false",
-      });
-      const lockBox = el("input", { type: "checkbox", checked: !!member.locked });
-      const requireBox = el("input", { type: "checkbox", checked: !!member.require_enabled });
-      const patch = async (payload) => {
-        await api(`/dynamics/${dynamicId}/edge-guard/policy`, {
-          method: "PATCH",
-          body: JSON.stringify({ membership_id: member.membership_id, ...payload }),
-        });
-        await refresh();
-      };
-      lockBox.addEventListener("change", async () => {
-        try {
-          await patch({ locked: lockBox.checked });
-          showToast(lockBox.checked ? "Edge Guard locked" : "Edge Guard unlocked");
-        } catch (err) {
-          lockBox.checked = !lockBox.checked;
-          showToast(err.message || "Could not update the lock");
-        }
-      });
-      requireBox.addEventListener("change", async () => {
-        try {
-          await patch({ require_enabled: requireBox.checked });
-          showToast("Saved");
-        } catch (err) {
-          requireBox.checked = !requireBox.checked;
-          showToast(err.message || "Could not update");
-        }
-      });
-      const addDomains = async (domains) => {
-        const result = await api(`/dynamics/${dynamicId}/edge-guard/domains`, {
-          method: "POST",
-          body: JSON.stringify({ domains, membership_id: member.membership_id }),
-        });
-        showToast((result.added || []).length ? `Added ${result.added.length} site(s)` : "No new sites to add");
-        await refresh();
-      };
-      return el("div", { className: "stack" }, [
-        el("h3", {}, member.display_name || "Sub"),
-        el("p", { className: "muted" }, edgeGuardCheckinLine(member)),
-        el("label", { className: "checkbox-label" }, [lockBox, " Lock the list (sub cannot remove sites or turn Edge Guard off)"]),
-        el("label", { className: "checkbox-label" }, [requireBox, " Require Edge Guard to stay on (also alert when the list is still empty)"]),
-        el("label", {}, ["Add website", domainInput]),
-        el("div", { className: "row wrap" }, [
-          el("button", {
-            type: "button",
-            className: "primary-btn",
-            onClick: async () => {
-              const domain = (domainInput.value || "").trim();
-              if (!domain) {
-                showToast("Enter a domain like reddit.com");
-                return;
-              }
-              try {
-                await addDomains([domain]);
-              } catch (err) {
-                showToast(err.message || "Could not add site");
-              }
-            },
-          }, "Add"),
-        ]),
-        edgeGuardImportInput((member.domains || []).map((row) => row.domain), addDomains),
-        el("p", { className: "muted" }, "Mindful field names are unconfirmed until a sample export is provided."),
-        edgeGuardDomainList(dynamicId, member, {
-          canRemove: true,
-          canRequest: false,
-          onDone: refresh,
-        }),
-      ]);
-    }));
-  }
-
-  refresh();
-  return card;
+  return Promise.resolve();
 }
 
 function isAndroidBrowser() {
@@ -5327,8 +4892,7 @@ function wireNativePushCallWake() {
     const wakeFromPush = (data) => {
       const kind = String(data?.kind || "");
       if (kind === "call") pollIncomingVideoCall().catch(() => {});
-      if (kind === "edge_guard") syncEdgeGuardFromServer().catch(() => {});
-      if (kind === "reload") syncEdgeGuardFromServer().finally(() => reloadAppShell());
+      if (kind === "reload") reloadAppShell();
     };
     Push.addListener("pushNotificationReceived", (ev) => {
       wakeFromPush(ev?.notification?.data || ev?.data || {});
@@ -5347,7 +4911,6 @@ function wireNativePushCallWake() {
   App?.addListener?.("appStateChange", (ev) => {
     if (ev?.isActive && state.token) {
       pollIncomingVideoCall().catch(() => {});
-      syncEdgeGuardFromServer().catch(() => {});
     }
   });
 }
@@ -5394,7 +4957,7 @@ function facetBadge(facet, dynamic) {
 
 function updateBottomNav() {
   const { parts } = parseRoute();
-  const authPages = ["login", "register", "onboarding", "forgot-password", "reset-password"];
+  const authPages = ["login", "register", "onboarding", "forgot-password", "reset-password", "email-signin"];
   const hide = !state.token || authPages.includes(parts[0]) || parts[0] === "settings";
   bottomNavEl.classList.toggle("hidden", hide);
   if (hide) return;
@@ -5403,38 +4966,52 @@ function updateBottomNav() {
   const enabledFeatures = state.currentDynamic?.enabled_features || [];
   const playtimeOn =
     !enabledFeatures.length || enabledFeatures.includes("scene_workshop");
-  const trackingRoutes = new Set([
-    "track", "tracking", "chastity", "feelings", "punishment", "sleep",
-    "history", "vault", "journal", "ground-rules", "interview", "check-in", "survey",
-    "knowledge", "context", "gear", "features", "overlap",
-  ]);
-  const playtimeRoutes = new Set(["assistant", "tasks", "acts", "manga", "instructor"]);
-  const activeTab =
-    parts[0] === "chat" ? "chat"
-    : parts[0] === "dynamic" && playtimeRoutes.has(parts[2]) ? "workshop"
-    : "tracking";
+  const playtimeRoutes = new Set(["assistant", "tasks", "acts", "instructor"]);
+  let activeTab = "today";
+  if (navSheet === "log") activeTab = "log";
+  else if (navSheet === "more") activeTab = "more";
+  else if (parts[0] === "chat") activeTab = "chat";
+  else if (parts[0] === "dynamic" && playtimeRoutes.has(parts[2])) activeTab = "play";
 
   bottomNavEl.replaceChildren(
     ...NAV_TABS.map((tab) => {
-      const featureOff = tab.id === "workshop" && dynamicId && !playtimeOn;
-      const disabled = !tab.enabled || (tab.requiresDynamic && !dynamicId) || featureOff;
+      const featureOff = tab.id === "play" && dynamicId && !playtimeOn;
+      const serverTab = tab.id === "play" || tab.id === "chat";
+      const serverOff = !!(window.UbetraPhone && window.UbetraPhone.serverFeaturesGrey());
+      const disabled = (tab.requiresDynamic && !dynamicId) || featureOff || (serverTab && serverOff);
       const btn = el("button", {
-        className: `nav-tab ${activeTab === tab.id ? "active" : ""} ${disabled ? "disabled" : ""}`,
+        className: `nav-tab${activeTab === tab.id ? " active" : ""}${disabled ? " disabled" : ""}${serverTab && serverOff ? " server-grey" : ""}`,
         type: "button",
-        title: featureOff ? "Playtime is turned off in Application features" : "",
+        title: serverTab && serverOff ? "Needs self-host server" : featureOff ? "Playtime is turned off in Application features" : tab.label,
         onClick: () => {
           if (disabled) return;
-          if (tab.id === "tracking" && dynamicId) navigate(`/dynamic/${dynamicId}/track`);
-          if (tab.id === "workshop" && dynamicId) navigate(`/dynamic/${dynamicId}/assistant`);
-          if (tab.id === "chat" && dynamicId) navigate(`/chat/${dynamicId}`);
+          if (tab.id === "today" && dynamicId) {
+            closeNavSheets();
+            navigate(`/dynamic/${dynamicId}/track`);
+          }
+          if (tab.id === "play" && dynamicId) {
+            closeNavSheets();
+            navigate(`/dynamic/${dynamicId}/assistant`);
+          }
+          if (tab.id === "chat" && dynamicId) {
+            closeNavSheets();
+            navigate(`/chat/${dynamicId}`);
+          }
+          if (tab.id === "more") {
+            if (!dynamicId) navigate("/settings");
+            else openMoreSheet(dynamicId);
+          }
         },
       }, [
         el("span", { className: "nav-icon" }, tab.icon),
         tab.label,
       ]);
+      btn.dataset.tab = tab.id;
       return btn;
     })
   );
+  if (window.UbetraPhone) window.UbetraPhone.paint();
+  refreshPeriodBrand(dynamicId);
 }
 
 /** Hub title row with Application features hamburger. */
@@ -5579,7 +5156,7 @@ function isFacetEnabled(facet, enabledFeatures) {
   if (facet.core) return true;
   // Empty list historically meant "all on" — but opt-in features stay gated by their id.
   if (!enabledFeatures || !enabledFeatures.length) {
-    return facet.id !== "sleep_tracking" && facet.id !== "manga_comics" && facet.id !== "cycle_tracking";
+    return facet.id !== "sleep_tracking" && facet.id !== "cycle_tracking";
   }
   if (enabledFeatures.includes(facet.id)) return true;
   if (Array.isArray(facet.alsoEnabledBy)) {
@@ -5710,6 +5287,170 @@ function renderFacetRow(facet, dynamicId, dynamic) {
   return row;
 }
 
+function switchMetricLabel(metrics, id) {
+  return (metrics || []).find((m) => m.id === id)?.title || id || "";
+}
+
+function renderSwitchPanel(dynamicId, data, { compact = false } = {}) {
+  const sw = data?.switch;
+  if (!sw && !data?.can_offer) return null;
+  if (compact && !sw) return null;
+  const card = el("div", { className: "card stack", id: "switch-panel" });
+  const error = el("p", { className: "error hidden" });
+  const refresh = () => {
+    if (compact) {
+      navigate(`/dynamic/${dynamicId}/assistant`);
+      return;
+    }
+    renderAssistant(dynamicId);
+  };
+  async function post(path, body) {
+    error.classList.add("hidden");
+    try {
+      await api(`/dynamics/${dynamicId}/switch${path}`, {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      });
+      showToast("Switch updated.");
+      refresh();
+    } catch (err) {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    }
+  }
+  card.appendChild(el("h2", {}, "Switch"));
+  card.appendChild(el("p", { className: "muted" }, "Your tasks, chastity, and goals stay as they are. A switch does not change who the keyholder is."));
+  if (data?.headline) card.appendChild(el("p", {}, data.headline));
+  if (sw?.note) card.appendChild(el("p", { className: "muted" }, sw.note));
+  if (compact && sw) {
+    card.appendChild(el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+    }, "Open on Playtime"));
+    return card;
+  }
+  if (data?.can_offer) {
+    const kind = el("select");
+    [
+      ["timed", "For a length of time"],
+      ["session", "For one play session"],
+      ["until_goal", "Until a goal the sub writes is met"],
+    ].forEach(([value, label]) => kind.appendChild(el("option", { value }, label)));
+    const hours = el("input", { type: "number", min: "1", max: "720", value: "24" });
+    const hoursLabel = el("label", {}, ["Hours", hours]);
+    kind.addEventListener("change", () => {
+      hoursLabel.classList.toggle("hidden", kind.value !== "timed");
+    });
+    card.appendChild(el("label", {}, ["Offer", kind]));
+    card.appendChild(hoursLabel);
+    card.appendChild(el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => post("/offer", {
+        kind: kind.value,
+        hours: kind.value === "timed" ? Number(hours.value) : null,
+      }),
+    }, "Offer switch"));
+  }
+  if (data?.can_draft_goal) {
+    const title = el("input", { type: "text", maxlength: "80", placeholder: "Title" });
+    const detail = el("textarea", { rows: "3", placeholder: `What ${voiceFromPartner((state.currentDynamic?.partners || []).find((p) => p.role === "dominant"), "the keyholder").name} experiences` });
+    const metric = el("select");
+    (data.metrics || []).forEach((m) => metric.appendChild(el("option", { value: m.id }, m.title)));
+    const target = el("input", { type: "number", min: "1", max: "100", value: "1" });
+    card.appendChild(el("h3", {}, "Draft a goal for your keyholder"));
+    card.appendChild(el("label", {}, ["Title", title]));
+    card.appendChild(el("label", {}, ["What it is", detail]));
+    card.appendChild(el("label", {}, ["Count", metric]));
+    card.appendChild(el("label", {}, ["How many", target]));
+    card.appendChild(el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => post("/draft", {
+        goal: {
+          title: title.value.trim(),
+          detail: detail.value.trim(),
+          metric: metric.value,
+          target: Number(target.value),
+        },
+      }),
+    }, "Send goal for approval"));
+  }
+  if (data?.can_draft_scene) {
+    card.appendChild(el("p", {}, "Direct one scene. It starts after the keyholder approves it."));
+    card.appendChild(el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => navigate(`/dynamic/${dynamicId}/assistant/scene`),
+    }, "Open Scene builder"));
+  }
+  if (data?.can_approve && sw) {
+    if (sw.goal) {
+      card.appendChild(el("p", {}, `${sw.goal.title} — ${sw.goal.target} ${switchMetricLabel(data.metrics, sw.goal.metric)}`));
+      if (sw.goal.detail) card.appendChild(el("p", { className: "muted" }, sw.goal.detail));
+    }
+    if (sw.scene) {
+      card.appendChild(el("p", {}, sw.scene.title || "Scene"));
+      if (sw.scene.summary) card.appendChild(el("p", { className: "muted" }, sw.scene.summary));
+      if (sw.scene.body) card.appendChild(el("p", { className: "playtime-scene-body" }, sw.scene.body));
+    }
+    const note = el("input", { type: "text", maxlength: "200", placeholder: "Note if you send it back" });
+    card.appendChild(el("div", { className: "row wrap" }, [
+      el("button", { type: "button", className: "primary-btn", onClick: () => post("/approve") }, "Approve and start"),
+      el("button", { type: "button", className: "ghost-btn", onClick: () => post("/send-back", { note: note.value }) }, "Send back"),
+      el("button", { type: "button", className: "ghost-btn", onClick: () => post("/decline", { note: note.value }) }, "Decline"),
+    ]));
+    card.appendChild(note);
+  }
+  if (sw?.status === "active") {
+    if (sw.goal) {
+      card.appendChild(el("p", {}, `${data.progress || 0} / ${sw.goal.target} ${switchMetricLabel(data.metrics, sw.goal.metric)}`));
+    }
+    const logs = [];
+    if (data.can_log && sw.end_rule === "one_scene") {
+      logs.push(["scene", "Log the scene"], ["spanking", "Log a spanking"]);
+    } else if (data.can_log && sw.goal) {
+      const map = { denials: ["denial", "Log a denial"], scenes: ["scene", "Log the scene"], spanking: ["spanking", "Log a spanking"] };
+      const pair = map[sw.goal.metric];
+      if (pair) logs.push(pair);
+    }
+    if (logs.length) {
+      card.appendChild(el("div", { className: "row wrap" }, logs.map(([kind, label]) => el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => post("/log", { kind }),
+      }, label))));
+    }
+    if (data.can_end) {
+      card.appendChild(el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => post("/end"),
+      }, "End switch"));
+    }
+  }
+  card.appendChild(error);
+  return card;
+}
+
+function mountSwitchBanner() {
+  const { parts } = parseRoute();
+  if (parts[0] !== "dynamic" || !parts[1]) return;
+  if (parts[2] === "assistant" && !parts[3]) return;
+  const dynamicId = parts[1];
+  const slot = el("div", { id: "switch-banner-slot" });
+  viewEl.prepend(slot);
+  api(`/dynamics/${dynamicId}/switch`).then((data) => {
+    if (!slot.isConnected || !data?.switch) {
+      slot.remove();
+      return;
+    }
+    const panel = renderSwitchPanel(dynamicId, data, { compact: true });
+    if (panel) slot.appendChild(panel);
+  }).catch(() => slot.remove());
+}
+
 function setViewContent(node) {
   const { parts } = parseRoute();
   if (parts[0] !== "chat") {
@@ -5721,6 +5462,7 @@ function setViewContent(node) {
   }
   viewEl.replaceChildren(node);
   updateBottomNav();
+  mountSwitchBanner();
 }
 
 async function bootstrap() {
@@ -5818,7 +5560,7 @@ async function bootstrap() {
         return;
       }
       if (event.data?.type === "ubetra-reload") {
-        syncEdgeGuardFromServer().finally(() => reloadAppShell());
+        reloadAppShell();
         return;
       }
       if (event.data?.type === "ubetra-navigate" && event.data.url) {
@@ -5865,14 +5607,22 @@ async function bootstrap() {
     }
     refreshConfessionWarning();
     maybeShowPunishmentReminders();
-    syncEdgeGuardFromServer().catch(() => {});
+    if (window.UbetraPhone) window.UbetraPhone.onForeground();
   });
 
   // Render login immediately so buttons work while token validation runs
+  if (window.UbetraPhone) await window.UbetraPhone.prepare(state);
+
   if (!state.token) {
     navigate("/login");
   } else {
     renderRoute();
+  }
+
+  if (window.UbetraPhone && window.UbetraPhone.usingLocalSession()) {
+    navigate("/dynamic/" + (state.activeDynamicId || "local") + "/track");
+    if (window.UbetraPhone) window.UbetraPhone.paint();
+    return;
   }
 
   if (state.token) {
@@ -5886,13 +5636,22 @@ async function bootstrap() {
       refreshAppUpdates().catch(() => {});
       startVideoCallWatcher();
       wireNativePushCallWake();
-      syncEdgeGuardFromServer().catch(() => {});
+      if (window.UbetraPhone) {
+        window.UbetraPhone.noteSession(state);
+        window.UbetraPhone.onForeground();
+      }
       renewSession();
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") renewSession();
       });
       return;
-    } catch {
+    } catch (err) {
+      if (window.UbetraPhone && (await window.UbetraPhone.keepSessionOffline())) {
+        await window.UbetraPhone.installOfflineSession(state);
+        navigate("/dynamic/" + (state.activeDynamicId || "local") + "/track");
+        window.UbetraPhone.paint();
+        return;
+      }
       setToken(null);
       state.user = null;
       state.dynamics = [];
@@ -5906,11 +5665,19 @@ function renderLogin() {
   const error = el("div", { className: "error hidden" });
   const form = el("form", { className: "stack auth-card" }, [
     el("h1", {}, "Sign in"),
-    el("p", { className: "muted" }, "Use your email or username."),
+    el("p", { className: "muted" }, "Use your password, or get a sign-in code and link by email."),
     el("label", {}, ["Email or username", el("input", { name: "email", type: "text", required: "true", autocomplete: "username" })]),
     el("label", {}, ["Password", el("input", { name: "password", type: "password", required: "true", autocomplete: "current-password" })]),
     error,
     el("button", { className: "primary-btn", type: "submit" }, "Continue"),
+    el("button", {
+      className: "ghost-btn",
+      type: "button",
+      onClick: () => {
+        const email = String(new FormData(form).get("email") || "").trim();
+        navigate(email.includes("@") ? `/email-signin?email=${encodeURIComponent(email)}` : "/email-signin");
+      },
+    }, "Email me a sign-in link"),
     el("button", {
       className: "ghost-btn",
       type: "button",
@@ -5965,6 +5732,93 @@ function renderLogin() {
   });
 
   viewEl.replaceChildren(el("div", { className: "auth-splash" }, [form]));
+}
+
+function renderEmailSignIn() {
+  setAuthVisible(false);
+  const { query } = parseRoute();
+  const prefillEmail = query.get("email") || "";
+  const prefillToken = query.get("token") || "";
+  const prefillCode = query.get("code") || "";
+  const error = el("div", { className: "error hidden" });
+  const ok = el("div", { className: "muted hidden" });
+  const form = el("form", { className: "stack auth-card" }, [
+    el("h1", {}, "Sign in by email"),
+    el("p", { className: "muted" }, "We’ll email a one-time code and a link. Opening the link signs you in. You can set a password later in Settings."),
+    el("label", {}, ["Email", el("input", {
+      name: "email",
+      type: "email",
+      required: "true",
+      autocomplete: "email",
+      value: prefillEmail,
+    })]),
+    el("label", {}, ["One-time code", el("input", {
+      name: "code",
+      inputmode: "numeric",
+      autocomplete: "one-time-code",
+      placeholder: "Optional if you opened the link",
+      value: prefillCode,
+    })]),
+    el("input", { name: "token", type: "hidden", value: prefillToken }),
+    error,
+    ok,
+    el("button", { className: "primary-btn", type: "submit", name: "send" }, "Email me a link"),
+    el("button", { className: "ghost-btn", type: "submit", name: "code" }, "Sign in with code"),
+    el("button", { className: "ghost-btn", type: "button", onClick: () => navigate("/login") }, "Back to sign in"),
+  ]);
+
+  async function finishSignIn(body) {
+    const result = await api("/auth/email-signin/confirm", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (!result?.access_token) throw new Error("Sign-in did not start. Request a new link.");
+    setToken(result.access_token);
+    localStorage.setItem(SESSION_RENEWED_KEY, String(Date.now()));
+    localStorage.removeItem(LAST_ROUTE_KEY);
+    state.user = await api("/auth/me");
+    state.dynamics = await api("/dynamics");
+    showToast("Signed in.");
+    navigateAfterAuth();
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    error.classList.add("hidden");
+    ok.classList.add("hidden");
+    const data = new FormData(form);
+    const email = String(data.get("email") || "").trim();
+    const code = String(data.get("code") || "").trim();
+    const token = String(data.get("token") || "").trim();
+    const useCode = event.submitter && event.submitter.name === "code";
+    try {
+      if (useCode) {
+        const body = { email };
+        if (code) body.code = code;
+        if (token) body.token = token;
+        if (!body.code && !body.token) throw new Error("Enter the code from the email.");
+        await finishSignIn(body);
+        return;
+      }
+      const result = await api("/auth/email-signin/request", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      ok.textContent = result.detail || "If that email is registered, a sign-in message was sent.";
+      ok.classList.remove("hidden");
+    } catch (err) {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    }
+  });
+
+  viewEl.replaceChildren(el("div", { className: "auth-splash" }, [form]));
+  if (prefillToken && prefillEmail) {
+    finishSignIn({ email: prefillEmail, token: prefillToken, code: prefillCode || undefined }).catch((err) => {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    });
+  }
 }
 
 function renderForgotPassword() {
@@ -6432,7 +6286,10 @@ function renderOnboarding() {
           (selected?.models || []).forEach((model) => {
             modelSelect.appendChild(el("option", { value: model }, model));
           });
-          if (selected?.default_model) modelCustom.value = selected.default_model;
+          if (selected?.default_model) {
+            modelCustom.value = selected.default_model;
+            modelSelect.value = selected.default_model;
+          }
           if (selected?.needs_base_url) {
             baseUrlLabel.classList.remove("hidden");
             baseUrlInput.value = selected.default_base_url || baseUrlInput.value;
@@ -6442,14 +6299,27 @@ function renderOnboarding() {
         }
         providerSelect.addEventListener("change", refreshProviderUi);
         modelSelect.addEventListener("change", () => { modelCustom.value = modelSelect.value; });
+        if (providerMap.openrouter) providerSelect.value = "openrouter";
         refreshProviderUi();
 
-        panel.appendChild(el("h2", {}, "AI provider setup"));
-        panel.appendChild(el("p", { className: "muted" }, "Shared for your dynamic. Tap ? for adult-content guidance (LM Studio / uncensored OpenRouter block less)."));
+        panel.appendChild(el("h2", {}, "Connect OpenRouter"));
+        panel.appendChild(el("p", { className: "muted" }, "One key, shared with your partner. Leave the model on openrouter/auto."));
+        panel.appendChild(el("ol", { className: "setup-steps" }, [
+          el("li", {}, [
+            "Create a key at ",
+            el("a", { href: "https://openrouter.ai/keys", target: "_blank", rel: "noopener noreferrer" }, "openrouter.ai/keys"),
+            ".",
+          ]),
+          el("li", {}, "Paste it below."),
+          el("li", {}, "Save. You can test it later in Settings."),
+        ]));
         panel.appendChild(providerRow);
         panel.appendChild(description);
         panel.appendChild(el("label", {}, ["Model", modelSelect]));
-        panel.appendChild(el("label", {}, ["Custom model (optional)", modelCustom]));
+        panel.appendChild(el("details", {}, [
+          el("summary", {}, "Use a different model"),
+          el("label", {}, ["Custom model (optional)", modelCustom]),
+        ]));
         panel.appendChild(baseUrlLabel);
         panel.appendChild(el("label", {}, ["API key", apiKeyInput]));
         panel.appendChild(el("div", { className: "row wrap" }, [
@@ -6459,6 +6329,9 @@ function renderOnboarding() {
             onClick: async () => {
               error.classList.add("hidden");
               try {
+                if (!apiKeyInput.value.trim() && providerSelect.value !== "lmstudio" && providerSelect.value !== "openai_compatible") {
+                  throw new Error("Paste your OpenRouter key, or choose Fill out later.");
+                }
                 await api(`/dynamics/${status.dynamic_id}/shared-llm`, {
                   method: "PUT",
                   body: JSON.stringify({
@@ -6474,7 +6347,7 @@ function renderOnboarding() {
                 error.classList.remove("hidden");
               }
             },
-          }, "Save shared API key"),
+          }, "Save key"),
           el("button", {
             className: "ghost-btn",
             type: "button",
@@ -6605,8 +6478,9 @@ function renderOnboarding() {
 }
 
 const HISTORY_REPORTS = [
-  { id: "weekly", title: "Weekly activity", subtitle: "Orgasm comparison, weekly trends, and averages", needsChastity: false, yearBased: false },
   { id: "chastity-days", title: "Days in chastity", subtitle: "Calendar of full, partial, and free days", needsChastity: true, yearBased: true },
+  { id: "weekly", title: "Weekly activity", subtitle: "Full orgasms, sessions, and locked time", needsChastity: false, yearBased: false },
+  { id: "calendar", title: "Calendar", subtitle: "Lockups, orgasms, and feelings on the month", needsChastity: false, yearBased: false },
   { id: "orgasms", title: "Orgasm report", subtitle: "Charts, averages, monthly trends, and intervals", needsChastity: false, yearBased: true },
   { id: "chastity-stats", title: "Chastity statistics", subtitle: "Sessions, durations, locked %, monthly charts", needsChastity: true, yearBased: true },
   { id: "sessions", title: "Linked sessions", subtitle: "Entries within 1 hour grouped together", needsChastity: false, yearBased: false },
@@ -6614,14 +6488,14 @@ const HISTORY_REPORTS = [
   { id: "chastity-log", title: "Chastity lockup log", subtitle: "Lockup periods with edit controls", needsChastity: true, yearBased: false },
 ];
 
-function historyReportShell(dynamicId, title, bodyNodes, { onBack } = {}) {
+function historyReportShell(dynamicId, title, bodyNodes, { onBack, backLabel } = {}) {
   const stack = el("div", { className: "stack" }, [
     el("div", { className: "row wrap" }, [
       el("button", {
         className: "ghost-btn",
         type: "button",
         onClick: () => (onBack ? onBack() : navigate(`/dynamic/${dynamicId}/history`)),
-      }, "← History"),
+      }, backLabel || "← History"),
       el("h1", {}, title),
     ]),
     ...(Array.isArray(bodyNodes) ? bodyNodes : [bodyNodes]),
@@ -6721,6 +6595,107 @@ function chastityDayStatusLine(status) {
   return "Free. No lockup covers this day.";
 }
 
+function openTrackingDayChooser(dynamicId, day, { membershipId = "", onChanged } = {}) {
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const card = el("div", { className: "card stack modal-card" }, [
+    el("h3", {}, day.date || "Day"),
+    el("button", {
+      type: "button",
+      className: "choice-btn playtime-option",
+      onClick: () => {
+        backdrop.remove();
+        openChastityDaySheet(dynamicId, day, { membershipId, onChanged });
+      },
+    }, [
+      el("strong", {}, "Chastity log"),
+      el("span", { className: "muted" }, "Lockup for this day"),
+    ]),
+    el("button", {
+      type: "button",
+      className: "choice-btn playtime-option",
+      onClick: () => {
+        backdrop.remove();
+        openOrgasmDaySheet(dynamicId, day, { membershipId, onChanged });
+      },
+    }, [
+      el("strong", {}, "Orgasm log"),
+      el("span", { className: "muted" }, "Entry for this day"),
+    ]),
+    el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Close"),
+  ]);
+  backdrop.appendChild(card);
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+}
+
+function localDayKey(value) {
+  const parsed = parseServerDate(value);
+  if (!parsed || Number.isNaN(parsed.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`;
+}
+
+async function openOrgasmDaySheet(dynamicId, day, { membershipId = "", onChanged } = {}) {
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const card = el("div", { className: "card stack modal-card" }, [
+    el("h3", {}, day.date || "Orgasm log"),
+    el("p", { className: "muted" }, "Loading…"),
+  ]);
+  backdrop.appendChild(card);
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+  try {
+    const [entries, dynamic] = await Promise.all([
+      api(`/dynamics/${dynamicId}/tracking`),
+      loadDynamic(dynamicId).then(() => state.currentDynamic),
+    ]);
+    const partners = dynamic?.partners || [];
+    const matches = (entries || []).filter((entry) => {
+      if (localDayKey(entry.occurred_at) !== day.date) return false;
+      if (membershipId && entry.for_membership_id !== membershipId) return false;
+      return true;
+    });
+    const body = [
+      el("h3", {}, day.date || "Orgasm log"),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => {
+          backdrop.remove();
+          navigate(`/dynamic/${dynamicId}/tracking?on=${encodeURIComponent(day.date || "")}`);
+        },
+      }, "New orgasm log"),
+    ];
+    if (!matches.length) body.push(el("p", { className: "muted" }, "No orgasm log on this day."));
+    matches.forEach((entry) => {
+      body.push(el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          card.replaceChildren(buildTrackingEntryEditCard(dynamicId, entry, partners, {
+            onSaved: () => {
+              backdrop.remove();
+              onChanged?.();
+            },
+            onCancel: () => {
+              backdrop.remove();
+              openOrgasmDaySheet(dynamicId, day, { membershipId, onChanged });
+            },
+          }));
+        },
+      }, `Edit ${entry.for_display_name || "log"} · ${formatLogWhen(entry.occurred_at)}`));
+    });
+    body.push(el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Close"));
+    card.replaceChildren(...body);
+  } catch (err) {
+    card.replaceChildren(el("p", { className: "error" }, err.message || "Could not load orgasm logs."));
+  }
+}
+
 async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChanged } = {}) {
   const backdrop = el("div", { className: "modal-backdrop" });
   const card = el("div", { className: "card stack modal-card" }, [
@@ -6733,10 +6708,11 @@ async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChang
   });
   document.body.appendChild(backdrop);
   try {
-    const [lockups, coveringRaw, settings] = await Promise.all([
+    const [lockups, coveringRaw, settings, sleepSessions] = await Promise.all([
       api(`/dynamics/${dynamicId}/chastity`),
       api(`/dynamics/${dynamicId}/chastity?on=${encodeURIComponent(day.date || "")}`),
       api(`/dynamics/${dynamicId}/chastity/settings`).catch(() => ({ unlock_presets: [] })),
+      api(`/dynamics/${dynamicId}/sleep`).catch(() => []),
     ]);
     const covering = (coveringRaw || []).filter((lockup) => {
       if (membershipId && lockup.for_membership_id !== membershipId) return false;
@@ -6745,7 +6721,7 @@ async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChang
     const configuredSleep = (settings.unlock_presets || []).find((preset) => isSleepPreset(preset))
       || { name: "Sleep", break_type: "authorized_sleep", start: "23:00", end: "07:00" };
     const memberId = membershipId || covering[0]?.for_membership_id || "";
-    const { preset: sleep, average: sleepAverage } = sleepPresetWithAverage(configuredSleep, lockups, memberId);
+    const { preset: sleep, average: sleepAverage } = sleepPresetWithAverage(configuredSleep, lockups, memberId, sleepSessions);
     const startInput = el("input", { type: "datetime-local" });
     const endInput = el("input", { type: "datetime-local" });
     const lockupSelect = el("select");
@@ -6762,7 +6738,7 @@ async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChang
     function applySleepWindow() {
       const chosen = chosenLockup();
       if (!chosen) return null;
-      const next = sleepPresetWithAverage(configuredSleep, lockups, chosen.for_membership_id || memberId);
+      const next = sleepPresetWithAverage(configuredSleep, lockups, chosen.for_membership_id || memberId, sleepSessions);
       const span = sleepSpanForDay(day.date, next.preset, chosen);
       if (!span) {
         clipNote.textContent = "The usual sleep window does not fall inside this lockup on this day.";
@@ -6814,7 +6790,7 @@ async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChang
       el("div", { className: "stack" }, covering.map((lockup) => el("p", {}, `${lockup.status} · ${formatLocalDateTime(lockup.started_at)} – ${lockup.ended_at ? formatLocalDateTime(lockup.ended_at) : "ongoing"}`))),
       covering.length > 1 ? el("label", { className: "stack" }, ["Lockup", lockupSelect]) : null,
       sleepAverage
-        ? el("p", { className: "muted" }, `Sleep times are the average of ${sleepAverage.count} past Sleep unlock${sleepAverage.count === 1 ? "" : "s"}: unlock ${formatTimeOfDay(sleepAverage.start)}, locked again ${formatTimeOfDay(sleepAverage.end)}.`)
+        ? el("p", { className: "muted" }, sleepAverageSentence(sleepAverage))
         : null,
       clipNote,
       el("button", {
@@ -6935,7 +6911,7 @@ async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChang
   }
 }
 
-function renderChastityDayCell(day, { dynamicId = "", membershipId = "", onChanged } = {}) {
+function renderChastityDayCell(day, { dynamicId = "", membershipId = "", onChanged, chooser = false } = {}) {
   const dayNum = String(new Date(`${day.date}T12:00:00`).getDate());
   const hours = day.sleep_hours;
   const hasSleep = hours != null && Number(hours) > 0;
@@ -6948,7 +6924,10 @@ function renderChastityDayCell(day, { dynamicId = "", membershipId = "", onChang
     className: "chastity-day",
     title: title.join(" · "),
     onClick: () => {
-      if (dynamicId) openChastityDaySheet(dynamicId, day, { membershipId, onChanged });
+      if (!dynamicId) return;
+      const opts = { membershipId, onChanged };
+      if (chooser) openTrackingDayChooser(dynamicId, day, opts);
+      else openChastityDaySheet(dynamicId, day, opts);
     },
   });
   if (hasSleep) {
@@ -6975,7 +6954,7 @@ function renderChastityDayCell(day, { dynamicId = "", membershipId = "", onChang
   return host;
 }
 
-function renderChastityCalendar(days, { dynamicId = "", membershipId = "", onChanged } = {}) {
+function renderChastityCalendar(days, { dynamicId = "", membershipId = "", onChanged, chooser = false, quiet = false } = {}) {
   const byMonth = {};
   days.forEach((d) => {
     const key = d.date.slice(0, 7);
@@ -6989,14 +6968,16 @@ function renderChastityCalendar(days, { dynamicId = "", membershipId = "", onCha
     ]);
     const grid = el("div", { className: "chastity-day-grid" });
     byMonth[monthKey].forEach((day) => {
-      grid.appendChild(renderChastityDayCell(day, { dynamicId, membershipId, onChanged }));
+      grid.appendChild(renderChastityDayCell(day, { dynamicId, membershipId, onChanged, chooser }));
     });
     monthEl.appendChild(grid);
     wrap.appendChild(monthEl);
   });
-  wrap.appendChild(el("p", { className: "muted" }, "Bright = full calendar day locked (breaks ≤20m) · Outlined = partial (2h+) · Dim = free · Whole days = rolling 24h streaks"));
-  wrap.appendChild(el("p", { className: "muted" }, "Sleep ring = night ending that morning. Solid = slept locked · Dotted = slept unlocked. Red < 6.6h · Yellow 6.6–7.2h · Green > 7.2h"));
-  wrap.appendChild(el("p", { className: "muted" }, "Dots: red = denied / milking / partial-milking · blue = ruined orgasm · green = full orgasm"));
+  if (!quiet) {
+    wrap.appendChild(el("p", { className: "muted" }, "Bright = full calendar day locked (breaks ≤20m) · Outlined = partial (2h+) · Dim = free · Whole days = rolling 24h streaks"));
+    wrap.appendChild(el("p", { className: "muted" }, "Sleep ring = night ending that morning. Solid = slept locked · Dotted = slept unlocked. Red < 6.6h · Yellow 6.6–7.2h · Green > 7.2h"));
+    wrap.appendChild(el("p", { className: "muted" }, "Dots: red = denied / milking / partial-milking · blue = ruined orgasm · green = full orgasm"));
+  }
   return wrap;
 }
 
@@ -7091,6 +7072,191 @@ function renderPartnerLegend(partners) {
   return row;
 }
 
+function renderRuinFullSplit(items) {
+  const wrap = el("div", { className: "ratio-split-list" });
+  items.forEach((item) => {
+    const full = Number(item.full) || 0;
+    const ruined = Number(item.ruined) || 0;
+    const total = full + ruined;
+    const bar = el("div", { className: "ratio-split" });
+    if (total) {
+      bar.appendChild(el("div", { className: "full-part", style: `width:${(full / total) * 100}%` }));
+      bar.appendChild(el("div", { className: "ruined-part", style: `width:${(ruined / total) * 100}%` }));
+    }
+    wrap.appendChild(el("div", {}, [
+      el("div", { className: "ratio-split-label" }, [
+        el("span", {}, item.label),
+        el("span", { className: "muted" }, total ? `${ruined} ruined : ${full} full` : "none logged"),
+      ]),
+      bar,
+    ]));
+  });
+  wrap.appendChild(el("p", { className: "muted" }, "Green is full. Striped blue is ruined. The bar is that person's own mix, not a score against their partner."));
+  return wrap;
+}
+
+function svgEl(tag, attrs = {}) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value)));
+  return node;
+}
+
+function historySeries(buckets, partnerIds, valueKey, smooth) {
+  return partnerIds.map((pid) => {
+    const raw = buckets.map((bucket) => {
+      const value = typeof valueKey === "function" ? valueKey(bucket, pid) : (bucket[valueKey] || {})[pid];
+      return Number(value) || 0;
+    });
+    if (!smooth || smooth < 2) return raw;
+    return raw.map((_, index) => {
+      const slice = raw.slice(Math.max(0, index - smooth + 1), index + 1);
+      return slice.reduce((sum, n) => sum + n, 0) / slice.length;
+    });
+  });
+}
+
+function renderHistoryLineChart(buckets, { valueKey, partnerIds, partnerNames, maxHint, goal, unit = "", smooth = 0 } = {}) {
+  const series = historySeries(buckets, partnerIds, valueKey, smooth);
+  const goalValue = goal == null || Number.isNaN(Number(goal)) ? null : Number(goal);
+  const maxVal = Math.max(1, Number(maxHint) || 0, goalValue || 0, ...series.flat());
+  const width = Math.max(280, (buckets.length || 1) * 28);
+  const height = 168;
+  const padL = 32;
+  const padR = 10;
+  const padT = 12;
+  const padB = 24;
+  const innerW = width - padL - padR;
+  const innerH = height - padT - padB;
+  const xAt = (index) => padL + (buckets.length <= 1 ? innerW / 2 : (index / (buckets.length - 1)) * innerW);
+  const yAt = (value) => padT + innerH - (Math.max(0, value) / maxVal) * innerH;
+  const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, class: "history-line-chart", role: "img" });
+  [0, 0.5, 1].forEach((tick) => {
+    const y = yAt(maxVal * tick);
+    svg.appendChild(svgEl("line", { x1: padL, x2: width - padR, y1: y, y2: y, class: "history-line-grid" }));
+    const label = svgEl("text", { x: 2, y: y + 3, class: "history-line-axis" });
+    const shown = maxVal * tick;
+    label.textContent = shown >= 10 || unit === "%" ? String(Math.round(shown)) : shown.toFixed(1);
+    svg.appendChild(label);
+  });
+  if (goalValue != null) {
+    const y = yAt(Math.min(goalValue, maxVal));
+    svg.appendChild(svgEl("line", { x1: padL, x2: width - padR, y1: y, y2: y, class: "history-line-goal" }));
+  }
+  series.forEach((values, idx) => {
+    if (!values.length) return;
+    svg.appendChild(svgEl("polyline", {
+      points: values.map((value, index) => `${xAt(index)},${yAt(value)}`).join(" "),
+      class: `history-line p${idx}`,
+    }));
+    values.forEach((value, index) => {
+      const shown = unit === "%" ? `${Math.round(value)}%` : String(Math.round(value * 10) / 10);
+      const dot = svgEl("circle", {
+        cx: xAt(index),
+        cy: yAt(value),
+        r: buckets.length > 24 ? 2.2 : 3.2,
+        class: `history-line-dot p${idx}`,
+      });
+      const tip = svgEl("title");
+      tip.textContent = `${partnerNames[idx] || "Partner"} · ${buckets[index].label}: ${shown}`;
+      dot.appendChild(tip);
+      svg.appendChild(dot);
+    });
+  });
+  const step = Math.max(1, Math.ceil(buckets.length / 8));
+  buckets.forEach((bucket, index) => {
+    if (index % step !== 0 && index !== buckets.length - 1) return;
+    const label = svgEl("text", {
+      x: xAt(index),
+      y: height - 4,
+      class: "history-line-xlabel",
+      "text-anchor": "middle",
+    });
+    label.textContent = bucket.label;
+    svg.appendChild(label);
+  });
+  const wrap = el("div", { className: "history-line-wrap" });
+  wrap.appendChild(svg);
+  return wrap;
+}
+
+function lockGoalValue(data) {
+  const rows = data?.config?.targets || data?.targets || [];
+  const row = rows.find((item) => item.metric === "percent_locked");
+  return row && row.target != null && !Number.isNaN(Number(row.target)) ? Number(row.target) : null;
+}
+
+function renderWeeklyLockCard(data, { goal = null, interactive = false, onGoal } = {}) {
+  const subs = (data?.partners || []).filter((partner) => partner.chastity_enabled);
+  if (!data?.chastity_any_enabled || !subs.length || !(data.weekly_buckets || []).length) return null;
+  const ids = subs.map((partner) => partner.membership_id);
+  const names = subs.map((partner) => partner.name);
+  let current = goal == null ? 50 : Number(goal);
+  const showGoal = interactive || goal != null;
+  const plot = el("div", { className: "lock-goal-plot" });
+  const valueLabel = el("span", { className: "lock-goal-value" }, `${Math.round(current)}%`);
+  function draw() {
+    plot.replaceChildren(renderHistoryLineChart(data.weekly_buckets, {
+      valueKey: "chastity_locked_pct_by_partner",
+      partnerIds: ids,
+      partnerNames: names,
+      maxHint: 100,
+      goal: showGoal ? current : null,
+      unit: "%",
+    }));
+  }
+  draw();
+  const layout = el("div", { className: "lock-goal-layout" }, [plot]);
+  if (interactive) {
+    const range = el("input", {
+      type: "range",
+      className: "lock-goal-range",
+      min: "0",
+      max: "100",
+      step: "1",
+      value: String(Math.round(current)),
+      "aria-label": "Weekly locked goal",
+    });
+    range.addEventListener("input", () => {
+      current = Number(range.value);
+      valueLabel.textContent = `${Math.round(current)}%`;
+      draw();
+      if (onGoal) onGoal(current);
+    });
+    layout.appendChild(el("label", { className: "lock-goal-slider" }, [
+      el("span", { className: "muted" }, "Goal"),
+      range,
+      valueLabel,
+    ]));
+  }
+  return el("div", { className: "card stack" }, [
+    el("h2", {}, "Locked time"),
+    el("p", { className: "muted" }, interactive
+      ? "Percent of each week spent locked. Slide the goal to the weekly average you want."
+      : "Percent of each week spent locked. The line climbs or falls from week to week."),
+    renderPartnerLegend(subs),
+    layout,
+  ]);
+}
+
+function buildWeeklyPeriodPicker(mode, sinceLabel, onChange) {
+  const select = el("select");
+  [
+    ["since_first", sinceLabel || "Since first log"],
+    ["30", "30 days"],
+    ["90", "90 days"],
+    ["180", "6 months"],
+    ["365", "1 year"],
+  ].forEach(([value, label]) => {
+    const opt = el("option", { value }, label);
+    if ((mode === "since_first" && value === "since_first") || String(mode) === value) opt.selected = true;
+    select.appendChild(opt);
+  });
+  select.addEventListener("change", () => {
+    onChange(select.value === "since_first" ? "since_first" : parseInt(select.value, 10));
+  });
+  return el("label", {}, ["Period", select]);
+}
+
 function renderHistoryHub(dynamicId) {
   const id = dynamicId || getActiveDynamicId();
   if (!id) {
@@ -7144,94 +7310,115 @@ function renderHistoryReport(dynamicId, reportId) {
   }
   state.activeDynamicId = id;
   let year = new Date().getFullYear();
-  let sinceFirstLockup = false;
+  let sinceFirstLockup = true;
   let days = report.id === "chastity-log" ? 365 : 90;
+  let periodMode = "since_first";
+  let fullSpanLabel = "";
   let selectedTags = [];
 
   function paintWeekly() {
     const tagQuery = selectedTags.length ? `&tags=${encodeURIComponent(selectedTags.join(","))}` : "";
-    api(`/dynamics/${id}/history/reports/weekly?days=${days}${tagQuery}`)
-      .then((data) => {
+    const periodQuery = periodMode === "since_first" ? "since=first" : `days=${days}`;
+    Promise.all([
+      api(`/dynamics/${id}/history/reports/weekly?${periodQuery}${tagQuery}`),
+      api(`/dynamics/${id}/standing-targets`).catch(() => null),
+    ])
+      .then(([data, standing]) => {
+        if (periodMode === "since_first" && data.span_label) fullSpanLabel = data.span_label;
         const partnerIds = data.partners.map((p) => p.membership_id);
         const partnerNames = data.partners.map((p) => p.name);
-        const buckets = data.weekly_buckets.slice(-12);
+        const buckets = data.weekly_buckets || [];
+        const spanLabel = data.span_label || "this period";
         const nodes = [
-          buildDaysPicker(days, (v) => { days = v; paintWeekly(); }),
+          buildWeeklyPeriodPicker(periodMode, fullSpanLabel || spanLabel, (next) => {
+            periodMode = next;
+            if (next !== "since_first") days = next;
+            paintWeekly();
+          }),
+          periodMode === "since_first"
+            ? el("p", { className: "muted" }, "From the first log through today.")
+            : null,
           el("p", { className: "muted" }, data.comparison_label),
           renderPartnerLegend(data.partners),
-        ];
+        ].filter(Boolean);
 
         const compare = el("div", { className: "card stack" }, [
-          el("h2", {}, "Orgasm totals"),
-          renderCompareBars(data.partners.map((p) => ({ label: p.name, value: p.orgasm_count }))),
+          el("h2", {}, "Full orgasms"),
+          renderCompareBars(data.partners.map((p) => ({
+            label: p.name,
+            value: p.full_orgasm_count ?? p.orgasm_count,
+          }))),
+          el("p", { className: "muted" }, "Partner beside partner. Ruined orgasms are not in these bars."),
         ]);
         nodes.push(compare);
+        nodes.push(el("div", { className: "card stack" }, [
+          el("h2", {}, "Ruined to full"),
+          renderRuinFullSplit(data.partners.map((p) => ({
+            label: p.name,
+            full: p.full_orgasm_count ?? 0,
+            ruined: p.ruined_orgasm_count ?? 0,
+          }))),
+        ]));
 
         nodes.push(el("div", { className: "card stack" }, [
-          el("h2", {}, "Averages this period"),
+          el("h2", {}, `Averages over ${spanLabel}`),
           renderMetricTiles(data.partners.flatMap((p) => {
-            const weeks = Math.max(1, days / 7);
-            return [
-              { label: `${p.name} / week`, value: (p.orgasm_count / weeks).toFixed(1), hint: "orgasms" },
-              { label: `${p.name} duration`, value: p.avg_duration_minutes != null ? `${p.avg_duration_minutes}m` : "—", hint: "avg session" },
-              { label: `${p.name} play`, value: p.play_count, hint: "no-O sessions" },
+            const span = data.span_days || days;
+            const weeks = Math.max(1, span / 7);
+            const fullCount = p.full_orgasm_count ?? p.orgasm_count;
+            const tiles = [
+              { label: `${p.name} / week`, value: (fullCount / weeks).toFixed(1), hint: "full orgasms" },
             ];
+            if (p.role !== "dominant") {
+              tiles.push({ label: `${p.name} play`, value: p.play_count, hint: "no-O sessions" });
+            }
+            if (p.role === "submissive") {
+              const fullSessions = Number(p.full_session_count) || 0;
+              const ruinedSessions = Number(p.ruined_session_count) || 0;
+              tiles.push({
+                label: `${p.name} sessions`,
+                value: fullSessions || ruinedSessions ? `${fullSessions} : ${ruinedSessions}` : "—",
+                hint: "full : ruined",
+              });
+            }
+            return tiles;
           })),
         ]));
 
         nodes.push(el("div", { className: "card stack" }, [
-          el("h2", {}, "Weekly orgasms"),
-          renderHistoryBarChart(buckets, {
-            valueKey: "orgasms_by_partner",
+          el("h2", {}, "Full orgasm rate"),
+          renderHistoryLineChart(buckets, {
+            valueKey: "full_by_partner",
             partnerIds,
             partnerNames,
+            smooth: 4,
           }),
-          el("p", { className: "muted" }, "Bars = orgasm count per partner each week"),
+          el("p", { className: "muted" }, "Each point is that partner's average full orgasms per week over the previous 4 weeks. Older logs without a ruined tag count as full."),
         ]));
 
         nodes.push(el("div", { className: "card stack" }, [
-          el("h2", {}, "Weekly play sessions"),
-          renderHistoryBarChart(buckets, {
-            valueKey: "play_by_partner",
+          el("h2", {}, "Sessions per week"),
+          renderHistoryLineChart(buckets, {
+            valueKey: "sessions_by_partner",
             partnerIds,
             partnerNames,
           }),
+          el("p", { className: "muted" }, "Sessions logged that week. Several orgasms in one session count once."),
         ]));
 
-        nodes.push(el("div", { className: "card stack" }, [
-          el("h2", {}, "Weekly ruined / denial tags"),
-          renderHistoryBarChart(buckets, {
-            valueKey: "ruined_by_partner",
-            partnerIds,
-            partnerNames,
-          }),
-        ]));
-
-        nodes.push(el("div", { className: "card stack" }, [
-          el("h2", {}, "Average session duration (min)"),
-          renderHistoryBarChart(buckets, {
-            valueKey: (bucket, pid) => bucket.avg_duration_by_partner?.[pid] || 0,
-            partnerIds,
-            partnerNames,
-          }),
-        ]));
-
-        if (data.chastity_any_enabled) {
-          nodes.push(el("div", { className: "card stack" }, [
-            el("h2", {}, "Weekly chastity % locked"),
-            renderHistoryBarChart(buckets, {
-              valueKey: "chastity_locked_pct_by_partner",
-              partnerIds,
-              partnerNames,
-              maxHint: 100,
-            }),
-            el("p", { className: "muted" }, "Height = percent of the week locked (sub only)"),
-          ]));
-        }
+        const lockCard = renderWeeklyLockCard(data, { goal: lockGoalValue(standing) });
+        if (lockCard) nodes.push(lockCard);
 
         historyReportShell(id, report.title, nodes);
       })
       .catch((err) => historyReportShell(id, report.title, el("p", { className: "error" }, err.message)));
+  }
+
+  function paintCalendar() {
+    loadDynamic(id).then(() => {
+      const partners = state.currentDynamic?.partners || [];
+      historyReportShell(id, report.title, renderTrackingEventsCalendar(id, partners));
+    }).catch((err) => historyReportShell(id, report.title, el("p", { className: "error" }, err.message)));
   }
 
   function paintChastityDays() {
@@ -7246,27 +7433,42 @@ function renderHistoryReport(dynamicId, reportId) {
           }),
         ];
         if (data.since_first && data.range_start) {
-          nodes.push(el("p", { className: "muted" }, `From ${data.range_start} through today.`));
+          nodes.push(el("p", { className: "muted" }, `From ${data.range_start} through today. Days before a person’s first lockup are left off.`));
+        } else {
+          nodes.push(el("p", { className: "muted" }, "Days before a person’s first lockup are left off."));
         }
+        nodes.push(el("button", {
+          className: "ghost-btn",
+          type: "button",
+          onClick: () => navigate(`/dynamic/${id}/history/list`),
+        }, "Other reports"));
         if (!data.partners.length) {
           nodes.push(el("p", { className: "muted" }, "Chastity not enabled."));
         }
         data.partners.forEach((partner) => {
-          nodes.push(el("div", { className: "card stack" }, [
+          const card = el("div", { className: "card stack" }, [
             el("h2", {}, partner.name),
-            renderMetricTiles([
+          ]);
+          if (!(partner.days || []).length) {
+            card.appendChild(el("p", { className: "muted" }, "No lockups in this range."));
+          } else {
+            card.appendChild(renderMetricTiles([
               { label: "Rolling whole days", value: partner.whole_days },
               { label: "Partial days", value: partner.partial_days },
               { label: "Free days", value: partner.free_days },
-            ]),
-            renderChastityCalendar(partner.days, {
+            ]));
+            card.appendChild(renderChastityCalendar(partner.days, {
               dynamicId: id,
               membershipId: partner.membership_id,
               onChanged: () => paintChastityDays(),
-            }),
-          ]));
+            }));
+          }
+          nodes.push(card);
         });
-        historyReportShell(id, report.title, nodes);
+        historyReportShell(id, report.title, nodes, {
+          onBack: () => navigate(`/dynamic/${id}`),
+          backLabel: "← Dynamic",
+        });
       })
       .catch((err) => historyReportShell(id, report.title, el("p", { className: "error" }, err.message)));
   }
@@ -7610,7 +7812,7 @@ function renderHistoryReport(dynamicId, reportId) {
             className: "link-btn",
             type: "button",
             onClick: () => navigate(`/dynamic/${id}/chastity`),
-          }, "Chastity tracking →"),
+          }, "Tracking →"),
         ]);
       })
       .catch((err) => historyReportShell(id, report.title, el("p", { className: "error" }, err.message)));
@@ -7618,6 +7820,7 @@ function renderHistoryReport(dynamicId, reportId) {
 
   setViewContent(el("p", { className: "muted" }, "Loading report..."));
   if (reportId === "weekly") paintWeekly();
+  else if (reportId === "calendar") paintCalendar();
   else if (reportId === "chastity-days") paintChastityDays();
   else if (reportId === "orgasms") paintOrgasms();
   else if (reportId === "chastity-stats") paintChastityStats();
@@ -8589,6 +8792,1079 @@ function renderTrackingEventsCalendar(dynamicId, partners) {
   return host;
 }
 
+/* TODAY_HUB_START */
+/* Today hub and quick log. Prefers GET /watch/summary, and composes chastity, tracking, sleep, and cycle if that route is missing. */
+
+let navSheet = null;
+let quickLogToken = 0;
+
+const QUICK_LOG_OUTCOMES = [
+  { id: "full", label: "Full", eventType: "orgasm", tag: "Full Orgasm" },
+  { id: "ruined", label: "Ruined", eventType: "orgasm", tag: "Ruined Orgasm" },
+  { id: "denied", label: "Denied", eventType: "orgasm", tag: "Denied" },
+  { id: "play", label: "Play", eventType: "no_orgasm", tag: "" },
+];
+
+function closeNavSheets() {
+  quickLogToken += 1;
+  const nodes = Array.from(document.querySelectorAll(".today-sheet-backdrop"));
+  nodes.forEach((node) => {
+    if (typeof node._todayClose === "function") node._todayClose();
+    else node.remove();
+  });
+  const wasOpen = navSheet;
+  navSheet = null;
+  if (wasOpen) updateBottomNav();
+}
+
+function openTodaySheet(kind, title, bodyNodes) {
+  closeNavSheets();
+  navSheet = kind || null;
+  const backdrop = el("div", { className: "today-sheet-backdrop", role: "presentation" });
+  let closed = false;
+  function close() {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener("keydown", onKey);
+    if (backdrop.parentNode) backdrop.remove();
+    if (navSheet === kind) navSheet = null;
+    updateBottomNav();
+  }
+  function onKey(ev) {
+    if (ev.key === "Escape") close();
+  }
+  backdrop._todayClose = close;
+  const sheet = el("div", {
+    className: "today-sheet card stack",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": title || "Menu",
+  }, [
+    el("div", { className: "today-sheet-handle", "aria-hidden": "true" }),
+    el("div", { className: "row today-sheet-head" }, [
+      el("strong", {}, title || ""),
+      el("button", { type: "button", className: "ghost-btn", onClick: () => close() }, "Close"),
+    ]),
+  ].concat(bodyNodes || []));
+  backdrop.appendChild(sheet);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) close();
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(backdrop);
+  updateBottomNav();
+  return close;
+}
+
+function quickLogPayload(outcome, forMembershipId, notes) {
+  const body = {
+    for_membership_id: forMembershipId,
+    event_type: outcome.eventType,
+    notes: notes || "",
+    tags: [],
+    orgasms: [],
+    occurred_at: new Date().toISOString(),
+  };
+  if (outcome.eventType === "orgasm" && outcome.tag) {
+    body.orgasms = [{ tags: [outcome.tag] }];
+  }
+  return body;
+}
+
+function showQuickLogFeelingsGate(errorEl, dynamicId) {
+  errorEl.classList.remove("hidden");
+  errorEl.replaceChildren(el("span", {}, [
+    "Log feelings before play. ",
+    el("button", {
+      type: "button",
+      className: "link-btn",
+      onClick: () => {
+        closeNavSheets();
+        navigate(`/dynamic/${dynamicId}/feelings?context=before_play`, { skipInbox: true });
+      },
+    }, "Open Feelings"),
+  ]));
+}
+
+async function offerFeelingsAfterQuickLog(dynamicId, entry) {
+  closeNavSheets();
+  let status = null;
+  try {
+    status = await api(`/dynamics/${dynamicId}/feelings/status`);
+  } catch (err) {
+    status = null;
+  }
+  if (status && status.prompt_after_events === false) {
+    showToast("Saved.");
+    return;
+  }
+  const at = feelingsAtJustAfter(entry && entry.occurred_at ? entry.occurred_at : new Date().toISOString());
+  const params = new URLSearchParams();
+  params.set("at", at);
+  params.set("from", entry && entry.event_type === "no_orgasm" ? "play" : "orgasm");
+  if (entry && entry.id) params.set("org_entry_id", entry.id);
+  params.set("context", "after_play");
+  const path = `/dynamic/${dynamicId}/feelings?${params.toString()}`;
+  openTodaySheet("", "Saved", [
+    el("p", { className: "muted" }, "Log how that felt? You can skip this."),
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => {
+        closeNavSheets();
+        navigate(path, { skipInbox: true });
+      },
+    }, "Log feelings"),
+    el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => closeNavSheets(),
+    }, "Not now"),
+  ]);
+}
+
+async function openQuickLogSheet(dynamicId) {
+  if (!dynamicId) return;
+  if (navSheet === "log") {
+    closeNavSheets();
+    return;
+  }
+  const token = (quickLogToken += 1);
+  try {
+    if (!state.currentDynamic || state.currentDynamic.id !== dynamicId) {
+      await loadDynamic(dynamicId);
+    }
+  } catch (err) {
+    if (token === quickLogToken) showToast(err.message || "Could not open log.");
+    return;
+  }
+  if (token !== quickLogToken) return;
+  const dynamic = state.currentDynamic;
+  const partners = (dynamic && dynamic.partners) || [];
+  const you = partners.filter((partner) => partner.is_you)[0] || null;
+  let forId = (you && you.id) || (partners[0] && partners[0].id) || "";
+  let outcome = null;
+  let saving = false;
+  const errorEl = el("div", { className: "error hidden" });
+  const note = el("input", {
+    type: "text",
+    maxlength: "280",
+    placeholder: "Note (optional)",
+    "aria-label": "Note",
+  });
+  const submitBtn = el("button", { type: "button", className: "primary-btn" }, "Save");
+  const partnerRow = el("div", { className: "today-chip-row" });
+  const outcomeRow = el("div", { className: "today-chip-row" });
+
+  function paintPartners() {
+    partnerRow.replaceChildren();
+    partners.forEach((partner) => {
+      partnerRow.appendChild(el("button", {
+        type: "button",
+        className: `today-chip${partner.id === forId ? " active" : ""}`,
+        onClick: () => {
+          forId = partner.id;
+          paintPartners();
+        },
+      }, partner.display_name || "Partner"));
+    });
+  }
+
+  function paintOutcomes() {
+    outcomeRow.replaceChildren();
+    QUICK_LOG_OUTCOMES.forEach((item) => {
+      outcomeRow.appendChild(el("button", {
+        type: "button",
+        className: `today-chip${outcome && outcome.id === item.id ? " active" : ""}`,
+        "aria-label": item.id === "play" ? "Play, no orgasm" : item.label,
+        onClick: () => {
+          outcome = item;
+          paintOutcomes();
+        },
+      }, item.label));
+    });
+  }
+
+  async function submit() {
+    if (saving) return;
+    errorEl.classList.add("hidden");
+    errorEl.textContent = "";
+    if (!forId) {
+      errorEl.textContent = "Pick who this is for.";
+      errorEl.classList.remove("hidden");
+      return;
+    }
+    if (!outcome) {
+      errorEl.textContent = "Pick Full, Ruined, Denied, or Play.";
+      errorEl.classList.remove("hidden");
+      return;
+    }
+    saving = true;
+    submitBtn.disabled = true;
+    try {
+      const created = await api(`/dynamics/${dynamicId}/tracking`, {
+        method: "POST",
+        body: JSON.stringify(quickLogPayload(outcome, forId, note.value.trim())),
+      });
+      const route = parseRoute();
+      const refreshToday = route.parts[0] === "home"
+        || route.parts.length === 0
+        || (route.parts[0] === "dynamic" && route.parts[1] === dynamicId && (!route.parts[2] || route.parts[2] === "track"));
+      await offerFeelingsAfterQuickLog(dynamicId, created);
+      if (refreshToday) renderToday(dynamicId);
+    } catch (err) {
+      saving = false;
+      submitBtn.disabled = false;
+      if (err && (err.status === 409 || /feelings/i.test(err.message || ""))) {
+        showQuickLogFeelingsGate(errorEl, dynamicId);
+        return;
+      }
+      errorEl.textContent = (err && err.message) || "Could not save.";
+      errorEl.classList.remove("hidden");
+    }
+  }
+
+  submitBtn.addEventListener("click", () => {
+    submit();
+  });
+  note.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      submit();
+    }
+  });
+  if (partners.length > 1) paintPartners();
+  paintOutcomes();
+
+  const whoLine = partners.length > 1
+    ? el("div", { className: "stack" }, [
+      el("span", { className: "muted" }, "For"),
+      partnerRow,
+    ])
+    : el("p", { className: "muted" }, partners.length
+      ? `For ${partners[0].display_name || "you"}`
+      : "No partner on this dynamic yet.");
+
+  openTodaySheet("log", "Log", [
+    whoLine,
+    el("span", { className: "muted" }, "Right now"),
+    outcomeRow,
+    el("p", { className: "muted today-log-hint" }, "Play is no orgasm."),
+    note,
+    errorEl,
+    submitBtn,
+    el("button", {
+      type: "button",
+      className: "link-btn",
+      onClick: () => {
+        closeNavSheets();
+        navigate(`/dynamic/${dynamicId}/tracking`);
+      },
+    }, "More details"),
+  ]);
+}
+
+function openMoreSheet(dynamicId) {
+  if (navSheet === "more") {
+    closeNavSheets();
+    return;
+  }
+  if (!dynamicId) {
+    navigate("/settings");
+    return;
+  }
+  const dynamic = state.currentDynamic && state.currentDynamic.id === dynamicId ? state.currentDynamic : null;
+  const enabled = (dynamic && dynamic.enabled_features) || [];
+  const playtimeOn = !enabled.length || enabled.indexOf("scene_workshop") !== -1;
+  const buttons = [];
+  const serverOff = !!(window.UbetraPhone && window.UbetraPhone.serverFeaturesGrey());
+  if (playtimeOn) {
+    PLAYTIME_FACETS.forEach((facet) => {
+      if (dynamic && !isFacetEnabled(facet, enabled)) return;
+      buttons.push(el("button", {
+        type: "button",
+        className: "today-more-link" + (serverOff ? " server-grey" : ""),
+        title: serverOff ? "Needs self-host server" : "",
+        onClick: () => {
+          if (serverOff) {
+            showToast("Needs self-host server");
+            return;
+          }
+          closeNavSheets();
+          navigate(`/dynamic/${dynamicId}/${facet.route}`);
+        },
+      }, [
+        el("span", {}, facet.title),
+        el("span", { className: "muted" }, facet.subtitle || ""),
+      ]));
+    });
+    buttons.push(el("button", {
+      type: "button",
+      className: "today-more-link" + (serverOff ? " server-grey" : ""),
+      title: serverOff ? "Needs self-host server" : "",
+      onClick: () => {
+        if (serverOff) {
+          showToast("Needs self-host server");
+          return;
+        }
+        closeNavSheets();
+        navigate(`/dynamic/${dynamicId}/assistant/games/toys`);
+      },
+    }, [
+      el("span", {}, "Toy spin"),
+      el("span", { className: "muted" }, "Pick an owned toy"),
+    ]));
+  }
+  buttons.push(el("button", {
+    type: "button",
+    className: "today-more-link",
+    onClick: () => {
+      closeNavSheets();
+      navigate("/settings");
+    },
+  }, [
+    el("span", {}, "Settings"),
+    el("span", { className: "muted" }, "Account, theme, and privacy"),
+  ]));
+  buttons.push(el("button", {
+    type: "button",
+    className: "today-more-link",
+    onClick: () => {
+      closeNavSheets();
+      openAppFeaturesPanel(dynamicId, "all");
+    },
+  }, [
+    el("span", {}, "Application features"),
+    el("span", { className: "muted" }, "Turn tools on or off"),
+  ]));
+  openTodaySheet("more", "More", buttons);
+}
+
+function preferredDynamicId() {
+  const known = state.dynamics || [];
+  const last = getLastRoute();
+  if (last) {
+    const parts = String(last).split("?")[0].split("/").filter(Boolean);
+    const fromRoute = (parts[0] === "dynamic" || parts[0] === "chat") ? parts[1] : "";
+    if (fromRoute && known.some((row) => row.id === fromRoute)) return fromRoute;
+  }
+  if (state.activeDynamicId && known.some((row) => row.id === state.activeDynamicId)) {
+    return state.activeDynamicId;
+  }
+  if (known[0] && known[0].id) return known[0].id;
+  return state.activeDynamicId || null;
+}
+
+function todayStillCurrent(dynamicId) {
+  const route = parseRoute();
+  if (route.parts[0] === "chat" || route.parts[0] === "settings" || route.parts[0] === "login") return false;
+  if (route.parts[0] === "dynamic" && route.parts[1] && route.parts[1] !== dynamicId) return false;
+  if (route.parts[0] === "dynamic" && route.parts[2] && route.parts[2] !== "track") return false;
+  return true;
+}
+
+function todayQuiet(promise, fallback) {
+  return promise.then(
+    (value) => ({ ok: true, value: value }),
+    () => ({ ok: false, value: fallback })
+  );
+}
+
+function todayRingProgress(partner, lockups) {
+  if (!partner) return 0.12;
+  if (partner.state === "on_break") return 0.42;
+  if (partner.state !== "locked") return 0.16;
+  if (partner.timer_overdue) return 1;
+  const lockup = (lockups || []).filter((row) => row.id === partner.active_lockup_id)[0];
+  const start = lockup ? parseServerDate(lockup.started_at) : null;
+  const end = parseServerDate(partner.planned_end_at);
+  if (!start || !end) return 0.72;
+  const span = end.getTime() - start.getTime();
+  if (span <= 0) return 0.72;
+  const pct = (Date.now() - start.getTime()) / span;
+  if (pct < 0.08) return 0.08;
+  if (pct > 1) return 1;
+  return pct;
+}
+
+function todayLockRing(partner, lockups) {
+  const radius = 15.2;
+  const circumference = 2 * Math.PI * radius;
+  const stateName = partner && partner.state ? partner.state : "unlocked";
+  let tone = "free";
+  let center = "Free";
+  let caption = "Not locked";
+  if (!partner) {
+    center = "—";
+    caption = "Chastity off";
+  } else if (stateName === "locked") {
+    tone = partner.timer_overdue ? "overdue" : "locked";
+    center = partner.current_duration_label || "Locked";
+    caption = partner.timer_overdue ? "Timer finished" : "Locked";
+  } else if (stateName === "on_break") {
+    tone = "break";
+    center = partner.break_duration_label || "Break";
+    caption = "On break";
+  } else if (partner.free_duration_label) {
+    center = partner.free_duration_label;
+    caption = "Free";
+  } else {
+    center = "Free";
+    caption = "No lockup yet";
+  }
+  const filled = (todayRingProgress(partner, lockups) * circumference).toFixed(2);
+  const wrap = el("div", { className: `today-ring tone-${tone}` });
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("aria-hidden", "true");
+  const track = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  track.setAttribute("class", "today-ring-track");
+  track.setAttribute("cx", "18");
+  track.setAttribute("cy", "18");
+  track.setAttribute("r", "15.2");
+  const value = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  value.setAttribute("class", "today-ring-value");
+  value.setAttribute("cx", "18");
+  value.setAttribute("cy", "18");
+  value.setAttribute("r", "15.2");
+  value.setAttribute("stroke-dasharray", `${filled} ${circumference.toFixed(2)}`);
+  svg.appendChild(track);
+  svg.appendChild(value);
+  wrap.appendChild(svg);
+  wrap.appendChild(el("div", { className: "today-ring-copy" }, [
+    el("strong", {}, center),
+    el("span", {}, caption),
+  ]));
+  return wrap;
+}
+
+function todayChastityFocus(overview, dynamic) {
+  const enrolled = ((overview && overview.partners) || []).filter((partner) => partner.chastity_enabled);
+  if (!enrolled.length) return null;
+  const active = enrolled.filter((partner) => partner.state === "locked" || partner.state === "on_break");
+  if (active.length) return active[0];
+  const you = ((dynamic && dynamic.partners) || []).filter((partner) => partner.is_you)[0];
+  if (you) {
+    const self = enrolled.filter((partner) => partner.membership_id === you.id)[0];
+    if (self) return self;
+  }
+  return enrolled[0];
+}
+
+function canRunChastityAction(dynamic, partner) {
+  if (!partner) return false;
+  const you = ((dynamic && dynamic.partners) || []).filter((row) => row.is_you)[0];
+  if (!you) return false;
+  if (you.role === "dominant") return true;
+  return you.id === partner.membership_id;
+}
+
+function todayOrgasmBars(stats) {
+  const series = (stats && stats.cumulative_30d) || [];
+  function sumRow(row) {
+    const map = (row && row.by_partner) || {};
+    return Object.keys(map).reduce((acc, key) => acc + (Number(map[key]) || 0), 0);
+  }
+  const tail = series.slice(-8);
+  const bars = [];
+  for (let i = 1; i < tail.length; i += 1) {
+    const delta = sumRow(tail[i]) - sumRow(tail[i - 1]);
+    bars.push(delta > 0 ? delta : 0);
+  }
+  while (bars.length < 7) bars.unshift(0);
+  return bars.slice(-7);
+}
+
+function todayCouldNot(label) {
+  return el("div", { className: "today-card" }, [
+    el("span", { className: "today-card-kicker" }, label),
+    el("span", { className: "muted" }, "Couldn't load"),
+  ]);
+}
+
+function todayOrgasmWindow(roulette) {
+  const fallback = new Date();
+  fallback.setDate(fallback.getDate() - 30);
+  if (roulette && roulette.enabled && roulette.started_on) {
+    const start = parseServerDate(String(roulette.started_on).length === 10 ? `${roulette.started_on}T00:00:00Z` : roulette.started_on);
+    if (start && !Number.isNaN(start.getTime())) return { since: start, label: "This marble game" };
+  }
+  return { since: fallback, label: "Last 30 days" };
+}
+
+function orgasmTagKey(tag) {
+  return String(tag || "").toLowerCase().replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function tagListIsFullOrgasm(tags) {
+  const keys = (tags || []).map(orgasmTagKey).filter(Boolean);
+  const ruined = keys.some((tag) => tag.includes("ruin"));
+  const full = keys.some((tag) => tag === "full orgasm" || tag.startsWith("full orgasm") || (tag.includes("full") && tag.includes("orgasm")));
+  if (ruined && !full) return false;
+  if (full) return true;
+  const denied = keys.some((tag) => !tag.includes("ruin") && (tag.includes("denied") || tag.includes("denial") || tag === "deny"));
+  if (denied || keys.some((tag) => tag.includes("milk"))) return false;
+  return true;
+}
+
+function fullOrgasmCount(entry) {
+  if (!entry || (entry.event_type !== "orgasm" && entry.event_type !== "both")) return 0;
+  const rows = Array.isArray(entry.orgasms) ? entry.orgasms : [];
+  if (rows.length) {
+    return rows.reduce((acc, row) => acc + (tagListIsFullOrgasm(row.tags || []) ? 1 : 0), 0);
+  }
+  return tagListIsFullOrgasm(entry.tags || []) ? 1 : 0;
+}
+
+function todayOrgasmCard(dynamicId, entries, dynamic, roulette) {
+  const partners = (dynamic && dynamic.partners) || [];
+  const sub = partners.find((partner) => partner.role === "submissive");
+  const dom = partners.find((partner) => partner.role === "dominant");
+  const window = todayOrgasmWindow(roulette);
+  function countFor(id) {
+    if (!id) return 0;
+    return (entries || []).reduce((acc, entry) => {
+      if (entry.for_membership_id !== id) return acc;
+      const when = parseServerDate(entry.occurred_at);
+      if (!when || when < window.since) return acc;
+      return acc + fullOrgasmCount(entry);
+    }, 0);
+  }
+  const subCount = countFor(sub && sub.id);
+  const domCount = countFor(dom && dom.id);
+  const caption = `${(sub && sub.display_name) || "Sub"} : ${(dom && dom.display_name) || "Domme"} · ${window.label}`;
+  return el("button", {
+    type: "button",
+    className: "today-card today-card-wide",
+    onClick: () => navigate(`/dynamic/${dynamicId}/tracking`),
+  }, [
+    el("span", { className: "today-card-kicker" }, "Full orgasms"),
+    el("strong", { className: "today-card-value" }, `${subCount}:${domCount}`),
+    el("span", { className: "muted" }, caption),
+  ]);
+}
+
+function todaySleepPeople(people) {
+  const row = el("span", { className: "today-sleep-row" });
+  people.forEach((person) => {
+    const band = person.hours == null ? "" : sleepHoursBand(person.hours);
+    const value = person.hours == null ? (person.fallback || "—") : `${person.hours.toFixed(1)}h`;
+    row.appendChild(el("span", { className: "today-sleep-person" }, [
+      el("span", { className: "muted" }, person.name || "Sleep"),
+      el("strong", { className: `today-card-value ${band}` }, value),
+      el("span", { className: "muted" }, person.label || ""),
+    ]));
+  });
+  return row;
+}
+
+function todaySleepPeopleCard(dynamicId, people) {
+  const body = people.length
+    ? todaySleepPeople(people)
+    : el("span", { className: "muted" }, "No nights yet");
+  return el("button", {
+    type: "button",
+    className: "today-card today-card-wide",
+    onClick: () => navigate(`/dynamic/${dynamicId}/sleep`),
+  }, [
+    el("span", { className: "today-card-kicker" }, "Sleep"),
+    body,
+  ]);
+}
+
+function latestSleepPeople(sessions, dynamic) {
+  const nights = groupSleepNights(sessions || []);
+  const latest = new Map();
+  nights.forEach((night) => {
+    const id = night.subject_membership_id || "";
+    const prev = latest.get(id);
+    if (!prev || sleepTimeMs(night.start_at) > sleepTimeMs(prev.start_at)) latest.set(id, night);
+  });
+  return [...latest.values()].map((night) => {
+    const who = ((dynamic && dynamic.partners) || []).find((partner) => partner.id === night.subject_membership_id);
+    return {
+      name: (who && who.display_name) || "Sleep",
+      hours: (Number(night.duration_min) || 0) / 60,
+      label: formatSleepNightTitle(night.end_at, night.start_at),
+    };
+  });
+}
+
+function glanceSleepPeople(nights) {
+  return (nights || []).filter((night) => night && (night.duration_min != null || night.duration_label)).map((night) => ({
+    name: night.name || "Sleep",
+    hours: night.duration_min == null ? null : Number(night.duration_min) / 60,
+    fallback: night.duration_label || "",
+    label: formatSleepNightTitle(night.end_at, night.start_at),
+  }));
+}
+
+function todaySleepGlanceCard(dynamicId, night) {
+  let value = "No nights yet";
+  let hint = "Open sleep to log or sync";
+  if (night && (night.duration_label || night.duration_min != null)) {
+    value = night.duration_label || `${(Number(night.duration_min) / 60).toFixed(1)}h`;
+    const who = night.name ? `${night.name} · ` : "";
+    hint = who + (night.night_date || (night.end_at ? formatSleepNightTitle(night.end_at) : "Last night"));
+  }
+  return el("button", {
+    type: "button",
+    className: "today-card",
+    onClick: () => navigate(`/dynamic/${dynamicId}/sleep`),
+  }, [
+    el("span", { className: "today-card-kicker" }, "Sleep"),
+    el("strong", { className: "today-card-value" }, value),
+    el("span", { className: "muted" }, hint),
+  ]);
+}
+
+function todaySleepCard(dynamicId, sessions, dynamic) {
+  const nights = groupSleepNights(sessions || []);
+  const night = nights[0];
+  let value = "No nights yet";
+  let hint = "Open sleep to log or sync";
+  if (night) {
+    const hours = (Number(night.duration_min) || 0) / 60;
+    const who = ((dynamic && dynamic.partners) || []).filter((partner) => partner.id === night.subject_membership_id)[0];
+    const whoName = who && who.display_name ? `${who.display_name} · ` : "";
+    value = `${hours.toFixed(1)}h`;
+    hint = whoName + formatSleepNightTitle(night.end_at);
+  }
+  return el("button", {
+    type: "button",
+    className: "today-card",
+    onClick: () => navigate(`/dynamic/${dynamicId}/sleep`),
+  }, [
+    el("span", { className: "today-card-kicker" }, "Sleep"),
+    el("strong", { className: "today-card-value" }, value),
+    el("span", { className: "muted" }, hint),
+  ]);
+}
+
+function todayCycleGlance(person) {
+  const summary = (person && person.summary) || {};
+  const name = (person && person.display_name) || "Cycle";
+  let value = name;
+  if (summary.on_period && summary.cycle_day) value = `${name} · day ${summary.cycle_day}`;
+  else if (summary.cycle_day) value = `${name} · day ${summary.cycle_day}`;
+  else if (summary.on_period) value = `${name} · on period`;
+  let hint = "No prediction yet";
+  if (summary.predicted_next) hint = `Next ~${summary.predicted_next}`;
+  else if (summary.last_period_start) hint = `Last start ${summary.last_period_start}`;
+  return { value: value, hint: hint };
+}
+
+function todayCycleCard(dynamicId, cycle) {
+  const people = ((cycle && cycle.people) || []).slice().sort((a, b) => {
+    if (a.is_you === b.is_you) return 0;
+    return a.is_you ? -1 : 1;
+  });
+  const first = people[0] ? todayCycleGlance(people[0]) : { value: "Cycle", hint: "Open the cycle page" };
+  const rest = people.slice(1).map((person) => todayCycleGlance(person).value);
+  return el("button", {
+    type: "button",
+    className: "today-card",
+    onClick: () => navigate(`/dynamic/${dynamicId}/cycle`),
+  }, [
+    el("span", { className: "today-card-kicker" }, "Cycle"),
+    el("strong", { className: "today-card-value today-card-value-sm" }, first.value),
+    el("span", { className: "muted" }, rest.length ? rest.join(" · ") : first.hint),
+  ]);
+}
+
+function todayRecentEvents(dynamicId, entries, lockups) {
+  const events = [];
+  (entries || []).slice(0, 8).forEach((entry) => {
+    const tags = entry.orgasms && entry.orgasms.length
+      ? entry.orgasms.reduce((acc, row) => acc.concat(row.tags || []), [])
+      : (entry.tags || []);
+    events.push({
+      at: entry.occurred_at,
+      title: `${entry.for_display_name || "Log"} · ${formatTrackingEventType(entry.event_type)}`,
+      detail: tags.slice(0, 2).join(", "),
+      path: `/dynamic/${dynamicId}/tracking`,
+    });
+  });
+  (lockups || []).slice(0, 4).forEach((lockup) => {
+    const name = lockup.for_display_name || "Lock";
+    events.push({
+      at: lockup.started_at,
+      title: `${name} locked`,
+      detail: lockup.status || "",
+      path: `/dynamic/${dynamicId}/chastity`,
+    });
+    if (lockup.ended_at) {
+      events.push({
+        at: lockup.ended_at,
+        title: `${name} released`,
+        detail: lockup.ended_kind || "",
+        path: `/dynamic/${dynamicId}/chastity`,
+      });
+    }
+  });
+  events.sort((a, b) => {
+    const left = parseServerDate(a.at);
+    const right = parseServerDate(b.at);
+    return (right ? right.getTime() : 0) - (left ? left.getTime() : 0);
+  });
+  return events.slice(0, 5);
+}
+
+function todayActionButton(label, onClick, primary) {
+  return el("button", {
+    type: "button",
+    className: primary ? "primary-btn today-action" : "ghost-btn today-action",
+    onClick: onClick,
+  }, label);
+}
+
+async function todaySyncBody(dynamicId, sleepOn, cycleOn) {
+  const bits = [];
+  try {
+    if (sleepOn) {
+      const out = await syncHealthConnect("sleep", dynamicId, {});
+      bits.push(`sleep ${(out && out.imported) || 0}`);
+    }
+    if (cycleOn) {
+      const out = await syncHealthConnect("cycle", dynamicId, {});
+      bits.push(`cycle ${(out && out.imported) || 0}`);
+    }
+    showToast(bits.length ? `Synced ${bits.join(", ")}.` : "Sync finished.");
+    renderToday(dynamicId);
+  } catch (err) {
+    showToast((err && err.message) || "Body sync failed.");
+  }
+}
+
+function markOfflineBodyCard(node, kind) {
+  if (!node || !window.UbetraPhone || !window.UbetraPhone.serverFeaturesGrey()) return node;
+  if (!window.UbetraPhone.hasBodyCache(kind)) {
+    node.classList.add("server-grey");
+    node.title = "Needs self-host server";
+  } else {
+    node.classList.add("server-cached");
+    node.title = "Last synced copy. Editing needs the server.";
+  }
+  return node;
+}
+
+function periodFade(cycleDay, periodLength) {
+  const length = Math.max(1, Number(periodLength) || 5);
+  const day = Number(cycleDay) || 1;
+  const progress = Math.min(Math.max((day - 0.5) / length, 0), 1);
+  const edge = 0.22;
+  if (progress < edge) return progress / edge;
+  if (progress > 1 - edge) return (1 - progress) / edge;
+  return 1;
+}
+
+function paintPeriodBrand(dynamic, cycle) {
+  const brand = document.getElementById("app-brand");
+  if (!brand) return;
+  const dom = ((dynamic && dynamic.partners) || []).find((partner) => partner.role === "dominant");
+  const people = (cycle && (cycle.people || cycle)) || [];
+  const list = Array.isArray(people) ? people : [];
+  const person = list.find((row) => {
+    if (!dom) return !!row.on_period || !!(row.summary && row.summary.on_period);
+    return row.membership_id === dom.id || row.display_name === dom.display_name || row.name === dom.display_name;
+  });
+  const summary = (person && person.summary) || person || {};
+  if (!summary.on_period) {
+    brand.classList.remove("period-mark");
+    brand.style.color = "";
+    return;
+  }
+  const fade = periodFade(summary.cycle_day, summary.period_length);
+  brand.classList.add("period-mark");
+  brand.style.color = `rgba(214, 54, 78, ${(0.28 + 0.72 * fade).toFixed(3)})`;
+}
+
+let periodBrandFetched = 0;
+function refreshPeriodBrand(dynamicId) {
+  if (!dynamicId || !appBrandEl) return;
+  if (Date.now() - periodBrandFetched < 60000) return;
+  periodBrandFetched = Date.now();
+  api(`/dynamics/${dynamicId}/cycle`).then((cycle) => {
+    const known = state.currentDynamic && state.currentDynamic.id === dynamicId
+      ? state.currentDynamic
+      : ((state.dynamics || []).find((row) => row.id === dynamicId) || state.currentDynamic);
+    paintPeriodBrand(known, cycle);
+  }).catch(() => {});
+}
+
+function paintToday(dynamicId, dynamic, enabled, pack) {
+  if (!todayStillCurrent(dynamicId)) return;
+  const todayLabel = new Date().toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+  const stack = el("div", { className: "stack today-page" });
+  stack.appendChild(el("header", { className: "today-head" }, [
+    el("p", { className: "today-kicker" }, "Today"),
+    el("h1", {}, todayLabel),
+    el("p", { className: "muted" }, formatDynamicTitle(dynamic)),
+  ]));
+
+  const focus = pack.chastityOn && pack.overviewOk ? todayChastityFocus(pack.overview, dynamic) : null;
+  if (pack.chastityOn && !pack.overviewOk) {
+    stack.appendChild(el("button", {
+      type: "button",
+      className: "today-status today-status-plain",
+      onClick: () => renderToday(dynamicId),
+    }, [
+      el("span", { className: "today-status-copy" }, [
+        el("strong", {}, "Lock status"),
+        el("span", { className: "muted" }, "Couldn't load. Tap to retry."),
+      ]),
+    ]));
+  } else if (pack.chastityOn && pack.overview && pack.overview.any_enabled && focus) {
+    stack.appendChild(el("button", {
+      type: "button",
+      className: "today-status",
+      onClick: () => navigate(`/dynamic/${dynamicId}/chastity`),
+    }, [
+      todayLockRing(focus, pack.lockups),
+      el("span", { className: "today-status-copy" }, [
+        el("strong", {}, pack.overview.summary_label || "Chastity"),
+        el("span", { className: "muted" }, "Open Tracking"),
+      ]),
+    ]));
+  } else if (pack.chastityOn) {
+    stack.appendChild(el("button", {
+      type: "button",
+      className: "today-status today-status-plain",
+      onClick: () => navigate(`/dynamic/${dynamicId}/chastity`),
+    }, [
+      el("span", { className: "today-status-copy" }, [
+        el("strong", {}, (pack.overview && pack.overview.summary_label) || "Chastity is off"),
+        el("span", { className: "muted" }, "Open Tracking"),
+      ]),
+    ]));
+  }
+
+  const actions = el("div", { className: "today-actions" });
+  actions.appendChild(todayActionButton("Log", () => openQuickLogSheet(dynamicId), true));
+  if (focus && canRunChastityAction(dynamic, focus)) {
+    if (focus.state === "locked") {
+      actions.appendChild(todayActionButton("Unlock", () => {
+        navigate(`/dynamic/${dynamicId}/chastity?intent=unlock`);
+      }, false));
+      actions.appendChild(todayActionButton("Break", () => {
+        navigate(`/dynamic/${dynamicId}/chastity?intent=break`);
+      }, false));
+    } else if (focus.state === "on_break") {
+      actions.appendChild(todayActionButton("Relock", () => {
+        navigate(`/dynamic/${dynamicId}/chastity?intent=lock`);
+      }, false));
+    } else {
+      actions.appendChild(todayActionButton("Lock", () => {
+        navigate(`/dynamic/${dynamicId}/chastity?intent=lock`);
+      }, false));
+    }
+  }
+  stack.appendChild(actions);
+
+  const cards = el("div", { className: "today-cards" });
+  if (pack.sleepOn) {
+    const sleepCard = !pack.sleepOk
+      ? todayCouldNot("Sleep")
+      : todaySleepPeopleCard(
+        dynamicId,
+        pack.sleepNights
+          ? glanceSleepPeople(pack.sleepNights)
+          : latestSleepPeople(pack.sleepSessions, dynamic)
+      );
+    cards.appendChild(markOfflineBodyCard(sleepCard, "sleep"));
+  }
+  if (pack.cycleOn) {
+    const cycleCard = pack.cycleOk ? todayCycleCard(dynamicId, pack.cycle) : todayCouldNot("Cycle");
+    cards.appendChild(markOfflineBodyCard(cycleCard, "cycle"));
+  }
+  if (pack.orgasmOn) {
+    cards.appendChild(pack.entriesOk
+      ? todayOrgasmCard(dynamicId, pack.entries, dynamic, pack.roulette)
+      : todayCouldNot("Orgasms"));
+  }
+  if (cards.childNodes.length) stack.appendChild(cards);
+  if (isNativeApp() && (pack.sleepOn || pack.cycleOn)) {
+    stack.appendChild(el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        todaySyncBody(dynamicId, pack.sleepOn, pack.cycleOn);
+      },
+    }, "Sync body data"));
+  }
+
+  paintPeriodBrand(dynamic, pack.cycle);
+
+  const more = el("details", { className: "hub-setup-details today-more" }, [
+    el("summary", {}, "More tracking"),
+  ]);
+  const facetList = el("div", { className: "facet-list" });
+  TRACKING_FACETS.forEach((facet) => {
+    if (!isFacetEnabled(facet, enabled)) return;
+    facetList.appendChild(renderFacetRow(facet, dynamicId, dynamic));
+  });
+  if (facetList.childNodes.length) more.appendChild(facetList);
+  const setup = el("details", { className: "hub-setup-details" }, [
+    el("summary", {}, "Setup"),
+  ]);
+  const setupList = el("div", { className: "facet-list" });
+  FACET_SECTIONS.forEach((section) => {
+    (section.items || []).forEach((facet) => {
+      if (!isFacetEnabled(facet, enabled)) return;
+      setupList.appendChild(renderFacetRow(facet, dynamicId, dynamic));
+    });
+  });
+  if (setupList.childNodes.length) setup.appendChild(setupList);
+  setup.appendChild(el("button", {
+    type: "button",
+    className: "ghost-btn",
+    onClick: () => navigate(`/dynamic/${dynamicId}/features`),
+  }, "Application features"));
+  more.appendChild(setup);
+  stack.appendChild(more);
+  setViewContent(stack);
+}
+
+function renderToday(dynamicId) {
+  const id = dynamicId || getActiveDynamicId();
+  if (!id) {
+    renderHome();
+    return;
+  }
+  state.activeDynamicId = id;
+  if (!document.querySelector(".today-page")) {
+    setViewContent(el("p", { className: "muted" }, "Loading today…"));
+  }
+  loadDynamic(id).then(() => {
+    const dynamic = state.currentDynamic;
+    const enabled = (dynamic && dynamic.enabled_features) || [];
+    function facetOn(facetId) {
+      return isFacetEnabled({ id: facetId }, enabled);
+    }
+    function paintFromParts() {
+      const sleepOn = facetOn("sleep_tracking");
+      const cycleOn = facetOn("cycle_tracking");
+      const chastityOn = facetOn("chastity");
+      const orgasmOn = facetOn("org_tracking");
+      return Promise.all([
+        chastityOn ? todayQuiet(api(`/dynamics/${id}/chastity/overview`), null) : Promise.resolve({ ok: true, value: null }),
+        todayQuiet(api(`/dynamics/${id}/tracking/stats`), null),
+        todayQuiet(api(`/dynamics/${id}/tracking`), []),
+        chastityOn ? todayQuiet(api(`/dynamics/${id}/chastity`), []) : Promise.resolve({ ok: true, value: [] }),
+        sleepOn ? todayQuiet(api(`/dynamics/${id}/sleep`), []) : Promise.resolve({ ok: true, value: [] }),
+        cycleOn ? todayQuiet(api(`/dynamics/${id}/cycle`), null) : Promise.resolve({ ok: true, value: null }),
+        todayQuiet(api(`/dynamics/${id}/play-games/roulette`), null),
+      ]).then((rows) => {
+        if (!todayStillCurrent(id)) return;
+        paintToday(id, dynamic, enabled, {
+          sleepOn: sleepOn,
+          cycleOn: cycleOn,
+          chastityOn: chastityOn,
+          orgasmOn: orgasmOn,
+          overviewOk: rows[0].ok,
+          overview: rows[0].ok ? rows[0].value : null,
+          statsOk: rows[1].ok,
+          stats: rows[1].ok ? rows[1].value : null,
+          entriesOk: rows[2].ok,
+          entries: rows[2].ok && Array.isArray(rows[2].value) ? rows[2].value : [],
+          lockups: rows[3].ok && Array.isArray(rows[3].value) ? rows[3].value : [],
+          sleepOk: !sleepOn || rows[4].ok,
+          sleepSessions: rows[4].ok && Array.isArray(rows[4].value) ? rows[4].value : [],
+          cycleOk: !cycleOn || rows[5].ok,
+          cycle: rows[5].ok ? rows[5].value : null,
+          roulette: rows[6] && rows[6].ok ? rows[6].value : null,
+        });
+      });
+    }
+    return todayQuiet(api(`/dynamics/${id}/watch/summary`), null).then((summaryResult) => {
+      const summary = summaryResult.ok ? summaryResult.value : null;
+      if (!summary || !summary.chastity || !summary.orgasm) return paintFromParts();
+      const chastityOn = !!(summary.chastity && summary.chastity.enabled);
+      const sleepOn = !!(summary.sleep && summary.sleep.enabled);
+      const cycleOn = !!(summary.cycle && summary.cycle.enabled);
+      const orgasmOn = !!(summary.orgasm && summary.orgasm.enabled);
+      return Promise.all([
+        todayQuiet(api(`/dynamics/${id}/tracking`), []),
+        chastityOn ? todayQuiet(api(`/dynamics/${id}/chastity`), []) : Promise.resolve({ ok: true, value: [] }),
+        todayQuiet(api(`/dynamics/${id}/play-games/roulette`), null),
+      ]).then((rows) => {
+        if (!todayStillCurrent(id)) return;
+        const partners = ((summary.chastity && summary.chastity.subjects) || []).map((subject) => {
+          const stateName = subject.state === "not_tracked" ? "unlocked" : (subject.state || "unlocked");
+          const tracked = !!subject.chastity_enabled && subject.state !== "not_tracked";
+          return {
+            membership_id: subject.membership_id,
+            name: subject.name,
+            chastity_enabled: tracked,
+            state: stateName,
+            current_duration_label: stateName === "locked" ? (subject.duration_label || null) : null,
+            break_duration_label: stateName === "on_break" ? (subject.duration_label || null) : null,
+            free_duration_label: (stateName === "unlocked" || stateName === "free") ? (subject.duration_label || null) : null,
+            timer_overdue: !!subject.timer_overdue,
+            planned_end_at: subject.planned_end_at || null,
+            active_lockup_id: subject.active_lockup_id || null,
+          };
+        });
+        const nights = (summary.sleep && summary.sleep.nights) || [];
+        paintToday(id, dynamic, enabled, {
+          sleepOn: sleepOn,
+          cycleOn: cycleOn,
+          chastityOn: chastityOn,
+          orgasmOn: orgasmOn,
+          overviewOk: true,
+          overview: {
+            any_enabled: partners.some((partner) => partner.chastity_enabled),
+            summary_label: summary.chastity.summary_label || "",
+            partners: partners,
+          },
+          statsOk: true,
+          stats: orgasmOn ? {
+            recent_orgasm_label: summary.orgasm.recent_orgasm_label || "",
+            partners: (summary.orgasm.partners || []).map((partner) => ({
+              membership_id: partner.membership_id,
+              name: partner.name,
+              orgasm_count: Number(partner.count_7d) || 0,
+            })),
+            cumulative_30d: [],
+          } : null,
+          entriesOk: rows[0].ok,
+          entries: rows[0].ok && Array.isArray(rows[0].value) ? rows[0].value : [],
+          lockups: rows[1].ok && Array.isArray(rows[1].value) ? rows[1].value : [],
+          sleepOk: true,
+          sleepNights: nights,
+          sleepSessions: [],
+          cycleOk: true,
+          roulette: rows[2] && rows[2].ok ? rows[2].value : null,
+          cycle: {
+            people: ((summary.cycle && summary.cycle.people) || []).map((person) => ({
+              membership_id: person.membership_id,
+              display_name: person.name,
+              is_you: !!person.is_you,
+              summary: {
+                cycle_day: person.cycle_day,
+                on_period: !!person.on_period,
+                last_period_start: person.last_period_start || "",
+                predicted_next: person.predicted_next || "",
+                period_length: person.period_length,
+                typical_length: person.typical_length,
+              },
+            })),
+          },
+        });
+      });
+    });
+  }).catch((err) => {
+    if (!todayStillCurrent(id)) return;
+    setViewContent(el("p", { className: "error" }, (err && err.message) || "Could not load today."));
+  });
+}
+/* TODAY_HUB_END */
+
+/** Older facet list. The Tracking tab now opens Today instead. */
 function renderTrackingHub(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading tracking…"));
   loadDynamic(dynamicId)
@@ -9025,6 +10301,15 @@ function renderTasksActsSwitcher(dynamicId, active) {
       "button",
       {
         type: "button",
+        className: active === "goals" ? "primary-btn" : "ghost-btn",
+        onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=goals`),
+      },
+      "Goals"
+    ),
+    el(
+      "button",
+      {
+        type: "button",
         className: `ai-only ${active === "regimen" ? "primary-btn" : "ghost-btn"}`,
         "data-ai-label": "Training regimen drafts task lists with your shared AI context.",
         onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=regimen`),
@@ -9056,6 +10341,22 @@ function renderTaskGoals(dynamicId) {
         renderTasksActsSwitcher(dynamicId, "goals"),
         el("p", { className: "muted" }, "Keyholder goals for grants and gifts. Progress also shows in the header."),
       ]);
+      const marbleHost = el("div");
+      stack.appendChild(marbleHost);
+      api(`/dynamics/${dynamicId}/play-games/roulette`).then((game) => {
+        if (!game || !game.enabled) return;
+        marbleHost.appendChild(el("div", { className: "card stack" }, [
+          el("h2", {}, "Marble pulls"),
+          el("p", { className: "muted" }, "Orgasm Roulette is on. These events earn a pull or add an orgasm marble."),
+          ...((game.grant_rules || []).map((rule) => el("p", {}, `${rouletteRuleLabel(rule)} ${rule.progress || 0} of ${rule.every || 1}.`))),
+          !(game.grant_rules || []).length ? el("p", { className: "muted" }, "No pull rules yet.") : null,
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/roulette`),
+          }, "Edit on Orgasm Roulette"),
+        ].filter(Boolean)));
+      }).catch(() => {});
       if (confession) {
         stack.appendChild(el("div", { className: "card stack" }, [
           el("h2", {}, "Confession"),
@@ -9614,8 +10915,47 @@ function renderOverlap(dynamicId) {
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
 }
 
+function renderTaskRequest(dynamicId) {
+  const taskRequestBody = el("textarea", { rows: "3", placeholder: "Task you want to request…" });
+  const taskRequestError = el("div", { className: "error hidden" });
+  return el("div", { className: "card stack" }, [
+    el("h2", {}, "Request a task"),
+    el("p", { className: "muted" }, "Needs keyholder approval before you can complete it."),
+    taskRequestBody,
+    taskRequestError,
+    el("button", {
+      className: "primary-btn",
+      type: "button",
+      onClick: async () => {
+        taskRequestError.classList.add("hidden");
+        const content = taskRequestBody.value.trim();
+        if (!content) {
+          taskRequestError.textContent = "Describe the task.";
+          taskRequestError.classList.remove("hidden");
+          return;
+        }
+        try {
+          await api(`/dynamics/${dynamicId}/tasks/items`, {
+            method: "POST",
+            body: JSON.stringify({ content }),
+          });
+          taskRequestBody.value = "";
+          showToast("Task request sent to your keyholder.");
+        } catch (err) {
+          taskRequestError.textContent = err.message;
+          taskRequestError.classList.remove("hidden");
+        }
+      },
+    }, "Submit for approval"),
+  ]);
+}
+
 function renderTasks(dynamicId) {
   const { query } = parseRoute();
+  if (query.get("tab") === "goals") {
+    renderTaskGoals(dynamicId);
+    return;
+  }
   if (query.get("tab") === "regimen") {
     renderTrainingRegimen(dynamicId);
     return;
@@ -9656,19 +10996,13 @@ function renderTasks(dynamicId) {
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Tasks"),
         assistantChatEntry(dynamicId),
-        el("div", { className: "row wrap" }, [
-          el("button", {
-            type: "button",
-            className: "ghost-btn ai-only",
-            "data-ai-label": "Training regimen drafts task lists with your shared AI context.",
-            onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=regimen`),
-          }, "Build training regimen"),
-        ]),
+        renderTasksActsSwitcher(dynamicId, "tasks"),
         el("p", { className: "muted" }, confession
           ? "Assign a punishment task for this confession."
           : "Create tasks here. Open, missed, and paused work is below."),
         error,
       ]);
+      if (you?.role === "submissive") stack.appendChild(renderTaskRequest(dynamicId));
       appendCreateTaskForm(stack, {
         dynamicId,
         dynamic,
@@ -11216,22 +12550,6 @@ function renderKnowledgeHub(dynamicId) {
           ])
         );
       }
-      if (isFacetEnabled({ id: "gear" }, enabledFeatures)) {
-        stack.appendChild(
-          el("button", {
-            className: "facet-row",
-            type: "button",
-            onClick: () => navigate(`/dynamic/${dynamicId}/gear`),
-          }, [
-            el("span", { className: "facet-icon" }, "🧰"),
-            el("span", { className: "facet-copy" }, [
-              el("span", { className: "facet-title" }, "Gear"),
-              el("span", { className: "facet-subtitle" }, "Vanilla toys, kinky stuff, outfits"),
-            ]),
-            el("span", { className: "facet-chevron" }, "›"),
-          ])
-        );
-      }
       stack.appendChild(
         el("button", {
           className: "ghost-btn",
@@ -11466,13 +12784,16 @@ function renderAssistant(dynamicId) {
     api(`/dynamics/${dynamicId}/assistant/status`),
     loadDynamic(dynamicId),
     api(`/dynamics/${dynamicId}/menu-summaries`).catch(() => ({})),
+    api(`/dynamics/${dynamicId}/switch`).catch(() => null),
+    api(`/dynamics/${dynamicId}/play-games/roulette`).catch(() => null),
   ])
-    .then(([status, , menuSummaries]) => {
+    .then(([status, , menuSummaries, switchData, roulette]) => {
       const stack = el("div", { className: "stack" }, [
         buildHubHeader(dynamicId, "Playtime", {
           subtitle: "Tasks, scenes, and release tools.",
           sectionFilter: "playtime",
         }),
+        switchData ? renderSwitchPanel(dynamicId, switchData) : null,
         el("div", { className: "row wrap" }, [
           el("p", { className: "muted" }, `Provider: ${status.llm_provider} · Model: ${status.llm_model}`),
           aiConfigBadge("assistant", { dynamicId }),
@@ -11483,39 +12804,16 @@ function renderAssistant(dynamicId) {
       const you = dynamic?.partners?.find((p) => p.is_you);
       const enabledFeatures = dynamic?.enabled_features || [];
 
-      if (you?.role === "submissive") {
-        const taskRequestBody = el("textarea", { rows: "3", placeholder: "Task you want to request…" });
-        const taskRequestError = el("div", { className: "error hidden" });
-        stack.appendChild(el("div", { className: "card stack" }, [
-          el("h2", {}, "Request a task"),
-          el("p", { className: "muted" }, "Needs keyholder approval before you can complete it."),
-          taskRequestBody,
-          taskRequestError,
-          el("button", {
-            className: "primary-btn",
-            type: "button",
-            onClick: async () => {
-              taskRequestError.classList.add("hidden");
-              const content = taskRequestBody.value.trim();
-              if (!content) {
-                taskRequestError.textContent = "Describe the task.";
-                taskRequestError.classList.remove("hidden");
-                return;
-              }
-              try {
-                await api(`/dynamics/${dynamicId}/tasks/items`, {
-                  method: "POST",
-                  body: JSON.stringify({ content }),
-                });
-                taskRequestBody.value = "";
-                showToast("Task request sent to your keyholder.");
-              } catch (err) {
-                taskRequestError.textContent = err.message;
-                taskRequestError.classList.remove("hidden");
-              }
-            },
-          }, "Submit for approval"),
-        ]));
+      if (roulette && roulette.enabled) {
+        const marbleBtn = el("button", {
+          className: "choice-btn playtime-option",
+          type: "button",
+          onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/roulette`),
+        }, [
+          el("strong", {}, "Orgasm Roulette"),
+          el("span", { className: "muted" }, "Marble game"),
+        ]);
+        stack.insertBefore(marbleBtn, stack.children[1] || null);
       }
 
       const playtimeList = el("div", { className: "facet-list" });
@@ -11558,32 +12856,37 @@ function renderAssistant(dynamicId) {
           el("button", {
             className: "choice-btn playtime-option",
             type: "button",
-            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
+            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/toys`),
           }, [
-            el("strong", {}, "Games"),
-            el("span", { className: "muted" }, "Spin the wheel and other release games"),
+            el("strong", {}, "Toy spin"),
+            el("span", { className: "muted" }, "Pick an owned toy"),
           ])
         );
       } else {
-        stack.appendChild(
-          el("button", {
-            className: "choice-btn playtime-option ai-only",
-            "data-ai-label": "Scene builder writes a full scene from your shared AI context.",
-            type: "button",
-            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/scene`),
-          }, [
-            el("strong", {}, "Scene builder"),
-            el("span", { className: "muted" }, "Effort → lean → subjects → full scene"),
-          ])
-        );
+        const directing = you?.role === "submissive" && switchData?.can_draft_scene;
+        if (you?.role !== "submissive" || directing) {
+          stack.appendChild(
+            el("button", {
+              className: "choice-btn playtime-option ai-only",
+              "data-ai-label": "Scene builder writes a full scene from your shared AI context.",
+              type: "button",
+              onClick: () => navigate(`/dynamic/${dynamicId}/assistant/scene`),
+            }, [
+              el("strong", {}, directing ? "Direct a scene" : "Scene builder"),
+              el("span", { className: "muted" }, directing
+                ? "Write the scene. The keyholder approves it before it starts."
+                : "Effort → lean → subjects → full scene"),
+            ])
+          );
+        }
         stack.appendChild(
           el("button", {
             className: "choice-btn playtime-option",
             type: "button",
-            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
+            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/toys`),
           }, [
-            el("strong", {}, "Games"),
-            el("span", { className: "muted" }, "Spin the wheel and other release games"),
+            el("strong", {}, "Toy spin"),
+            el("span", { className: "muted" }, "Pick an owned toy"),
           ])
         );
       }
@@ -11606,67 +12909,736 @@ function renderAssistant(dynamicId) {
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
 }
 
-function renderPlaytimeGames(dynamicId) {
-  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading games…"));
-  Promise.all([
-    loadDynamic(dynamicId),
-    api(`/dynamics/${dynamicId}/playtime/spin/game`).catch(() => ({ status: "none", can_spin_post_orgasm: false })),
-  ])
-    .then(([_, game]) => {
-      const you = state.currentDynamic?.partners?.find((p) => p.is_you);
-      const stack = el("div", { className: "stack" }, [
-        el("h1", {}, "Games"),
-        el("p", { className: "muted" }, "When he's almost earned release or a full orgasm."),
-      ]);
-      if (game.can_spin_post_orgasm || game.status === "awaiting_post_spin") {
-        stack.appendChild(
-          el("div", { className: "card stack" }, [
-            el("h2", {}, "Post-orgasm wheel waiting"),
-            el("p", { className: "muted" }, "Open the current game and spin for post-orgasm task(s)."),
-            el("button", {
-              className: "primary-btn",
-              type: "button",
-              onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/spin?post=1`),
-            }, "Spin now"),
-          ])
-        );
+let gameClock = null;
+let redLightTimer = null;
+
+function clearGameClock() {
+  if (gameClock) {
+    clearInterval(gameClock);
+    gameClock = null;
+  }
+  if (redLightTimer) {
+    clearTimeout(redLightTimer);
+    redLightTimer = null;
+  }
+}
+
+function formatClock(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function beepGameDone() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = 880;
+    gain.gain.value = 0.05;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.25);
+  } catch {
+    /* sound is optional */
+  }
+}
+
+function appendGameTimer(parent) {
+  let remain = 5 * 60 * 1000;
+  let endsAt = 0;
+  const readout = el("div", { className: "game-timer" }, formatClock(remain));
+  const status = el("p", { className: "muted" }, "Countdown");
+
+  function paint() {
+    readout.textContent = formatClock(remain);
+  }
+
+  function stop(done) {
+    clearGameClock();
+    if (done) {
+      remain = 0;
+      paint();
+      status.textContent = "Time";
+      beepGameDone();
+    } else {
+      status.textContent = "Paused";
+    }
+  }
+
+  function start() {
+    clearGameClock();
+    if (remain <= 0) remain = 5 * 60 * 1000;
+    endsAt = Date.now() + remain;
+    status.textContent = "Running";
+    gameClock = setInterval(() => {
+      remain = Math.max(0, endsAt - Date.now());
+      paint();
+      if (remain <= 0) stop(true);
+    }, 200);
+  }
+
+  const minutes = el("input", { type: "number", min: "1", max: "180", value: "5", style: "width:5rem" });
+  const presets = el("div", { className: "row wrap" });
+  [1, 3, 5, 10, 15, 30].forEach((mins) => {
+    presets.appendChild(el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        clearGameClock();
+        remain = mins * 60 * 1000;
+        minutes.value = String(mins);
+        status.textContent = "Countdown";
+        paint();
+      },
+    }, `${mins}m`));
+  });
+
+  parent.appendChild(el("div", { className: "card stack" }, [
+    el("h2", {}, "Timer"),
+    readout,
+    status,
+    presets,
+    el("div", { className: "row wrap" }, [
+      minutes,
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          clearGameClock();
+          const mins = Math.max(1, Number(minutes.value) || 1);
+          remain = mins * 60 * 1000;
+          status.textContent = "Countdown";
+          paint();
+        },
+      }, "Set minutes"),
+    ]),
+    el("div", { className: "row wrap" }, [
+      el("button", { type: "button", className: "primary-btn", onClick: start }, "Start"),
+      el("button", { type: "button", className: "ghost-btn", onClick: () => stop(false) }, "Pause"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          clearGameClock();
+          remain = (Number(minutes.value) || 5) * 60 * 1000;
+          status.textContent = "Countdown";
+          paint();
+        },
+      }, "Reset"),
+    ]),
+  ]));
+}
+
+function renderRedLightGame(dynamicId) {
+  clearGameClock();
+  let phase = "ready";
+  let caught = 0;
+  let lights = 0;
+  const light = el("div", { className: "rlgl-light ready" }, "Ready");
+  const hint = el("p", { className: "muted" }, "Green means go. Red means freeze.");
+  const score = el("p", {}, "Caught: 0");
+
+  function paint() {
+    light.className = `rlgl-light ${phase}`;
+    light.textContent = phase === "green" ? "GREEN" : phase === "red" ? "RED" : "Ready";
+    hint.textContent = phase === "green" ? "Go." : phase === "red" ? "Freeze." : "Green means go. Red means freeze.";
+    score.textContent = `Lights: ${lights} · Caught: ${caught}`;
+  }
+
+  function schedule() {
+    const wait = phase === "green" ? 1800 + Math.random() * 5200 : 700 + Math.random() * 2200;
+    redLightTimer = setTimeout(() => {
+      phase = phase === "green" ? "red" : "green";
+      lights += 1;
+      paint();
+      schedule();
+    }, wait);
+  }
+
+  viewEl.replaceChildren(el("div", { className: "stack" }, [
+    el("h1", {}, "Red light, green light"),
+    light,
+    hint,
+    score,
+    el("div", { className: "row wrap" }, [
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => {
+          clearGameClock();
+          phase = "green";
+          paint();
+          schedule();
+        },
+      }, "Start"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          if (phase !== "red") return;
+          caught += 1;
+          paint();
+        },
+      }, "Caught"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          clearGameClock();
+          phase = "ready";
+          paint();
+        },
+      }, "Stop"),
+    ]),
+    el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        clearGameClock();
+        navigate(`/dynamic/${dynamicId}/assistant/games`);
+      },
+    }, "Back to games"),
+  ]));
+}
+
+function renderToySpin(dynamicId) {
+  clearGameClock();
+  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading owned toys…"));
+  api(`/dynamics/${dynamicId}/gear`)
+    .then((bundle) => {
+      const toys = [];
+      (bundle.catalog || []).forEach((item) => {
+        if (item.owned) toys.push(item);
+      });
+      (bundle.inventory || []).forEach((item) => {
+        if (item.is_custom && item.owned) toys.push(item);
+      });
+      const nameEl = el("h2", { className: "toy-spin-name" }, toys.length ? "Spin for a toy" : "No owned toys yet");
+      const photo = el("img", { className: "toy-spin-photo hidden", alt: "" });
+      let spinTimer = null;
+      function showToy(item) {
+        nameEl.textContent = item.name;
+        if (item.has_image && item.art_key) {
+          photo.classList.remove("hidden");
+          gearArtBlobUrl(dynamicId, item.art_key).then((url) => {
+            if (url) photo.src = url;
+          });
+        } else {
+          photo.classList.add("hidden");
+          photo.removeAttribute("src");
+        }
       }
-      if (you?.role === "dominant" || you?.role === "submissive") {
-        stack.appendChild(
-          el("button", {
-            className: "choice-btn playtime-option",
-            type: "button",
-            onClick: () =>
-              navigate(
-                game.status === "awaiting_post_spin"
-                  ? `/dynamic/${dynamicId}/assistant/games/spin?post=1`
-                  : `/dynamic/${dynamicId}/assistant/games/spin`
-              ),
-          }, [
-            el("strong", {}, "Spin the wheel"),
-            el(
-              "span",
-              { className: "muted" },
-              game.status === "awaiting_post_spin"
-                ? "Continue the current post-orgasm spin"
-                : you?.role === "dominant"
-                ? "Dice → outcomes → fate (secrets stay keyholder-only)"
-                : "Shared outcomes only — secrets stay with the keyholder"
-            ),
-          ])
-        );
-      }
-      stack.appendChild(
+      viewEl.replaceChildren(el("div", { className: "stack" }, [
+        el("h1", {}, "Toy spin"),
+        el("p", { className: "muted" }, "Spins among toys marked owned."),
+        photo,
+        nameEl,
         el("button", {
-          className: "ghost-btn",
           type: "button",
-          onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
-        }, "Back to Playtime")
-      );
-      viewEl.replaceChildren(stack);
-      updateBottomNav();
+          className: "primary-btn",
+          onClick: () => {
+            if (!toys.length || spinTimer) return;
+            let step = 0;
+            spinTimer = setInterval(() => {
+              showToy(toys[step % toys.length]);
+              step += 1;
+              if (step > 16) {
+                clearInterval(spinTimer);
+                spinTimer = null;
+                showToy(toys[Math.floor(Math.random() * toys.length)]);
+              }
+            }, 90);
+          },
+        }, "Spin"),
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => {
+            if (spinTimer) clearInterval(spinTimer);
+            navigate(`/dynamic/${dynamicId}/assistant`);
+          },
+        }, "Back to Playtime"),
+      ]));
     })
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
+}
+
+function renderFateGame(dynamicId) {
+  clearGameClock();
+  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading fates…"));
+  const error = el("div", { className: "error hidden" });
+
+  function paint(state) {
+    const revealed = new Map((state.revealed || []).map((card) => [card.n, card]));
+    const grid = el("div", { className: "fate-grid" });
+    (state.numbers || [1, 2, 3, 4, 5, 6]).forEach((number) => {
+      const card = revealed.get(number);
+      if (!card) {
+        grid.appendChild(el("button", {
+          type: "button",
+          className: "choice-btn fate-number",
+          onClick: async () => {
+            error.classList.add("hidden");
+            try {
+              const next = await api(`/dynamics/${dynamicId}/play-games/fate/reveal`, {
+                method: "POST",
+                body: JSON.stringify({ number }),
+              });
+              paint(next);
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, String(number)));
+        return;
+      }
+      const style = card.task_style === "sexual" ? "Sexual" : card.task_style === "sensual" ? "Sensual" : "Domestic";
+      grid.appendChild(el("div", { className: "card stack" }, [
+        el("strong", {}, `${number}. ${card.label}`),
+        el("span", { className: "muted" }, card.detail),
+        el("span", { className: "pill" }, style),
+        el("p", {}, card.task),
+      ]));
+    });
+    viewEl.replaceChildren(el("div", { className: "stack" }, [
+      el("h1", {}, "Fate cards"),
+      el("p", { className: "muted" }, "Six hidden fates. Open a number to see the orgasm, edges, or denial, then the task that follows."),
+      error,
+      state.ready ? grid : el("p", { className: "muted" }, "No cards dealt yet."),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: async () => {
+          error.classList.add("hidden");
+          try {
+            const next = await api(`/dynamics/${dynamicId}/play-games/fate/deal`, { method: "POST", body: "{}" });
+            paint(next);
+          } catch (err) {
+            error.textContent = err.message;
+            error.classList.remove("hidden");
+          }
+        },
+      }, state.ready ? "Deal a new set" : "Deal 6 fates"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
+      }, "Back to games"),
+    ]));
+  }
+
+  api(`/dynamics/${dynamicId}/play-games/fate`)
+    .then(paint)
+    .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
+}
+
+
+function voiceFromPartner(partner, fallback) {
+  const sex = String(partner?.biological_sex || "").toLowerCase();
+  const name = (partner?.display_name || "").trim() || fallback;
+  if (sex === "male") return { name, subj: "he", obj: "him", poss: "his" };
+  if (sex === "female") return { name, subj: "she", obj: "her", poss: "her" };
+  return { name, subj: "they", obj: "them", poss: "their" };
+}
+
+function renderPlaytimeGames(dynamicId) {
+  clearGameClock();
+  const stack = el("div", { className: "stack" }, [
+    el("h1", {}, "Games"),
+    el("p", { className: "muted" }, "Orgasm Roulette and toy spin."),
+  ]);
+  stack.appendChild(el("button", {
+    className: "choice-btn playtime-option",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/roulette`),
+  }, [
+    el("strong", {}, "Orgasm Roulette"),
+    el("span", { className: "muted" }, "Rules decide what earns a pull. Logged orgasms, ruins, and denials move the marbles."),
+  ]));
+  stack.appendChild(el("button", {
+    className: "choice-btn playtime-option",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/toys`),
+  }, [
+    el("strong", {}, "Toy spin"),
+    el("span", { className: "muted" }, "Spin among toys marked owned."),
+  ]));
+  stack.appendChild(el("button", {
+    className: "ghost-btn",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+  }, "Back to Playtime"));
+  viewEl.replaceChildren(stack);
+  updateBottomNav();
+}
+
+const ROULETTE_MARBLES = {
+  R: { name: "Ruin", color: "#a855f7" },
+  D: { name: "Denial", color: "#d64545" },
+  O: { name: "Orgasm", color: "#f4f4f4" },
+};
+
+function renderRoulette(dynamicId) {
+  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading Orgasm Roulette…"));
+  api(`/dynamics/${dynamicId}/play-games/roulette`)
+    .then((game) => paintRoulette(dynamicId, game))
+    .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
+}
+
+function renderRouletteSetup(dynamicId) {
+  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading setup…"));
+  api(`/dynamics/${dynamicId}/play-games/roulette`)
+    .then((game) => paintRouletteSetup(dynamicId, game))
+    .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
+}
+
+function paintRouletteView(dynamicId, game) {
+  const { parts } = parseRoute();
+  if (parts[5] === "setup") paintRouletteSetup(dynamicId, game);
+  else paintRoulette(dynamicId, game);
+}
+
+function paintRoulette(dynamicId, game) {
+  const stack = el("div", { className: "stack" });
+  stack.appendChild(el("h1", {}, "Orgasm Roulette"));
+  if (!game.enabled) stack.appendChild(el("p", { className: "muted" }, "Game is off."));
+  stack.appendChild(rouletteAvailable(game));
+  stack.appendChild(rouletteTally(game));
+  const session = game.session || {};
+  const draws = session.draws || [];
+  if (draws.length) {
+    const last = draws[draws.length - 1];
+    const meta = ROULETTE_MARBLES[last.marble];
+    if (meta) stack.appendChild(el("h2", { className: "roulette-result" }, meta.name));
+  }
+  if (game.enabled && game.pending_count) {
+    stack.appendChild(el("p", {}, `${game.pending_count} waiting`));
+  }
+  if (game.enabled && game.can_draw) {
+    stack.appendChild(rouletteTwoFinger(game.session?.bonus ? "Pull again" : "Pull", () =>
+      api(`/dynamics/${dynamicId}/play-games/roulette/draw`, { method: "POST" })
+        .then((next) => paintRouletteView(dynamicId, next))
+    ));
+  } else if (game.enabled && !game.can_end) {
+    stack.appendChild(el("p", { className: "muted" }, "No pull is open."));
+  }
+  if (game.enabled && game.can_end) {
+    stack.appendChild(rouletteTwoFinger("End session", () =>
+      api(`/dynamics/${dynamicId}/play-games/roulette/end`, { method: "POST" })
+        .then((next) => paintRouletteView(dynamicId, next))
+    ));
+  }
+  stack.appendChild(el("button", {
+    className: "ghost-btn",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/roulette/setup`),
+  }, "Setup"));
+  stack.appendChild(el("button", {
+    className: "ghost-btn",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
+  }, "Back to Games"));
+  viewEl.replaceChildren(stack);
+  updateBottomNav();
+}
+
+function paintRouletteSetup(dynamicId, game) {
+  const stack = el("div", { className: "stack" });
+  stack.appendChild(el("h1", {}, "Game setup"));
+  const toggle = el("input", { type: "checkbox" });
+  toggle.checked = !!game.enabled;
+  toggle.addEventListener("change", () => {
+    api(`/dynamics/${dynamicId}/play-games/roulette`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: toggle.checked, mode: game.mode || "virtual" }),
+    })
+      .then((next) => paintRouletteSetup(dynamicId, next))
+      .catch((err) => {
+        toggle.checked = !!game.enabled;
+        showToast(err.message);
+      });
+  });
+  stack.appendChild(el("label", { className: "row" }, [toggle, el("span", {}, "Game on")]));
+  stack.appendChild(rouletteGrantEditor(dynamicId, game));
+  stack.appendChild(el("div", { className: "card stack" }, [
+    el("h2", {}, "Bag"),
+    rouletteCounts(dynamicId, game, "bag"),
+  ]));
+  stack.appendChild(rouletteReserveCard(dynamicId, game));
+  stack.appendChild(el("button", {
+    className: "ghost-btn",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/roulette`),
+  }, "Back to game"));
+  viewEl.replaceChildren(stack);
+  updateBottomNav();
+}
+
+function rouletteCounts(dynamicId, game, which, odds) {
+  const source = game[which] || {};
+  const wrap = el("div", { className: "roulette-bag" });
+  ["R", "D", "O"].forEach((key) => {
+    const meta = ROULETTE_MARBLES[key];
+    const send = (delta) => {
+      const bag = { R: 0, D: 0, O: 0, ...(game.bag || {}) };
+      const reserve = { R: 0, D: 0, O: 0, ...(game.reserve || {}) };
+      const target = which === "reserve" ? reserve : bag;
+      target[key] = Math.max(0, Math.min(24, (Number(target[key]) || 0) + delta));
+      api(`/dynamics/${dynamicId}/play-games/roulette/bag`, {
+        method: "PUT",
+        body: JSON.stringify({ bag, reserve, focus: which === "reserve" ? "reserve" : "bag" }),
+      })
+        .then((next) => paintRouletteView(dynamicId, next))
+        .catch((err) => showToast(err.message));
+    };
+    wrap.appendChild(el("div", { className: "roulette-count" }, [
+      el("span", { className: "roulette-dot", style: `background:${meta.color}` }),
+      el("span", { className: "roulette-name" }, meta.name + (odds && odds[key] != null ? ` · ${odds[key]}%` : "")),
+      el("button", { type: "button", className: "ghost-btn roulette-step", onClick: () => send(-1) }, "−"),
+      el("strong", {}, String(source[key] || 0)),
+      el("button", { type: "button", className: "ghost-btn roulette-step", onClick: () => send(1) }, "+"),
+    ]));
+  });
+  return wrap;
+}
+
+function rouletteSvg(tag, attrs) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  Object.entries(attrs || {}).forEach(([key, value]) => node.setAttribute(key, value));
+  return node;
+}
+
+function roulettePie(counts) {
+  const keys = ["R", "D", "O"];
+  const total = keys.reduce((sum, key) => sum + (Number(counts[key]) || 0), 0);
+  const svg = rouletteSvg("svg", { viewBox: "0 0 100 100", class: "roulette-pie" });
+  if (!total) {
+    svg.appendChild(rouletteSvg("circle", { cx: "50", cy: "50", r: "40", fill: "rgba(255,255,255,0.12)" }));
+    return svg;
+  }
+  const only = keys.filter((key) => Number(counts[key]) > 0);
+  if (only.length === 1) {
+    svg.appendChild(rouletteSvg("circle", {
+      cx: "50",
+      cy: "50",
+      r: "40",
+      fill: ROULETTE_MARBLES[only[0]].color,
+    }));
+    return svg;
+  }
+  let angle = -Math.PI / 2;
+  keys.forEach((key) => {
+    const value = Number(counts[key]) || 0;
+    if (!value) return;
+    const slice = (value / total) * Math.PI * 2;
+    const x1 = 50 + 40 * Math.cos(angle);
+    const y1 = 50 + 40 * Math.sin(angle);
+    angle += slice;
+    const x2 = 50 + 40 * Math.cos(angle);
+    const y2 = 50 + 40 * Math.sin(angle);
+    const large = slice > Math.PI ? 1 : 0;
+    svg.appendChild(rouletteSvg("path", {
+      d: `M 50 50 L ${x1} ${y1} A 40 40 0 ${large} 1 ${x2} ${y2} Z`,
+      fill: ROULETTE_MARBLES[key].color,
+    }));
+  });
+  return svg;
+}
+
+function rouletteLegend(counts) {
+  const keys = ["R", "D", "O"];
+  const total = keys.reduce((sum, key) => sum + (Number(counts[key]) || 0), 0);
+  const list = el("div", { className: "roulette-bag" });
+  keys.forEach((key) => {
+    const count = Number(counts[key]) || 0;
+    const pct = total ? Math.round(count / total * 100) : 0;
+    const meta = ROULETTE_MARBLES[key];
+    list.appendChild(el("div", { className: "roulette-count" }, [
+      el("span", { className: "roulette-dot", style: `background:${meta.color}` }),
+      el("span", { className: "roulette-name" }, meta.name),
+      el("strong", {}, String(count)),
+      el("span", { className: "muted" }, `${pct}%`),
+    ]));
+  });
+  return list;
+}
+
+function rouletteAvailable(game) {
+  const bag = game.bag || {};
+  return el("div", { className: "card stack" }, [
+    el("h2", {}, "Marbles available"),
+    roulettePie(bag),
+    rouletteLegend(bag),
+  ]);
+}
+
+function rouletteTally(game) {
+  const tally = game.pull_tally || {};
+  return el("div", { className: "card stack" }, [
+    el("h2", {}, "Pulls"),
+    rouletteLegend({
+      R: tally.R || 0,
+      D: tally.D || 0,
+      O: tally.O || 0,
+    }),
+  ]);
+}
+
+function rouletteTwoFinger(label, action) {
+  const button = el("button", { type: "button", className: "primary-btn roulette-twofinger" }, [
+    el("span", {}, label),
+    el("span", { className: "muted" }, "Two fingers"),
+  ]);
+  const pointers = new Set();
+  let busy = false;
+  const drop = (event) => pointers.delete(event.pointerId);
+  button.addEventListener("pointerdown", (event) => {
+    pointers.add(event.pointerId);
+    if (pointers.size < 2 || busy) return;
+    busy = true;
+    pointers.clear();
+    Promise.resolve(action())
+      .catch((err) => showToast(err.message))
+      .finally(() => {
+        busy = false;
+      });
+  });
+  button.addEventListener("pointerup", drop);
+  button.addEventListener("pointercancel", drop);
+  button.addEventListener("click", (event) => event.preventDefault());
+  return button;
+}
+
+function rouletteReserveCard(dynamicId, game) {
+  const card = el("div", { className: "card stack" });
+  const reserve = game.reserve || {};
+  const inputs = {};
+  card.appendChild(el("h2", {}, "Reserve"));
+  card.appendChild(rouletteCounts(dynamicId, game, "reserve"));
+  const editor = el("div", { className: "stack hidden" });
+  ["R", "D", "O"].forEach((key) => {
+    const meta = ROULETTE_MARBLES[key];
+    inputs[key] = el("input", {
+      type: "number",
+      min: "0",
+      max: "24",
+      value: String(reserve[key] || 0),
+    });
+    editor.appendChild(el("label", { className: "roulette-count" }, [
+      el("span", { className: "roulette-dot", style: `background:${meta.color}` }),
+      el("span", { className: "roulette-name" }, meta.name),
+      inputs[key],
+    ]));
+  });
+  editor.appendChild(el("button", {
+    type: "button",
+    className: "primary-btn",
+    onClick: () => {
+      const next = { R: 0, D: 0, O: 0 };
+      ["R", "D", "O"].forEach((key) => {
+        next[key] = Math.max(0, Math.min(24, Number(inputs[key].value) || 0));
+      });
+      api(`/dynamics/${dynamicId}/play-games/roulette/bag`, {
+        method: "PUT",
+        body: JSON.stringify({ bag: game.bag || {}, reserve: next, focus: "reserve-set" }),
+      })
+        .then((updated) => paintRouletteView(dynamicId, updated))
+        .catch((err) => showToast(err.message));
+    },
+  }, "Save reserve"));
+  card.appendChild(editor);
+  card.appendChild(el("button", {
+    type: "button",
+    className: "ghost-btn",
+    onClick: () => editor.classList.toggle("hidden"),
+  }, "Edit reserve"));
+  return card;
+}
+
+function rouletteRuleLabel(rule) {
+  const every = Number(rule.every) || 1;
+  const count = every === 1 ? "Each" : `Every ${every}`;
+  const effect = rule.effect === "add_orgasm" ? "adds an orgasm marble from reserve" : "earns a marble pull";
+  if (rule.kind === "domme_orgasm") return `${count} orgasm for the keyholder ${effect}.`;
+  const tag = (rule.tag || "").trim();
+  return tag ? `${count} task tagged ${tag} ${effect}.` : `${count} completed task ${effect}.`;
+}
+
+function rouletteGrantEditor(dynamicId, game) {
+  const rules = (game.grant_rules || []).map((rule) => ({ ...rule }));
+  const card = el("div", { className: "card stack" }, [
+    el("h2", {}, "What earns a pull"),
+  ]);
+  if (!rules.length) card.appendChild(el("p", { className: "muted" }, "Nothing earns a pull until you add a rule."));
+  rules.forEach((rule) => {
+    const every = Number(rule.every) || 1;
+    card.appendChild(el("div", { className: "roulette-rule" }, [
+      el("p", {}, rouletteRuleLabel(rule)),
+      el("p", { className: "muted" }, `${rule.progress || 0} of ${every}`),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => saveRouletteGrants(dynamicId, rules.filter((item) => item.id !== rule.id)),
+      }, "Remove"),
+    ]));
+  });
+  const kind = el("select", {}, [
+    el("option", { value: "domme_orgasm" }, "Orgasm for the keyholder"),
+    el("option", { value: "task_tag" }, "Completed task"),
+  ]);
+  const tag = el("input", { type: "text", placeholder: "Tag, or blank for any task" });
+  const every = el("input", { type: "number", min: "1", max: "50", value: "1" });
+  const effect = el("select", {}, [
+    el("option", { value: "pull" }, "Earn a marble pull"),
+    el("option", { value: "add_orgasm" }, "Add an orgasm marble from reserve"),
+  ]);
+  const syncTag = () => {
+    tag.disabled = kind.value !== "task_tag";
+  };
+  kind.addEventListener("change", syncTag);
+  syncTag();
+  card.appendChild(el("div", { className: "stack" }, [
+    el("label", {}, ["When", kind]),
+    el("label", {}, ["Tag", tag]),
+    el("label", {}, ["How many", every]),
+    el("label", {}, ["Then", effect]),
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => {
+        const next = rules.concat([{
+          id: "g" + Date.now(),
+          kind: kind.value,
+          tag: kind.value === "task_tag" ? tag.value.trim() : "",
+          every: Math.max(1, Math.min(50, Number(every.value) || 1)),
+          effect: effect.value,
+        }]);
+        saveRouletteGrants(dynamicId, next);
+      },
+    }, "Add rule"),
+  ]));
+  return card;
+}
+
+function saveRouletteGrants(dynamicId, rules) {
+  api(`/dynamics/${dynamicId}/play-games/roulette/grants`, {
+    method: "PUT",
+    body: JSON.stringify({
+      rules: rules.map((rule) => ({
+        id: rule.id || "",
+        kind: rule.kind,
+        tag: rule.tag || "",
+        every: Number(rule.every) || 1,
+        effect: rule.effect || "pull",
+      })),
+    }),
+  })
+    .then((next) => paintRouletteView(dynamicId, next))
+    .catch((err) => showToast(err.message));
 }
 
 function renderSpinTheWheel(dynamicId) {
@@ -11713,7 +13685,7 @@ function renderSpinTheWheel(dynamicId) {
         midgameOrgasms: [],
         orgasmShouldHaveBeenGranted: null,
         dominant_name: dominant?.display_name || "the keyholder",
-        submissive_name: submissive?.display_name || "he",
+        submissive_name: submissive?.display_name || "your partner",
       };
 
       function persist() {
@@ -12518,12 +14490,12 @@ function renderSpinTheWheel(dynamicId) {
               el(
                 "p",
                 { className: "muted" },
-                "Tell him only that more ruins are required — do not share the number."
+                `Tell ${flow.submissive_name} only that more ruins are required — do not share the number.`
               ),
               el(
                 "p",
                 { className: "muted" },
-                "Proceed with one ruin (in front of you, or have him ruin himself in front of you), then you'll be asked if he can handle another."
+                `Proceed with one ruin (in front of you, or have ${flow.submissive_name} ruin in front of you), then you will be asked if ${flow.submissive_name} can handle another.`
               ),
             ])
           );
@@ -12548,7 +14520,7 @@ function renderSpinTheWheel(dynamicId) {
               el(
                 "p",
                 { className: "muted" },
-                "Have him ruin once in front of you, or tell him to ruin himself in front of you."
+                `Have ${flow.submissive_name} ruin once in front of you, or tell ${flow.submissive_name} to ruin in front of you.`
               ),
             ])
           );
@@ -12573,7 +14545,7 @@ function renderSpinTheWheel(dynamicId) {
             el("div", { className: "card stack" }, [
               el("h2", {}, "Another ruin?"),
               el("p", {}, `Secret progress: ${flow.ruinsDone} / ${flow.ruinsRequired}`),
-              el("p", { className: "muted" }, "Ask if he can handle another ruin."),
+              el("p", { className: "muted" }, `Ask if ${flow.submissive_name} can handle another ruin.`),
             ])
           );
           body.appendChild(
@@ -12626,7 +14598,7 @@ function renderSpinTheWheel(dynamicId) {
             el("div", { className: "card stack" }, [
               el("h2", {}, "Ruins complete"),
               el("p", {}, `Secret count met (${flow.ruinsRequired}).`),
-              el("p", { className: "muted" }, "Ask if he wants his full orgasm now or later."),
+              el("p", { className: "muted" }, `Ask if ${flow.submissive_name} wants a full orgasm now or later.`),
             ])
           );
           body.appendChild(
@@ -12656,7 +14628,7 @@ function renderSpinTheWheel(dynamicId) {
               el("h2", {}, option.title),
               el("p", {}, `${option.value_label || "Value"}: ${value}`),
               el("p", { className: "muted" }, option.description || ""),
-              el("h3", {}, "What to tell him"),
+              el("h3", {}, `What to tell ${flow.submissive_name}`),
               el("p", { className: "playtime-scene-body" }, subFacingText(option, value)),
               el("h3", {}, "If interrupted / fails"),
               el("p", { className: "muted" }, failCopy(option.fail_behavior) || "Handle as you see fit."),
@@ -12667,7 +14639,7 @@ function renderSpinTheWheel(dynamicId) {
           body.appendChild(
             el("div", { className: "card stack" }, [
               el("h2", {}, "Paused"),
-              el("p", {}, "Lock him up and continue this assignment later. Game stays in play."),
+              el("p", {}, `Lock up and continue this assignment with ${flow.submissive_name} later. Game stays in play.`),
               flow.landed
                 ? el("p", { className: "muted" }, `Active outcome: ${flow.landed.title} · ${flow.value}`)
                 : null,
@@ -13315,9 +15287,24 @@ function renderPlaytimeScene(dynamicId) {
   Promise.all([
     api(`/dynamics/${dynamicId}/assistant/status`),
     loadDynamic(dynamicId),
+    api(`/dynamics/${dynamicId}/switch`).catch(() => ({})),
   ])
-    .then(([status]) => {
+    .then(([status, , switchData]) => {
       const you = state.currentDynamic.partners.find((p) => p.is_you);
+      const directing = you?.role === "submissive" && !!switchData?.can_draft_scene;
+      if (you?.role === "submissive" && !directing) {
+        viewEl.replaceChildren(el("div", { className: "stack" }, [
+          el("h1", {}, "Scene builder"),
+          el("p", {}, "Scene builder stays with the keyholder. It opens for you when a scene switch is waiting for your draft."),
+          el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+          }, "Back to Playtime"),
+        ]));
+        updateBottomNav();
+        return;
+      }
       const error = el("div", { className: "error hidden" });
       const body = el("div", { className: "stack" });
 
@@ -13472,9 +15459,11 @@ function renderPlaytimeScene(dynamicId) {
 
       function paint() {
         body.replaceChildren();
-        body.appendChild(el("h1", {}, "Scene builder"));
+        body.appendChild(el("h1", {}, directing ? "Direct a scene" : "Scene builder"));
         body.appendChild(
-          el("p", { className: "muted" }, "Quick scene builder for the domme / keyholder. AI context comes from Settings → What to share with AI.")
+          el("p", { className: "muted" }, directing
+            ? "You are directing this scene. Submit it when it is ready. It starts after the keyholder approves it. Your tasks, chastity, and goals stay as they are."
+            : "Quick scene builder for the domme / keyholder. AI context comes from Settings → What to share with AI.")
         );
 
         if (!status.your_interview_completed) {
@@ -13595,6 +15584,35 @@ function renderPlaytimeScene(dynamicId) {
               el("p", { className: "playtime-scene-body" }, flow.scene.body),
             ])
           );
+
+          if (directing) {
+            body.appendChild(el("button", {
+              className: "primary-btn",
+              type: "button",
+              disabled: flow.busy,
+              onClick: async () => {
+                clearError();
+                setBusy(true);
+                try {
+                  await api(`/dynamics/${dynamicId}/switch/draft`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      scene: {
+                        title: flow.scene.title || flow.subject || "Scene",
+                        summary: flow.scene.summary || "",
+                        body: flow.scene.body || "",
+                      },
+                    }),
+                  });
+                  showToast("Scene sent for approval.");
+                  navigate(`/dynamic/${dynamicId}/assistant`);
+                } catch (err) {
+                  showError(err.message);
+                  setBusy(false);
+                }
+              },
+            }, "Submit for approval"));
+          }
 
           body.appendChild(el("h3", {}, "Use this scene?"));
           body.appendChild(el("p", { className: "muted" }, "Rate it after play, or ask for something different."));
@@ -15584,15 +17602,19 @@ function renderCumulativeOrgasmChart(series, partners) {
   }
   const w = 360;
   const h = 180;
-  const pad = { t: 12, r: 12, b: 28, l: 28 };
-  const maxY = Math.max(1, ...series.flatMap((pt) => Object.values(pt.by_partner || {})));
+  const pad = { t: 16, r: 12, b: 28, l: 32 };
+  const values = series.flatMap((pt) => [
+    ...Object.values(pt.by_partner || {}),
+    ...Object.values(pt.ruined_by_partner || {}),
+  ]);
+  const maxY = Math.max(1, ...values.map((value) => Number(value) || 0));
   const colors = ["var(--accent)", "#7eb8a8", "#c97b4a", "#8a9bb8"];
   const svgNS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(svgNS, "svg");
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   svg.setAttribute("class", "cum-line-chart");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "Cumulative orgasms over 30 days");
+  svg.setAttribute("aria-label", "Cumulative full and ruined orgasms over 30 days, starting from last month");
 
   function xAt(i) {
     return pad.l + (i / Math.max(1, series.length - 1)) * (w - pad.l - pad.r);
@@ -15601,7 +17623,6 @@ function renderCumulativeOrgasmChart(series, partners) {
     return pad.t + (1 - v / maxY) * (h - pad.t - pad.b);
   }
 
-  // baseline
   const base = document.createElementNS(svgNS, "line");
   base.setAttribute("x1", String(pad.l));
   base.setAttribute("x2", String(w - pad.r));
@@ -15611,29 +17632,53 @@ function renderCumulativeOrgasmChart(series, partners) {
   svg.appendChild(base);
 
   partners.forEach((partner, pIdx) => {
-    const pts = series.map((pt, i) => {
-      const v = Number(pt.by_partner?.[partner.membership_id] || 0);
-      return `${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`;
-    }).join(" ");
-    const poly = document.createElementNS(svgNS, "polyline");
-    poly.setAttribute("points", pts);
-    poly.setAttribute("fill", "none");
-    poly.setAttribute("stroke", colors[pIdx % colors.length]);
-    poly.setAttribute("stroke-width", "2.5");
-    poly.setAttribute("stroke-linejoin", "round");
-    poly.setAttribute("stroke-linecap", "round");
-    svg.appendChild(poly);
+    const color = colors[pIdx % colors.length];
+    ["by_partner", "ruined_by_partner"].forEach((key) => {
+      const pts = series.map((pt, i) => {
+        const v = Number((pt[key] || {})[partner.membership_id] || 0);
+        return `${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`;
+      }).join(" ");
+      const poly = document.createElementNS(svgNS, "polyline");
+      poly.setAttribute("points", pts);
+      poly.setAttribute("fill", "none");
+      poly.setAttribute("stroke", color);
+      poly.setAttribute("stroke-width", key === "by_partner" ? "2.5" : "2");
+      poly.setAttribute("stroke-linejoin", "round");
+      poly.setAttribute("stroke-linecap", "round");
+      if (key === "ruined_by_partner") poly.setAttribute("stroke-dasharray", "5 4");
+      svg.appendChild(poly);
+    });
+    series.forEach((pt, i) => {
+      const count = Number((pt.denials_by_partner || {})[partner.membership_id] || 0);
+      for (let n = 0; n < Math.min(count, 4); n += 1) {
+        const dot = document.createElementNS(svgNS, "circle");
+        dot.setAttribute("cx", xAt(i).toFixed(1));
+        dot.setAttribute("cy", (h - pad.b - 7 - (pIdx * 6) - (n * 3)).toFixed(1));
+        dot.setAttribute("r", "3.2");
+        dot.setAttribute("fill", color);
+        dot.setAttribute("stroke", "var(--bg-card, #111)");
+        dot.setAttribute("stroke-width", "1");
+        svg.appendChild(dot);
+      }
+    });
   });
 
   wrap.appendChild(svg);
   const legend = el("div", { className: "history-legend" });
   partners.forEach((p, idx) => {
+    const color = colors[idx % colors.length];
     legend.appendChild(el("span", {
       className: `history-legend-item p${idx}`,
-      style: `border-color: ${colors[idx % colors.length]}`,
-    }, p.name));
+      style: `border-color: ${color}`,
+    }, `${p.name} full`));
+    legend.appendChild(el("span", {
+      className: `history-legend-item p${idx}`,
+      style: `border-color: ${color}; border-style: dashed`,
+    }, `${p.name} ruined`));
   });
+  legend.appendChild(el("span", { className: "history-legend-item" }, "Dots = denials"));
   wrap.appendChild(legend);
+  wrap.appendChild(el("p", { className: "muted" }, "Lines start at last month’s total, then add this month. Dots mark denial days."));
   return wrap;
 }
 
@@ -15658,10 +17703,9 @@ function renderTracking(dynamicId) {
       const partners = dynamic.partners || [];
 
       const stack = el("div", { className: "stack" }, [
-        el("h1", {}, "Sex & orgasm tracking"),
+        el("h1", {}, "Sex tracking"),
         assistantChatEntry(dynamicId),
         el("p", { className: "muted" }, stats.recent_orgasm_label || "No orgasms in the last 7 days"),
-        el("p", { className: "muted" }, "Select who climaxed. Session times are shared; satisfaction, edging, and orgasm tags are per partner."),
       ]);
       const orgasmBalanceHost = el("div");
       stack.appendChild(orgasmBalanceHost);
@@ -15686,7 +17730,9 @@ function renderTracking(dynamicId) {
       const partnerSelectRow = el("div", { className: "stack" }, [
         el("strong", {}, "Log for"),
         el("div", { className: "row wrap" }, partnerChecks.map(({ partner, input }) =>
-          el("label", { className: "checkbox-label" }, [input, ` ${partner.display_name}`])
+          el("label", {
+            className: `checkbox-label log-for-choice ${partner.role === "dominant" ? "log-for-domme" : "log-for-sub"}`,
+          }, [input, ` ${partner.display_name}`])
         )),
       ]);
 
@@ -15697,7 +17743,11 @@ function renderTracking(dynamicId) {
       ].forEach(([value, label]) => {
         eventType.appendChild(el("option", { value }, label));
       });
-      const sessionStart = el("input", { type: "datetime-local", value: toLocalDatetimeValue() });
+      const presetDay = parseRoute().query?.get?.("on") || "";
+      const sessionStart = el("input", {
+        type: "datetime-local",
+        value: presetDay ? `${presetDay}T12:00` : toLocalDatetimeValue(),
+      });
       const sessionEnd = el("input", { type: "datetime-local" });
       const locationInput = el("input", { type: "text", maxlength: "120", placeholder: "e.g. home, hotel" });
       const initiatedBy = el("select");
@@ -16390,7 +18440,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
     [...(goalsData.goals || []), ...(goalsData.archived_goals || [])].map((g) => [g.id, g])
   );
   const error = el("div", { className: "error hidden" });
-  const giftLabel = (kind) => ({ orgasm_grant: "Orgasm", ruin_gift: "Ruin", misc_gift: "Other" }[kind] || "Other");
+  const giftLabel = (kind) => ({ orgasm_grant: "Orgasm", ruin_gift: "Ruin", misc_gift: "Other", switch_gift: "Switch" }[kind] || "Other");
   const subs = (partners || []).filter((p) => p.role === "submissive");
   const summaryCount = el("span", { className: "task-timeline-count" }, "");
   const helpBtn = el("button", {
@@ -16450,6 +18500,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       ["ruin_gift", "Ruin"],
       ["orgasm_grant", "Orgasm"],
       ["misc_gift", "Other"],
+      ["switch_gift", "Switch"],
     ].forEach(([id, label]) => {
       const opt = el("option", { value: id }, label);
       if (goal.kind === id) opt.selected = true;
@@ -16465,6 +18516,19 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       }
     });
     kindSelect.disabled = archived;
+
+    if (!goal.switch_style) goal.switch_style = "goal";
+    const styleSelect = el("select");
+    [
+      ["goal", "Sub drafts a goal for you"],
+      ["scene", "Sub directs a scene"],
+    ].forEach(([id, label]) => {
+      const opt = el("option", { value: id }, label);
+      if ((goal.switch_style || "goal") === id) opt.selected = true;
+      styleSelect.appendChild(opt);
+    });
+    styleSelect.addEventListener("change", () => { goal.switch_style = styleSelect.value; });
+    styleSelect.disabled = archived;
 
     const title = el("input", { value: goal.title || "", placeholder: "Goal title" });
     title.addEventListener("change", () => { goal.title = title.value.trim(); });
@@ -16698,6 +18762,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       ]),
       el("label", {}, ["Title", title]),
       el("label", {}, ["Gift type", kindSelect]),
+      goal.kind === "switch_gift" ? el("label", {}, ["Switch gift", styleSelect]) : null,
       subs.length > 1 ? el("label", {}, ["For", forSelect]) : null,
       archived ? null : el("label", {}, ["Tracking start", startSelect]),
       archived ? null : startHint,
@@ -16753,6 +18818,7 @@ function renderChastityGoalsCard(dynamicId, goalsData, { partners, onSaved, task
       config.goals.push({
         id: `goal-${Date.now()}`,
         kind: "orgasm_grant",
+        switch_style: "goal",
         title: "Next orgasm / unlock",
         for_membership_id: subs[0]?.id || null,
         requirements: [
@@ -16810,20 +18876,41 @@ function renderChastity(dynamicId) {
     api(`/dynamics/${dynamicId}/chastity-goals`).catch(() => null),
     loadDynamic(dynamicId),
     api(`/dynamics/${dynamicId}/tracking`).catch(() => []),
+    api(`/dynamics/${dynamicId}/sleep`).catch(() => []),
   ])
-    .then(([overview, settings, lockups, limitProposals, tagData, goalsData, , orgasmEntries]) => {
+    .then(([overview, settings, lockups, limitProposals, tagData, goalsData, , orgasmEntries, sleepSessions]) => {
       const dynamic = state.currentDynamic;
       const you = dynamic.partners.find((p) => p.is_you);
       const error = el("div", { className: "error hidden" });
       const flowHost = el("div", { className: "chastity-flow-host hidden" });
       const chastityTagPresets = tagData.presets || [];
       const stack = el("div", { className: "stack" }, [
-        el("h1", {}, "Chastity tracking"),
+        el("h1", {}, "Tracking"),
         assistantChatEntry(dynamicId),
-        el("p", { className: "muted" }, "Lockups are tracked for submissives with chastity available. Orgasm and lockup data can be shared with the assistant domme in Settings."),
         error,
         flowHost,
       ]);
+      const calendarHost = el("div", { className: "stack" });
+      stack.appendChild(calendarHost);
+      api(`/dynamics/${dynamicId}/history/reports/chastity-days?since=recent`)
+        .then((report) => {
+          const people = report.partners || [];
+          if (!people.length) {
+            calendarHost.appendChild(el("p", { className: "muted" }, "No days in this range."));
+            return;
+          }
+          people.forEach((person) => {
+            calendarHost.appendChild(el("h2", {}, person.name || "Calendar"));
+            calendarHost.appendChild(renderChastityCalendar(person.days || [], {
+              dynamicId,
+              membershipId: person.membership_id,
+              chooser: true,
+              quiet: true,
+              onChanged: () => renderChastity(dynamicId),
+            }));
+          });
+        })
+        .catch((err) => calendarHost.appendChild(el("p", { className: "error" }, err.message || "Could not load the calendar.")));
 
       if (settings.you_are_dominant && goalsData) {
         const activeCount = Number(goalsData.active_count || (goalsData.goals || []).length || 0);
@@ -16901,76 +18988,6 @@ function renderChastity(dynamicId) {
       }, "Availability & lock time agreements →"));
 
       enrolled.forEach((partner) => {
-        const hero = el("div", { className: `card lockup-hero ${partner.state === "locked" ? "locked" : ""}` });
-        let heroText = "";
-        if (partner.state === "locked") {
-          heroText = `${partner.name} has been locked for ${partner.current_duration_label}`;
-        } else if (partner.state === "on_break") {
-          heroText = `${partner.name} is on a break for ${partner.break_duration_label}`;
-        } else if (partner.free_duration_label) {
-          heroText = `${partner.name} has been free for ${partner.free_duration_label}`;
-        } else {
-          heroText = `${partner.name} has not been locked up yet`;
-        }
-        hero.appendChild(el("p", { className: "lockup-hero-text" }, heroText));
-        if (partner.state === "locked") {
-          hero.appendChild(el("p", { className: "lockup-timer" }, partner.current_duration_label));
-        } else if (partner.state === "on_break") {
-          hero.appendChild(el("p", { className: "lockup-timer break" }, partner.break_duration_label));
-        }
-        if (partner.timer_overdue && partner.active_lockup_id && settings.you_are_dominant) {
-          const timerBanner = el("div", { className: "chastity-timer-overdue stack" }, [
-            el("p", {}, `${partner.name}'s lock timer is up.`),
-            el("p", { className: "muted" }, "Extend the time, or confirm Released!"),
-            el("div", { className: "row" }, [
-              el("button", {
-                type: "button",
-                className: "primary-btn",
-                onClick: async () => {
-                  const raw = prompt("Extend by how many hours?", "24");
-                  if (raw == null) return;
-                  const hours = parseInt(raw, 10);
-                  if (!hours || hours < 1) {
-                    error.textContent = "Enter a positive number of hours.";
-                    error.classList.remove("hidden");
-                    return;
-                  }
-                  try {
-                    await api(`/dynamics/${dynamicId}/chastity/${partner.active_lockup_id}/timer/extend`, {
-                      method: "PATCH",
-                      body: JSON.stringify({ hours }),
-                    });
-                    renderChastity(dynamicId);
-                  } catch (err) {
-                    error.textContent = err.message;
-                    error.classList.remove("hidden");
-                  }
-                },
-              }, "Extend"),
-              el("button", {
-                type: "button",
-                className: "ghost-btn",
-                onClick: async () => {
-                  if (!confirm("Confirm Released! for this lock timer?")) return;
-                  try {
-                    await api(`/dynamics/${dynamicId}/chastity/${partner.active_lockup_id}/timer/release`, {
-                      method: "PATCH",
-                    });
-                    renderChastity(dynamicId);
-                  } catch (err) {
-                    error.textContent = err.message;
-                    error.classList.remove("hidden");
-                  }
-                },
-              }, "Released!"),
-            ]),
-          ]);
-          hero.appendChild(timerBanner);
-        } else if (partner.timer_overdue) {
-          hero.appendChild(el("p", { className: "chastity-timer-overdue-note" }, "Lock timer finished — waiting on keyholder."));
-        }
-        stack.appendChild(hero);
-
         stack.appendChild(el("div", { className: "card chastity-stats-grid" }, [
           el("div", { className: "chastity-stat" }, [
             el("span", { className: "chastity-stat-value" }, `${partner.percent_locked_all_time}%`),
@@ -17269,12 +19286,12 @@ function renderChastity(dynamicId) {
             type: "button",
             onClick: () => showUnlockDisambiguation(),
           }, "Temporary unlock"));
-          const sleepAverage = averageSleepUnlockTimes(lockups, partner.membership_id);
+          const sleepAverage = averageSleepUnlockTimes(lockups, partner.membership_id, sleepSessions);
           if (sleepAverage) {
-            actions.appendChild(el("p", { className: "muted" }, `Sleep uses the average of ${sleepAverage.count} past Sleep unlock${sleepAverage.count === 1 ? "" : "s"}: unlock ${formatTimeOfDay(sleepAverage.start)}, locked again ${formatTimeOfDay(sleepAverage.end)}.`));
+            actions.appendChild(el("p", { className: "muted" }, sleepAverageSentence(sleepAverage)));
           }
           (settings.unlock_presets || []).forEach((preset) => {
-            const applied = sleepPresetWithAverage(preset, lockups, partner.membership_id);
+            const applied = sleepPresetWithAverage(preset, lockups, partner.membership_id, sleepSessions);
             const label = applied.average
               ? `${preset.name || "Sleep"} · ${formatTimeOfDay(applied.average.start)}–${formatTimeOfDay(applied.average.end)}`
               : (preset.name || "Unlock");
@@ -17338,6 +19355,11 @@ function renderChastity(dynamicId) {
         onClick: () => navigate(`/dynamic/${dynamicId}/track`),
       }, "Back to tracking"));
       setViewContent(stack);
+      const chastityIntent = parseRoute().query.get("intent");
+      if (chastityIntent === "lock" || chastityIntent === "unlock" || chastityIntent === "break") {
+        const actionRow = stack.querySelector(".chastity-actions");
+        if (actionRow) actionRow.scrollIntoView({ block: "center" });
+      }
     })
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
@@ -18435,10 +20457,21 @@ function formatSleepClock(value) {
   return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-function formatSleepNightTitle(endAt) {
-  const d = parseServerDate(endAt);
-  if (!d) return "Night";
-  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+function formatSleepNightTitle(endAt, startAt) {
+  const start = parseServerDate(startAt);
+  const basis = start || parseServerDate(endAt);
+  if (!basis) return "Night";
+  const parts = zonedDateParts(basis);
+  let stamp = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+  if (start && Number(parts.hour) < 12) stamp -= 86400000;
+  const shown = new Date(stamp);
+  if (Number.isNaN(shown.getTime())) return "Night";
+  return shown.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 function formatSleepSource(source) {
@@ -18473,7 +20506,7 @@ function renderSleepNightCard(night, { dynamicId, canDelete, who } = {}) {
       },
       [
         el("div", { className: "stack log-card-main" }, [
-          el("strong", {}, who ? `${who} · ${formatSleepNightTitle(night.end_at)}` : formatSleepNightTitle(night.end_at)),
+          el("strong", {}, who ? `${who} · ${formatSleepNightTitle(night.end_at, night.start_at)}` : formatSleepNightTitle(night.end_at, night.start_at)),
           el(
             "span",
             { className: "muted log-card-when" },
@@ -19008,138 +21041,6 @@ function renderCycle(dynamicId) {
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
-function renderManga(dynamicId) {
-  setViewContent(el("p", { className: "muted" }, "Loading manga…"));
-  Promise.all([
-    api(`/dynamics/${dynamicId}/manga/modes`),
-    api(`/dynamics/${dynamicId}/manga`).catch((err) => {
-      if (String(err.message || "").includes("not enabled")) return [];
-      throw err;
-    }),
-    loadDynamic(dynamicId),
-  ])
-    .then(([modes, comics]) => {
-      const stack = el("div", { className: "stack" }, [
-        buildHubHeader(dynamicId, "Monthly manga", {
-          subtitle: "One comic per month from your dynamic context. Off by default.",
-          sectionFilter: "playtime",
-        }),
-        el("div", { className: "row wrap" }, [
-          aiConfigBadge("manga_script", { dynamicId }),
-          aiConfigBadge("manga_image", { dynamicId }),
-          el("span", { className: "muted" }, "AI: script / images"),
-        ]),
-        el("button", {
-          className: "ghost-btn",
-          type: "button",
-          onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
-        }, "← Back to Playtime"),
-      ]);
-      if (!modes.feature_enabled) {
-        stack.appendChild(el("div", { className: "card stack" }, [
-          el("p", {}, "Monthly manga is off for this dynamic."),
-          el("button", {
-            className: "primary-btn",
-            type: "button",
-            onClick: () => openAppFeaturesPanel(dynamicId, "playtime"),
-          }, "Enable in Application features"),
-        ]));
-        setViewContent(stack);
-        return;
-      }
-
-      const modeSelect = el("select");
-      (modes.modes || []).forEach((m) => {
-        modeSelect.appendChild(el("option", { value: m.id }, m.label));
-      });
-      const warn = el("p", { className: "muted" }, (modes.modes || [])[0]?.warning || "");
-      modeSelect.addEventListener("change", () => {
-        const m = (modes.modes || []).find((x) => x.id === modeSelect.value);
-        warn.textContent = m?.warning || "";
-      });
-      const error = el("div", { className: "error hidden" });
-      const status = el("p", { className: "muted" }, `Month: ${modes.year_month}`);
-      stack.appendChild(el("div", { className: "card stack" }, [
-        el("h2", {}, "Generate this month"),
-        status,
-        el("label", {}, ["Mode", modeSelect]),
-        warn,
-        error,
-        el("button", {
-          className: "primary-btn ai-only",
-          "data-ai-label": "Monthly manga needs AI for script and images.",
-          type: "button",
-          onClick: async () => {
-            error.classList.add("hidden");
-            status.textContent = "Generating… this can take a minute.";
-            try {
-              await api(`/dynamics/${dynamicId}/manga/generate`, {
-                method: "POST",
-                body: JSON.stringify({ mode: modeSelect.value }),
-              });
-              showToast("Comic draft ready.");
-              renderManga(dynamicId);
-            } catch (err) {
-              error.textContent = err.message;
-              error.classList.remove("hidden");
-              status.textContent = `Month: ${modes.year_month}`;
-            }
-          },
-        }, "Generate comic"),
-      ]));
-
-      (comics || []).forEach((comic) => {
-        const card = el("div", { className: "card stack" }, [
-          el("h2", {}, comic.title || comic.year_month),
-          el("p", { className: "muted" }, `${comic.year_month} · ${comic.mode} · ${comic.status}`),
-        ]);
-        (comic.warnings || []).forEach((w) => {
-          card.appendChild(el("p", { className: "muted" }, w));
-        });
-        (comic.panels || []).forEach((panel, idx) => {
-          const panelEl = el("div", { className: "stack manga-panel" }, [
-            el("strong", {}, `Panel ${idx + 1}`),
-            panel.image_data
-              ? el("img", { src: panel.image_data, alt: panel.caption || `Panel ${idx + 1}`, style: "max-width:100%;border-radius:8px;" })
-              : el("div", { className: "manga-frame muted" }, panel.visual_prompt || "No image — captioned frame"),
-            panel.caption ? el("p", {}, panel.caption) : null,
-            panel.dialogue ? el("p", { className: "muted" }, panel.dialogue) : null,
-            panel.image_error ? el("p", { className: "error" }, panel.image_error) : null,
-          ]);
-          card.appendChild(panelEl);
-        });
-        const actions = el("div", { className: "row wrap" });
-        if (comic.status === "draft") {
-          actions.appendChild(el("button", {
-            className: "primary-btn",
-            type: "button",
-            onClick: async () => {
-              await api(`/dynamics/${dynamicId}/manga/${comic.id}/save`, { method: "POST" });
-              showToast("Comic saved for this month.");
-              renderManga(dynamicId);
-            },
-          }, "Save for this month"));
-        }
-        actions.appendChild(el("button", {
-          className: "ghost-btn",
-          type: "button",
-          onClick: async () => {
-            if (!confirm("Delete this comic?")) return;
-            await api(`/dynamics/${dynamicId}/manga/${comic.id}`, { method: "DELETE" });
-            renderManga(dynamicId);
-          },
-        }, "Delete"));
-        card.appendChild(actions);
-        stack.appendChild(card);
-      });
-      if (!(comics || []).length) {
-        stack.appendChild(el("p", { className: "muted" }, "No comics yet this month."));
-      }
-      setViewContent(stack);
-    })
-    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
-}
-
 function renderFeatureSettings(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading features..."));
   Promise.all([
@@ -19239,6 +21140,17 @@ function renderFeatureSettings(dynamicId) {
 function renderGear(dynamicId) {
   setViewContent(el("p", { className: "muted" }, "Loading gear..."));
   let activeCategory = "vanilla_toys";
+  let artNote = "";
+  let lastReady = -1;
+
+  function gearThumb(item) {
+    if (!item.has_image || !item.art_key) return null;
+    const img = el("img", { className: "gear-thumb", alt: "" });
+    gearArtBlobUrl(dynamicId, item.art_key).then((url) => {
+      if (url) img.src = url;
+    });
+    return img;
+  }
 
   function paint(bundle) {
     const error = el("div", { className: "error hidden" });
@@ -19246,6 +21158,7 @@ function renderGear(dynamicId) {
       el("h1", {}, "Gear"),
       el("p", { className: "muted" }, "Mark what you have and what you want. Catalog includes Artebu-style bondage gear plus common and premium toys."),
       el("p", { className: "muted" }, `${bundle.owned_count} owned · ${bundle.want_count} wanted`),
+      artNote ? el("p", { className: "muted gear-art-status" }, artNote) : null,
     ]);
 
     const tabs = el("div", { className: "tabs" });
@@ -19307,6 +21220,7 @@ function renderGear(dynamicId) {
       customItems.forEach((item) => {
         customList.appendChild(el("div", { className: "card stack gear-item" }, [
           el("div", { className: "row" }, [
+            gearThumb(item),
             el("strong", {}, item.name),
             el("button", {
               className: "ghost-btn",
@@ -19363,6 +21277,7 @@ function renderGear(dynamicId) {
       items.forEach((item) => {
         group.appendChild(el("div", { className: "card stack gear-item" }, [
           el("div", { className: "row" }, [
+            gearThumb(item),
             el("strong", {}, item.name),
             item.tier === "premium" ? el("span", { className: "pill" }, "Premium") : null,
           ]),
@@ -19427,8 +21342,8 @@ function renderGear(dynamicId) {
     stack.appendChild(error);
     stack.appendChild(el("button", {
       className: "ghost-btn",
-      onClick: () => navigate(`/dynamic/${dynamicId}/knowledge`),
-    }, "Back to knowledge"));
+      onClick: () => navigate(`/dynamic/${dynamicId}/assistant`),
+    }, "Back to Playtime"));
     setViewContent(stack);
   }
 
@@ -19438,7 +21353,242 @@ function renderGear(dynamicId) {
       .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
   }
 
+  function pollArt() {
+    api(`/dynamics/${dynamicId}/gear/art/status`)
+      .then((st) => {
+        const next = st && st.total && st.ready < st.total
+          ? `Drawing pictures ${st.ready} of ${st.total}`
+          : "";
+        const changed = st && st.ready !== lastReady;
+        lastReady = st ? st.ready : lastReady;
+        if (next !== artNote || (changed && st.ready > 0)) {
+          artNote = next;
+          load();
+        }
+        if (st && (st.running || st.ready < st.total)) setTimeout(pollArt, 8000);
+      })
+      .catch(() => {});
+  }
+
+  api(`/dynamics/${dynamicId}/gear/art/generate`, { method: "POST", body: "{}" }).catch(() => {});
   load();
+  setTimeout(pollArt, 4000);
+}
+
+
+function askChatMediaSendChoice({ video = false, youAreDominant = false } = {}) {
+  return new Promise((resolve) => {
+    const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
+    const finish = (value) => {
+      backdrop.remove();
+      resolve(value);
+    };
+    const sheet = el("div", { className: "chat-image-sheet card stack" }, [
+      el("strong", {}, video ? "Send clip to chat" : "Send picture to chat"),
+      el("p", { className: "muted" }, "It stays in the vault. Chat gets the same picture."),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => finish({ locked: false }),
+      }, "Send"),
+      youAreDominant
+        ? el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => finish({ locked: true }),
+        }, "Lock — partner needs permission")
+        : null,
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => finish(null),
+      }, "Cancel"),
+    ]);
+    backdrop.appendChild(sheet);
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) finish(null);
+    });
+    document.body.appendChild(backdrop);
+  });
+}
+
+async function postMediaDataToChat(dynamicId, dataUrl, { locked = false, mediaKind = "image", saveToVault = false } = {}) {
+  const raw = String(dataUrl || "");
+  if (!raw.startsWith("data:")) throw new Error("That vault item is not a picture we can send.");
+  const b64 = raw.split(",")[1] || "";
+  const bytes = Math.floor((b64.length * 3) / 4);
+  if (bytes > 12 * 1024 * 1024) throw new Error("Clip is too large (max 12 MB). Try a shorter recording.");
+  const settings = await api(`/dynamics/${dynamicId}/chat/settings`);
+  const blurImages = localStorage.getItem(chatBlurStorage()) !== "false";
+  let image_data = raw;
+  if (settings.e2e_enabled) {
+    if (!cryptoSubtleAvailable()) throw encryptionUnavailableError();
+    await ensureChatCryptoKey(dynamicId, { createIfMissing: false });
+    image_data = await encryptChatText(dynamicId, raw);
+  } else {
+    await ensureChatCryptoKey(dynamicId, { createIfMissing: false }).catch(() => null);
+  }
+  const lock = !!locked && !!settings.you_are_dominant;
+  const body = {
+    message_type: "image",
+    image_data,
+    image_blurred: blurImages || lock,
+    image_locked: lock,
+    save_to_vault: !!saveToVault,
+    media_kind: mediaKind === "video" ? "video" : "image",
+  };
+  if (saveToVault) body.vault_image_encrypted = await encryptVaultPayload(dynamicId, raw);
+  await api(`/dynamics/${dynamicId}/chat/messages`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+async function sendVaultMediaToChat(dynamicId, { dataUrl, mediaKind = "image" } = {}) {
+  const settings = await api(`/dynamics/${dynamicId}/chat/settings`);
+  const choice = await askChatMediaSendChoice({
+    video: mediaKind === "video",
+    youAreDominant: !!settings.you_are_dominant,
+  });
+  if (!choice) return false;
+  await postMediaDataToChat(dynamicId, dataUrl, {
+    locked: !!choice.locked,
+    mediaKind,
+    saveToVault: false,
+  });
+  return true;
+}
+
+function openVaultFullscreen(src, { video = false, title = "", revealId = "", revealedSet = null, sourceEl = null, onSend } = {}) {
+  closeChatImageViewer();
+  if (revealedSet && revealId) revealedSet.add(revealId);
+  sourceEl?.classList.remove("blurred");
+  const media = video
+    ? el("video", {
+      className: "chat-image-viewer-img",
+      src,
+      controls: "true",
+      playsinline: "true",
+      autoplay: "true",
+    })
+    : el("img", {
+      className: "chat-image-viewer-img",
+      src,
+      alt: title || "Vault image",
+    });
+  media.setAttribute("draggable", "false");
+  const closeBtn = el("button", {
+    type: "button",
+    className: "chat-image-viewer-close",
+    title: "Close",
+    "aria-label": "Close full screen",
+  }, "✕");
+  closeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeChatImageViewer();
+  });
+  const bar = el("div", { className: "vault-fullscreen-bar" });
+  if (onSend) {
+    bar.appendChild(el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: (e) => {
+        e.stopPropagation();
+        const send = onSend;
+        closeChatImageViewer();
+        Promise.resolve(send()).catch(() => {});
+      },
+    }, "Send to chat"));
+  }
+  const viewer = el("div", {
+    className: "chat-image-viewer vault-viewer",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": "Full screen vault image",
+  }, [media, closeBtn, bar]);
+  viewer.addEventListener("click", (e) => {
+    if (e.target === viewer) closeChatImageViewer();
+  });
+  const onKey = (e) => {
+    if (e.key === "Escape") closeChatImageViewer();
+  };
+  viewer._onKey = onKey;
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(viewer);
+  chatImageViewerEl = viewer;
+  return viewer;
+}
+
+function openVaultChatPicker(dynamicId) {
+  return new Promise((resolve) => {
+    const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
+    const grid = el("div", { className: "vault-picker-grid" });
+    const note = el("p", { className: "muted" }, "Loading vault…");
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      backdrop.remove();
+      resolve(value);
+    };
+    const sheet = el("div", { className: "chat-image-sheet vault-picker-sheet card stack" }, [
+      el("strong", {}, "From vault"),
+      note,
+      grid,
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => finish(null),
+      }, "Cancel"),
+    ]);
+    backdrop.appendChild(sheet);
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) finish(null);
+    });
+    document.body.appendChild(backdrop);
+    api(`/dynamics/${dynamicId}/vault`).then(async (images) => {
+      if (done) return;
+      const usable = [];
+      for (const image of images || []) {
+        const dataUrl = await decryptVaultPayload(dynamicId, image.image_encrypted);
+        if (dataUrl) usable.push({ image, dataUrl });
+      }
+      if (!usable.length) {
+        note.textContent = (images || []).length
+          ? "Couldn't unlock these. Set up the chat key in Settings."
+          : "The vault is empty.";
+        return;
+      }
+      note.textContent = "Tap a picture to send it.";
+      usable.forEach((item) => {
+        const video = isVideoSrc(item.dataUrl, item.image.media_kind);
+        const thumb = video
+          ? el("video", {
+            className: "vault-picker-thumb",
+            src: item.dataUrl,
+            muted: "true",
+            playsinline: "true",
+            preload: "metadata",
+          })
+          : el("img", {
+            className: "vault-picker-thumb",
+            src: item.dataUrl,
+            alt: item.image.title || "Vault image",
+          });
+        grid.appendChild(el("button", {
+          type: "button",
+          className: "vault-picker-hit",
+          title: item.image.title || "Send",
+          onClick: () => finish({
+            dataUrl: item.dataUrl,
+            mediaKind: video ? "video" : "image",
+          }),
+        }, [thumb]));
+      });
+    }).catch((err) => {
+      if (!done) note.textContent = err.message || "Couldn't load the vault.";
+    });
+  });
 }
 
 function renderVault(dynamicId) {
@@ -19476,34 +21626,88 @@ function renderVault(dynamicId) {
         id: isHighlight ? "vault-highlight-target" : undefined,
       });
       if (isHighlight) highlightCard = card;
+      const mediaKind = isVideoSrc(decrypted, image.media_kind) ? "video" : "image";
+      let mediaNode = null;
+      const sendThis = async () => {
+        error.classList.add("hidden");
+        try {
+          const sent = await sendVaultMediaToChat(dynamicId, { dataUrl: decrypted, mediaKind });
+          if (sent) navigate(`/chat/${dynamicId}`);
+        } catch (err) {
+          error.textContent = err.message;
+          error.classList.remove("hidden");
+        }
+      };
+      const openThis = () => {
+        openVaultFullscreen(decrypted, {
+          video: mediaKind === "video",
+          title: image.title || "",
+          revealId: image.id,
+          revealedSet: revealed,
+          sourceEl: mediaNode,
+          onSend: sendThis,
+        });
+      };
       if (!decrypted) {
         card.appendChild(el("p", { className: "muted" }, "Encrypted — set up the chat E2E key in Settings to view."));
-      } else if (isVideoSrc(decrypted, image.media_kind)) {
-        const vid = el("video", {
-          className: `vault-image ${image.image_blurred && !revealed.has(image.id) ? "blurred" : ""}`,
-          src: decrypted,
-          controls: "true",
-          playsinline: "true",
-          preload: "metadata",
-        });
-        if (image.image_blurred) {
-          attachBlurReveal(vid, { id: image.id, revealedSet: revealed });
-        }
-        card.appendChild(vid);
       } else {
-        const img = el("img", {
-          className: `vault-image ${image.image_blurred && !revealed.has(image.id) ? "blurred" : ""}`,
-          src: decrypted,
-          alt: image.title || "Vault image",
-        });
+        mediaNode = mediaKind === "video"
+          ? el("video", {
+            className: `vault-image ${image.image_blurred && !revealed.has(image.id) ? "blurred" : ""}`,
+            src: decrypted,
+            controls: "true",
+            playsinline: "true",
+            preload: "metadata",
+          })
+          : el("img", {
+            className: `vault-image ${image.image_blurred && !revealed.has(image.id) ? "blurred" : ""}`,
+            src: decrypted,
+            alt: image.title || "Vault image",
+          });
         if (image.image_blurred) {
-          attachBlurReveal(img, { id: image.id, revealedSet: revealed });
+          attachBlurReveal(mediaNode, { id: image.id, revealedSet: revealed });
         }
-        card.appendChild(img);
+        if (mediaKind !== "video") {
+          let pressedWhileBlurred = false;
+          mediaNode.addEventListener("pointerdown", () => {
+            pressedWhileBlurred = mediaNode.classList.contains("blurred");
+          });
+          mediaNode.addEventListener("click", () => {
+            if (pressedWhileBlurred || mediaNode.classList.contains("blurred")) return;
+            openThis();
+          });
+        }
+        const zoom = el("button", {
+          type: "button",
+          className: "chat-image-zoom-btn",
+          title: "Full screen",
+          "aria-label": "Open full screen",
+        }, "⤢");
+        zoom.addEventListener("pointerdown", (e) => e.stopPropagation());
+        zoom.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openThis();
+        });
+        card.appendChild(el("div", { className: "vault-media-frame" }, [mediaNode, zoom]));
       }
       card.appendChild(el("p", { className: "muted" }, image.title || "Untitled"));
       card.appendChild(el("p", { className: "muted" }, new Date(image.created_at).toLocaleString()));
       card.appendChild(el("div", { className: "row wrap" }, [
+        decrypted
+          ? el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: () => openThis(),
+          }, "Full screen")
+          : null,
+        decrypted
+          ? el("button", {
+            className: "ghost-btn",
+            type: "button",
+            onClick: () => sendThis(),
+          }, "Send to chat")
+          : null,
         el("button", {
           className: "ghost-btn",
           type: "button",
@@ -20952,7 +23156,146 @@ function trimChatUrlMatch(raw) {
   return String(raw || "").replace(/[.,;:!?]+$/g, "");
 }
 
-function linkifyText(text) {
+const gearSlugIndex = new Map();
+const gearArtBlobCache = new Map();
+
+function rememberGearItems(dynamicId, items) {
+  const bucket = gearSlugIndex.get(dynamicId) || new Map();
+  (items || []).forEach((item) => {
+    if (item && item.slug) bucket.set(item.slug, item);
+  });
+  gearSlugIndex.set(dynamicId, bucket);
+}
+
+function gearArtBlobUrl(dynamicId, key) {
+  const cacheKey = `${dynamicId}:${key}`;
+  if (gearArtBlobCache.has(cacheKey)) return gearArtBlobCache.get(cacheKey);
+  const pending = fetch(`${API}/dynamics/${dynamicId}/gear/art/${encodeURIComponent(key)}`, {
+    headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+  })
+    .then((res) => (res.ok ? res.blob() : null))
+    .then((blob) => (blob ? URL.createObjectURL(blob) : ""))
+    .catch(() => "");
+  gearArtBlobCache.set(cacheKey, pending);
+  return pending;
+}
+
+function gearEmojiNode(dynamicId, item) {
+  const img = el("img", {
+    className: "chat-gear-emoji",
+    alt: item.name || item.slug || "",
+    title: item.name || item.slug || "",
+  });
+  if (item.has_image && item.key) {
+    gearArtBlobUrl(dynamicId, item.key).then((url) => {
+      if (url) img.src = url;
+    });
+  }
+  return img;
+}
+
+function attachGearSuggest(dynamicId, input) {
+  const menu = el("div", { className: "gear-suggest hidden" });
+  let items = [];
+  let active = 0;
+  let timer = null;
+
+  function hide() {
+    items = [];
+    menu.classList.add("hidden");
+    menu.replaceChildren();
+  }
+
+  function queryAtCursor() {
+    const pos = input.selectionStart || 0;
+    const before = input.value.slice(0, pos);
+    const colon = before.lastIndexOf(":");
+    if (colon < 0) return null;
+    const frag = before.slice(colon + 1);
+    if (frag.includes(":") || /\s/.test(frag) || frag.length > 40) return null;
+    return { start: colon, query: frag };
+  }
+
+  function paintMenu() {
+    menu.replaceChildren();
+    if (!items.length) {
+      menu.classList.add("hidden");
+      return;
+    }
+    menu.classList.remove("hidden");
+    items.forEach((item, index) => {
+      menu.appendChild(el("button", {
+        type: "button",
+        className: `gear-suggest-row${index === active ? " active" : ""}`,
+        onMouseDown: (ev) => {
+          ev.preventDefault();
+          choose(index);
+        },
+      }, [
+        item.has_image ? gearEmojiNode(dynamicId, item) : el("span", { className: "gear-suggest-fallback" }, "🧰"),
+        el("span", {}, item.name),
+      ]));
+    });
+  }
+
+  function choose(index) {
+    const item = items[index];
+    const found = queryAtCursor();
+    if (!item || !found) return hide();
+    const pos = input.selectionStart || 0;
+    const token = `:${item.slug}: `;
+    input.value = input.value.slice(0, found.start) + token + input.value.slice(pos);
+    const next = found.start + token.length;
+    input.setSelectionRange(next, next);
+    rememberGearItems(dynamicId, [item]);
+    hide();
+    input.focus();
+  }
+
+  function refresh() {
+    const found = queryAtCursor();
+    if (!found) return hide();
+    api(`/dynamics/${dynamicId}/gear/tokens?q=${encodeURIComponent(found.query)}`)
+      .then((data) => {
+        const still = queryAtCursor();
+        if (!still || still.query !== found.query) return;
+        items = data.items || [];
+        rememberGearItems(dynamicId, items);
+        active = 0;
+        paintMenu();
+      })
+      .catch(() => hide());
+  }
+
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(refresh, 80);
+  });
+  input.addEventListener("keydown", (event) => {
+    if (menu.classList.contains("hidden")) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      event.stopPropagation();
+      active = Math.min(items.length - 1, active + 1);
+      paintMenu();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      active = Math.max(0, active - 1);
+      paintMenu();
+    } else if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      choose(active);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      hide();
+    }
+  }, true);
+  return menu;
+}
+
+function linkifyUrls(text) {
   const source = String(text || "");
   const nodes = [];
   const re = /\b((?:https?:\/\/|www\.)[^\s<>"'`)\]]+)/gi;
@@ -20989,6 +23332,26 @@ function linkifyText(text) {
   return nodes;
 }
 
+function linkifyText(text, dynamicId) {
+  const source = String(text || "");
+  const bucket = dynamicId ? gearSlugIndex.get(dynamicId) : null;
+  if (!bucket || !bucket.size) return linkifyUrls(source);
+  const nodes = [];
+  const gearRe = /:([a-z0-9]+(?:-[a-z0-9]+)*):/g;
+  let last = 0;
+  let match;
+  while ((match = gearRe.exec(source)) !== null) {
+    const item = bucket.get(match[1]);
+    if (!item || !item.has_image) continue;
+    if (match.index > last) nodes.push(...linkifyUrls(source.slice(last, match.index)));
+    nodes.push(gearEmojiNode(dynamicId, item));
+    last = match.index + match[0].length;
+  }
+  if (last < source.length) nodes.push(...linkifyUrls(source.slice(last)));
+  if (!nodes.length) nodes.push(...linkifyUrls(source));
+  return nodes;
+}
+
 function stripChatMarkers(body) {
   return String(body || "")
     .replace(/\[\[from:[^\]]+\]\]\s*/g, "")
@@ -21011,7 +23374,7 @@ function parseChatActionBody(body, dynamicId) {
   let match;
   while ((match = re.exec(text)) !== null) {
     if (match.index > last) {
-      nodes.push(...linkifyText(text.slice(last, match.index)));
+      nodes.push(...linkifyText(text.slice(last, match.index), dynamicId));
     }
     const path = match[1].trim();
     const label = match[2].trim() || "Open";
@@ -21034,10 +23397,10 @@ function parseChatActionBody(body, dynamicId) {
     last = match.index + match[0].length;
   }
   if (last < text.length) {
-    nodes.push(...linkifyText(text.slice(last)));
+    nodes.push(...linkifyText(text.slice(last), dynamicId));
   }
   if (!nodes.length) {
-    nodes.push(...linkifyText(text));
+    nodes.push(...linkifyText(text, dynamicId));
   }
   return nodes;
 }
@@ -21361,7 +23724,7 @@ function buildSettingsSetupChecklist({ user, llmSettings, googleStatus, dynamics
     items.push({
       id: "llm",
       title: "Configure AI provider / API key",
-      why: "Powers the assistant, suggested agreements, acts, and interviews.",
+      why: "Paste one OpenRouter key. It is shared with your partner.",
       focus: "ai",
     });
   }
@@ -21557,6 +23920,149 @@ function createSettingsSaveBar({ isSubmissive }) {
   });
 
   return { bar, register, refresh, bind, error, status };
+}
+
+
+function dataUrlToFile(dataUrl, name) {
+  const parts = String(dataUrl || "").split(",");
+  const head = parts[0] || "";
+  const b64 = parts[1] || "";
+  const mime = (head.match(/data:(.*?);/) || [])[1] || "image/png";
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], name || "generated.png", { type: mime });
+}
+
+function openGenerateImageSheet(dynamicId, { onPost } = {}) {
+  const backdrop = el("div", { className: "chat-image-sheet-backdrop" });
+  const error = el("div", { className: "error hidden" });
+  const prompt = el("textarea", {
+    rows: "4",
+    placeholder: "Describe the picture…",
+  });
+  const modelSelect = el("select");
+  const styleSelect = el("select");
+  const templates = el("div", { className: "image-prompt-templates" });
+  const preview = el("img", { className: "image-prompt-preview hidden", alt: "Generated picture" });
+  const actions = el("div", { className: "row wrap hidden" });
+  let lastData = "";
+
+  function close() {
+    backdrop.remove();
+  }
+
+  const generateBtn = el("button", {
+    type: "button",
+    className: "primary-btn",
+    onClick: async () => {
+      error.classList.add("hidden");
+      generateBtn.disabled = true;
+      generateBtn.textContent = "Drawing…";
+      try {
+        const data = await api(`/dynamics/${dynamicId}/images/generate`, {
+          method: "POST",
+          body: JSON.stringify({
+            model: modelSelect.value,
+            style: styleSelect.value,
+            prompt: prompt.value,
+          }),
+        });
+        lastData = data.image_data || "";
+        if (!lastData) throw new Error("No image came back.");
+        preview.src = lastData;
+        preview.classList.remove("hidden");
+        actions.classList.remove("hidden");
+      } catch (err) {
+        error.textContent = err.message;
+        error.classList.remove("hidden");
+      } finally {
+        generateBtn.disabled = false;
+        generateBtn.textContent = "Generate";
+      }
+    },
+  }, "Generate");
+
+  actions.append(
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: async () => {
+        error.classList.add("hidden");
+        try {
+          await ensureChatCryptoKey(dynamicId, { createIfMissing: false });
+          const encrypted = await encryptVaultPayload(dynamicId, lastData);
+          await api(`/dynamics/${dynamicId}/vault`, {
+            method: "POST",
+            body: JSON.stringify({
+              title: "Generated image",
+              image_encrypted: encrypted,
+              image_blurred: localStorage.getItem(chatBlurStorage()) !== "false",
+              media_kind: "image",
+            }),
+          });
+          showToast("Saved to the image vault.");
+        } catch (err) {
+          error.textContent = err.message;
+          error.classList.remove("hidden");
+        }
+      },
+    }, "Save"),
+    el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        const file = dataUrlToFile(lastData, "generated.png");
+        close();
+        if (onPost) onPost(file);
+      },
+    }, "Post in chat"),
+  );
+
+  const sheet = el("div", { className: "chat-image-sheet image-prompt-sheet card stack" }, [
+    el("strong", {}, "Generate image"),
+    el("label", { className: "stack" }, [el("span", { className: "muted" }, "Model"), modelSelect]),
+    el("label", { className: "stack" }, [el("span", { className: "muted" }, "Style"), styleSelect]),
+    el("span", { className: "muted" }, "Start from"),
+    templates,
+    prompt,
+    generateBtn,
+    error,
+    preview,
+    actions,
+    el("button", { type: "button", className: "ghost-btn", onClick: close }, "Close"),
+  ]);
+  backdrop.appendChild(sheet);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) close();
+  });
+  document.body.appendChild(backdrop);
+
+  api(`/dynamics/${dynamicId}/images/options`)
+    .then((opts) => {
+      (opts.models || []).forEach((row) => {
+        modelSelect.appendChild(el("option", { value: row.id, title: row.note || "" }, row.label));
+      });
+      (opts.styles || []).forEach((row) => {
+        styleSelect.appendChild(el("option", { value: row.id }, row.label));
+      });
+      if (opts.default_model) modelSelect.value = opts.default_model;
+      if (opts.default_style) styleSelect.value = opts.default_style;
+      (opts.templates || []).forEach((row) => {
+        templates.appendChild(el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => {
+            prompt.value = row.prompt || "";
+            prompt.focus();
+          },
+        }, row.label));
+      });
+    })
+    .catch((err) => {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    });
 }
 
 function renderChat(dynamicId) {
@@ -21857,7 +24363,7 @@ function renderChat(dynamicId) {
         const textKids = [
           isCryptoPlaceholder(text)
             ? renderCryptoPlaceholder(id, text)
-            : el("span", { className: "chat-bubble-text" }, linkifyText(text)),
+            : el("span", { className: "chat-bubble-text" }, linkifyText(text, id)),
         ];
         if (msg.edited_at) {
           textKids.push(el("span", { className: "muted chat-edited-flag" }, "edited"));
@@ -22088,6 +24594,7 @@ function renderChat(dynamicId) {
       }, "➤");
 
       const composer = el("div", { className: "chat-composer-wrap" }, [
+        attachGearSuggest(id, input),
         el("div", { className: "chat-composer" }, [attachBtn, input, sendBtn]),
       ]);
 
@@ -22244,6 +24751,32 @@ function renderChat(dynamicId) {
               imageInput.click();
             },
           }, "Choose from library"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              backdrop.remove();
+              openVaultChatPicker(id).then(async (picked) => {
+                if (!picked) return;
+                error.classList.add("hidden");
+                try {
+                  const sent = await sendVaultMediaToChat(id, picked);
+                  if (sent) await refresh({ forceScroll: true });
+                } catch (err) {
+                  error.textContent = err.message;
+                  error.classList.remove("hidden");
+                }
+              });
+            },
+          }, "From vault"),
+          el("button", {
+            type: "button",
+            className: "ghost-btn",
+            onClick: () => {
+              backdrop.remove();
+              openGenerateImageSheet(id, { onPost: (file) => handleImageFile(file) });
+            },
+          }, "Generate image"),
           el("button", {
             type: "button",
             className: "ghost-btn",
@@ -22705,6 +25238,9 @@ function renderChat(dynamicId) {
         },
         { once: false }
       );
+      await api(`/dynamics/${id}/gear/tokens?all_items=true`)
+        .then((data) => rememberGearItems(id, data.items || []))
+        .catch(() => {});
       await paintMessages(messages, { forceScroll: true });
       paintTyping();
 
@@ -22894,7 +25430,406 @@ function renderHelpWiki() {
     .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
 }
 
+function buildPhoneServerCard() {
+  const status = el("p", { className: "muted", id: "phone-server-status" }, "Checking this phone…");
+  const urlInput = el("input", {
+    type: "url",
+    placeholder: "https://your-ubetra.example",
+    autocomplete: "off",
+    spellcheck: "false",
+  });
+  const card = el("div", { className: "card stack", id: "phone-server-card" }, [
+    el("h2", {}, "Server"),
+    el("p", { className: "muted" }, "Self-host only. Leave this blank to keep the log on the phone. Chat, Play, video, and the vault need a reachable server."),
+    status,
+    el("label", {}, ["Server URL", urlInput]),
+    el("div", { className: "row wrap" }, [
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: async () => {
+          const plugin = nativePlugin("UbetraLocalStore");
+          const url = (urlInput.value || "").trim();
+          if (!url) {
+            showToast("Enter a server URL or choose phone-only");
+            return;
+          }
+          try {
+            if (plugin && plugin.setServerUrl) await plugin.setServerUrl({ url: url });
+            if (plugin && plugin.openServer) await plugin.openServer({ url: url });
+            else window.location.href = url;
+          } catch (err) {
+            showToast(err.message || "Could not save that URL");
+          }
+        },
+      }, "Save and open"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          const plugin = nativePlugin("UbetraLocalStore");
+          if (plugin && plugin.setPhoneOnly) await plugin.setPhoneOnly();
+          if (plugin && plugin.showServerSetup) await plugin.showServerSetup();
+          else showToast("Phone-only logging stays on this device");
+        },
+      }, "Phone only"),
+      el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: async () => {
+          if (window.UbetraPhone) await window.UbetraPhone.onForeground();
+          fill();
+        },
+      }, "Try reconnect"),
+    ]),
+  ]);
+  async function fill() {
+    if (!window.UbetraPhone) {
+      status.textContent = "This browser is using the server that opened this page.";
+      return;
+    }
+    const caps = await window.UbetraPhone.refresh();
+    if (caps.serverUrl) urlInput.value = caps.serverUrl;
+    const when = caps.lastSyncAt ? " Last sync " + caps.lastSyncAt + "." : "";
+    const pending = caps.pendingCount ? " " + caps.pendingCount + " waiting to send." : "";
+    if (!caps.serverConfigured) status.textContent = "Phone-only. Logging stays on this device." + pending;
+    else if (!caps.serverReachable) status.textContent = "Server offline. Logging on this phone." + when + pending;
+    else status.textContent = "Server reachable." + when + pending;
+  }
+  fill();
+  return card;
+}
+
+function buildWearOsCard() {
+  return el("div", { className: "card stack", id: "wear-os-card" }, [
+    el("h2", {}, "Wear OS"),
+    el("p", { className: "muted" }, "The watch talks only to this phone. It does not store a sign-in token or call the server."),
+    el("button", {
+      type: "button",
+      className: "primary-btn",
+      onClick: () => navigate("/settings/wear"),
+    }, "Connect watch"),
+  ]);
+}
+
+function renderWearPairing() {
+  const error = el("p", { className: "error hidden" });
+  const codeEl = el("p", { className: "wear-pair-code", "aria-live": "polite" }, "—");
+  const expiryEl = el("p", { className: "muted wear-pair-expiry" }, "Expires in about 5 minutes.");
+  const apiBaseEl = el("p", { className: "wear-pair-base" }, "");
+  const apiBaseWrap = el("div", { className: "stack wear-pair-base-wrap hidden" }, [
+    el("p", { className: "muted" }, "API base"),
+    apiBaseEl,
+  ]);
+  const deviceList = el("div", { className: "stack wear-device-list" }, [
+    el("p", { className: "muted" }, "Loading watches…"),
+  ]);
+  const refreshBtn = el("button", { type: "button", className: "primary-btn" }, "Refresh code");
+  let pairTimer = null;
+  let codeTicket = 0;
+  let deviceTicket = 0;
+
+  function stopPairTimer() {
+    if (pairTimer) {
+      clearInterval(pairTimer);
+      pairTimer = null;
+    }
+  }
+
+  function formatPairCountdown(msLeft) {
+    const total = Math.max(0, Math.ceil(msLeft / 1000));
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    return mins + ":" + (secs < 10 ? "0" : "") + secs;
+  }
+
+  function currentWatchApiBase() {
+    let origin = "";
+    try {
+      origin = window.location && window.location.origin ? window.location.origin : "";
+    } catch (err) {
+      origin = "";
+    }
+    if (!/^https?:\/\//i.test(origin)) return "";
+    return origin.replace(/\/$/, "");
+  }
+
+  function armCountdown(data) {
+    stopPairTimer();
+    if (!expiryEl.isConnected) return;
+    const seconds = Number(data && data.expires_in);
+    let ends = 0;
+    if (Number.isFinite(seconds) && seconds > 0) ends = Date.now() + seconds * 1000;
+    else if (data && data.expires_at) {
+      const parsed = parseServerDate(data.expires_at);
+      if (parsed) ends = parsed.getTime();
+    }
+    if (!ends) {
+      expiryEl.textContent = "Expires in about 5 minutes.";
+      return;
+    }
+    const tick = () => {
+      if (!expiryEl.isConnected) {
+        releaseWearPairing();
+        return;
+      }
+      const left = ends - Date.now();
+      if (left <= 0) {
+        expiryEl.textContent = "Code expired. Refresh to get a new one.";
+        stopPairTimer();
+        return;
+      }
+      expiryEl.textContent = "Expires in " + formatPairCountdown(left) + ".";
+    };
+    tick();
+    pairTimer = setInterval(tick, 1000);
+  }
+
+  async function requestCode() {
+    const ticket = ++codeTicket;
+    error.classList.add("hidden");
+    refreshBtn.disabled = true;
+    try {
+      const plugin = nativePlugin("UbetraLocalStore");
+      let data;
+      if (plugin && plugin.startWatchPairing) {
+        data = await plugin.startWatchPairing();
+      } else if (window.UbetraPhone && window.UbetraPhone.serverFeaturesGrey()) {
+        throw new Error("Connect the watch from the UBETRA Android app.");
+      } else {
+        data = await api("/devices/watch/pair-code", {
+          method: "POST",
+          body: JSON.stringify({ api_base: currentWatchApiBase() }),
+        });
+      }
+      if (ticket !== codeTicket || !codeEl.isConnected) return;
+      codeEl.textContent = data && data.code ? String(data.code) : "—";
+      const base = data && data.api_base ? String(data.api_base) : "";
+      if (base) {
+        apiBaseEl.textContent = base;
+        apiBaseWrap.classList.remove("hidden");
+      } else {
+        apiBaseEl.textContent = "";
+        apiBaseWrap.classList.add("hidden");
+      }
+      armCountdown(data);
+    } catch (err) {
+      if (ticket !== codeTicket || !codeEl.isConnected) return;
+      error.textContent = err.message || "Could not create a pairing code.";
+      error.classList.remove("hidden");
+      if (!codeEl.textContent || codeEl.textContent === "—") {
+        expiryEl.textContent = "No code yet. Tap Refresh code to try again.";
+      }
+    } finally {
+      if (ticket === codeTicket && refreshBtn.isConnected) refreshBtn.disabled = false;
+    }
+  }
+
+  function deviceWhen(value) {
+    if (!value) return "";
+    const text = formatLocalDateTime(value, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    if (!text || text === "—") return "";
+    return text;
+  }
+
+  function confirmRevokeWatch(device) {
+    const backdrop = el("div", { className: "modal-backdrop" });
+    const errorLine = el("p", { className: "error hidden" });
+    const label = device && device.label ? String(device.label) : "This watch";
+    const revokeBtn = el("button", {
+      type: "button",
+      className: "ghost-btn danger-btn",
+      onClick: async () => {
+        revokeBtn.disabled = true;
+        errorLine.classList.add("hidden");
+        try {
+          await api("/devices/watch/revoke", {
+            method: "POST",
+            body: JSON.stringify({ device_id: device.id }),
+          });
+          backdrop.remove();
+          showToast("Watch revoked");
+          loadDevices();
+        } catch (err) {
+          errorLine.textContent = err.message || "Could not revoke this watch.";
+          errorLine.classList.remove("hidden");
+          revokeBtn.disabled = false;
+        }
+      },
+    }, "Revoke");
+    const card = el("div", { className: "card stack modal-card" }, [
+      el("h3", {}, "Revoke watch?"),
+      el("p", {}, label + " will be signed out. Pair it again to reconnect."),
+      errorLine,
+      el("div", { className: "row wrap" }, [
+        el("button", {
+          type: "button",
+          className: "ghost-btn",
+          onClick: () => backdrop.remove(),
+        }, "Cancel"),
+        revokeBtn,
+      ]),
+    ]);
+    backdrop.appendChild(card);
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) backdrop.remove();
+    });
+    document.body.appendChild(backdrop);
+  }
+
+  function renderDeviceRow(device) {
+    const revoked = !!(device && device.revoked);
+    const bits = [];
+    const paired = deviceWhen(device.created_at);
+    const seen = deviceWhen(device.last_seen_at);
+    const revokedAt = deviceWhen(device.revoked_at);
+    if (paired) bits.push("Paired " + paired);
+    if (seen) bits.push("Last seen " + seen);
+    if (revoked) bits.push(revokedAt ? "Revoked " + revokedAt : "Revoked");
+    return el("div", { className: revoked ? "wear-device-row revoked" : "wear-device-row" }, [
+      el("div", { className: "stack" }, [
+        el("strong", {}, device.label ? String(device.label) : "Wear OS"),
+        el("p", { className: "muted" }, bits.join(" · ") || "Wear OS"),
+      ]),
+      revoked ? null : el("button", {
+        type: "button",
+        className: "ghost-btn danger-btn",
+        onClick: () => confirmRevokeWatch(device),
+      }, "Revoke"),
+    ]);
+  }
+
+  async function loadDevices() {
+    const ticket = ++deviceTicket;
+    const plugin = nativePlugin("UbetraLocalStore");
+    if (plugin && plugin.watchStatus) {
+      try {
+        const status = await plugin.watchStatus();
+        if (ticket !== deviceTicket || !deviceList.isConnected) return;
+        deviceList.replaceChildren();
+        if (!status || !status.paired) {
+          deviceList.appendChild(el("p", { className: "muted" }, "No watch is paired with this phone."));
+          return;
+        }
+        deviceList.appendChild(el("div", { className: "wear-device-row" }, [
+          el("div", { className: "stack" }, [
+            el("strong", {}, "This phone"),
+            el("p", { className: "muted" }, "Encrypted link. The watch has no server token."),
+          ]),
+          el("button", {
+            type: "button",
+            className: "ghost-btn danger-btn",
+            onClick: async () => {
+              await plugin.forgetWatch();
+              showToast("Watch unpaired");
+              loadDevices();
+            },
+          }, "Unpair"),
+        ]));
+      } catch (err) {
+        if (ticket !== deviceTicket || !deviceList.isConnected) return;
+        deviceList.replaceChildren(el("p", { className: "error" }, err.message || "Could not read the watch link."));
+      }
+      return;
+    }
+    try {
+      const rows = await api("/devices/watch");
+      if (ticket !== deviceTicket || !deviceList.isConnected) return;
+      const list = Array.isArray(rows) ? rows : [];
+      const active = [];
+      const revoked = [];
+      list.forEach((device) => {
+        if (!device || !device.id) return;
+        if (device.revoked) revoked.push(device);
+        else active.push(device);
+      });
+      deviceList.replaceChildren();
+      if (!active.length && !revoked.length) {
+        deviceList.appendChild(el("p", { className: "muted" }, "No watches paired with this account yet."));
+        return;
+      }
+      active.concat(revoked).forEach((device) => {
+        deviceList.appendChild(renderDeviceRow(device));
+      });
+    } catch (err) {
+      if (ticket !== deviceTicket || !deviceList.isConnected) return;
+      deviceList.replaceChildren(el("p", { className: "error" }, err.message || "Could not load watches."));
+    }
+  }
+
+  let leaveWatch = null;
+
+  function releaseWearPairing() {
+    stopPairTimer();
+    document.removeEventListener("visibilitychange", onDevicesVisible);
+    if (leaveWatch) {
+      clearInterval(leaveWatch);
+      leaveWatch = null;
+    }
+  }
+
+  function onDevicesVisible() {
+    if (!deviceList.isConnected) {
+      releaseWearPairing();
+      return;
+    }
+    if (document.visibilityState === "visible") loadDevices();
+  }
+
+  refreshBtn.addEventListener("click", () => {
+    requestCode();
+  });
+
+  const stack = el("div", { className: "stack wear-pair-screen" }, [
+    el("button", {
+      type: "button",
+      className: "ghost-btn",
+      onClick: () => {
+        releaseWearPairing();
+        navigate("/settings?focus=permissions");
+      },
+    }, "← Settings"),
+    el("h1", {}, "Connect watch"),
+    el("p", { className: "muted" }, "On the watch, open UBETRA and enter this code. The watch only talks to this phone. It expires in about 5 minutes."),
+    error,
+    el("div", { className: "card stack wear-pair-card" }, [
+      el("p", { className: "muted" }, "Pairing code"),
+      codeEl,
+      expiryEl,
+      apiBaseWrap,
+      refreshBtn,
+    ]),
+    el("div", { className: "card stack" }, [
+      el("h2", {}, "Paired watches"),
+      el("p", { className: "muted" }, "Unpair removes the phone's copy of the watch key."),
+      deviceList,
+    ]),
+  ]);
+
+  setViewContent(stack);
+  document.addEventListener("visibilitychange", onDevicesVisible);
+  leaveWatch = setInterval(() => {
+    if (!stack.isConnected) releaseWearPairing();
+  }, 1000);
+  requestCode();
+  loadDevices();
+}
+
 function renderSettings() {
+  if (window.UbetraPhone && window.UbetraPhone.usingLocalSession()) {
+    setViewContent(el("div", { className: "stack" }, [
+      el("h1", {}, "Settings"),
+      buildPhoneServerCard(),
+      buildWearOsCard(),
+      el("p", { className: "muted" }, "Account, chat, and AI settings need a reachable self-host server."),
+    ]));
+    return;
+  }
   viewEl.replaceChildren(el("p", { className: "muted" }, "Loading settings..."));
   const { query } = parseRoute();
   const initialDynamicId = query.get("dynamic") || getActiveDynamicId();
@@ -23002,6 +25937,16 @@ function renderSettings() {
       modelSelect.addEventListener("change", () => {
         modelCustom.value = modelSelect.value;
       });
+      const aiUnconfigured = !(
+        settings.shared_configured
+        || settings.active_key_source === "shared"
+        || settings.configured
+        || settings.api_key_set
+      );
+      if (aiUnconfigured && (!providerSelect.value || providerSelect.value === "server") && providerMap.openrouter) {
+        providerSelect.value = "openrouter";
+        modelCustom.value = providerMap.openrouter.default_model || "openrouter/auto";
+      }
       refreshProviderUi();
 
       function refreshLlmStatus() {
@@ -23469,10 +26414,8 @@ function renderSettings() {
       ]));
       appendAndroidAppCard(stack, androidInfo);
       stack.appendChild(buildDevicePermissionsCard());
-      stack.appendChild(buildEdgeGuardCard(initialDynamicId));
-      if (policy?.you_are_dominant && initialDynamicId) {
-        stack.appendChild(buildEdgeGuardManageCard(initialDynamicId));
-      }
+      stack.appendChild(buildPhoneServerCard());
+      stack.appendChild(buildWearOsCard());
 
       const usernameInput = el("input", {
         type: "text",
@@ -23646,7 +26589,7 @@ function renderSettings() {
       const currentPassword = el("input", {
         type: "password",
         autocomplete: "current-password",
-        placeholder: "Current password",
+        placeholder: "Current password (optional)",
       });
       const newPassword = el("input", {
         type: "password",
@@ -23656,8 +26599,8 @@ function renderSettings() {
       });
       const passwordError = el("div", { className: "error hidden" });
       stack.appendChild(el("div", { className: "card stack" }, [
-        el("h2", {}, "Change password"),
-        el("p", { className: "muted" }, "Update your sign-in password. Forgot it? Use Forgot password on the sign-in screen."),
+        el("h2", {}, "Password"),
+        el("p", { className: "muted" }, "Set or change your password any time. Leave the current password blank if you signed in by email."),
         el("label", {}, ["Current password", currentPassword]),
         el("label", {}, ["New password", newPassword]),
         passwordError,
@@ -23666,8 +26609,8 @@ function renderSettings() {
         isDirty: () => !!(currentPassword.value || newPassword.value),
         save: async () => {
           passwordError.classList.add("hidden");
-          if (!currentPassword.value || !newPassword.value) {
-            throw new Error("Enter current and new password.");
+          if (!newPassword.value || newPassword.value.length < 6) {
+            throw new Error("Enter a new password of at least 6 characters.");
           }
           await api("/auth/password", {
             method: "PUT",
@@ -23848,16 +26791,36 @@ function renderSettings() {
         el("label", {}, ["Custom model (optional)", modelCustom]),
         baseUrlLabel,
         el("label", {}, ["API key", apiKeyInput]),
-        el("p", { className: "muted" }, "Keys are never shown again after saving. Prefer gemini-3.5-flash (Gemini 2.0/2.5 IDs are retired). Use a dedicated key you can revoke."),
+        el("p", { className: "muted" }, "One key is enough. Saving copies it to this dynamic so your partner uses the same assistant. The key is not shown again."),
       ]);
-      const llmBody = el("details", { className: "stack llm-api-config" }, [
-        el("summary", {}, "Show keys and connections"),
+      const llmBody = el("details", {
+        className: "stack llm-api-config",
+        ...(aiUnconfigured ? { open: true } : {}),
+      }, [
+        el("summary", {}, aiUnconfigured ? "Paste your key" : "Show keys and connections"),
       ]);
       const llmCard = el("div", { className: "card stack" }, [
-        el("h2", {}, "LLM API Configuration"),
-        el("p", { className: "muted" }, "Providers, API keys, and named connections. Collapsed so this page stays short."),
+        el("h2", {}, aiUnconfigured ? "Connect OpenRouter" : "LLM API Configuration"),
+        el("p", { className: "muted" }, aiUnconfigured
+          ? "Three steps. Leave the model on openrouter/auto. You do not need a second key or a named connection."
+          : "The key is saved. Open the section below to change it, test it, or add another connection."),
         llmBody,
       ]);
+      if (aiUnconfigured) {
+        llmBody.appendChild(el("ol", { className: "setup-steps" }, [
+          el("li", {}, [
+            "Create a key at ",
+            el("a", {
+              href: "https://openrouter.ai/keys",
+              target: "_blank",
+              rel: "noopener noreferrer",
+            }, "openrouter.ai/keys"),
+            ".",
+          ]),
+          el("li", {}, "Paste it in API key. Leave the model on openrouter/auto."),
+          el("li", {}, "Save and test. Both partners then use this key."),
+        ]));
+      }
       const activeDyn =
         dynamics.find((d) => d.id === (initialDynamicId || settings.active_dynamic_id))
         || dynamics.find((d) => d.shared_llm_configured)
@@ -23905,35 +26868,68 @@ function renderSettings() {
         },
         save: async () => {
           error.classList.add("hidden");
-          const body = {
-            provider: providerSelect.value,
-            model: modelCustom.value || modelSelect.value,
-            base_url: baseUrlInput.value.trim(),
-          };
-          if (apiKeyInput.value.trim()) body.api_key = apiKeyInput.value.trim();
-          const llmPath = initialDynamicId
-            ? `/settings/llm?dynamic_id=${encodeURIComponent(initialDynamicId)}`
-            : "/settings/llm";
-          const updated = await api(llmPath, {
-            method: "PUT",
-            body: JSON.stringify(body),
-          });
-          Object.assign(settings, updated);
-          refreshLlmStatus();
-          apiKeyInput.value = "";
-          apiKeyInput.placeholder = updated.api_key_set
-            ? `Saved key ${updated.api_key_hint || ""} — leave blank to keep`
-            : "Paste API key";
-          baseUrlInput.value = updated.base_url || "";
-          llmBaseline = {
-            provider: providerSelect.value,
-            model: (modelCustom.value || modelSelect.value || "").trim(),
-            base_url: (baseUrlInput.value || "").trim(),
-          };
+          await saveLlmFromForm();
           return "AI settings saved";
         },
       });
+      async function saveLlmFromForm() {
+        const body = {
+          provider: providerSelect.value,
+          model: modelCustom.value || modelSelect.value,
+          base_url: baseUrlInput.value.trim(),
+        };
+        if (apiKeyInput.value.trim()) body.api_key = apiKeyInput.value.trim();
+        const llmPath = initialDynamicId
+          ? `/settings/llm?dynamic_id=${encodeURIComponent(initialDynamicId)}`
+          : "/settings/llm";
+        const updated = await api(llmPath, {
+          method: "PUT",
+          body: JSON.stringify(body),
+        });
+        Object.assign(settings, updated);
+        refreshLlmStatus();
+        apiKeyInput.value = "";
+        apiKeyInput.placeholder = updated.api_key_set
+          ? `Saved key ${updated.api_key_hint || ""} — leave blank to keep`
+          : "Paste API key";
+        baseUrlInput.value = updated.base_url || "";
+        llmBaseline = {
+          provider: providerSelect.value,
+          model: (modelCustom.value || modelSelect.value || "").trim(),
+          base_url: (baseUrlInput.value || "").trim(),
+        };
+        return updated;
+      }
       llmBody.appendChild(el("div", { className: "row wrap" }, [
+        el("button", {
+          className: "primary-btn",
+          type: "button",
+          onClick: async () => {
+            error.classList.add("hidden");
+            try {
+              if (!apiKeyInput.value.trim() && !settings.api_key_set && !settings.shared_configured) {
+                throw new Error("Paste your OpenRouter key, then Save and test.");
+              }
+              if (apiKeyInput.value.trim() || providerSelect.value !== llmBaseline.provider) {
+                await saveLlmFromForm();
+              }
+              const testPath = initialDynamicId
+                ? `/settings/llm/test?dynamic_id=${encodeURIComponent(initialDynamicId)}`
+                : "/settings/llm/test";
+              const result = await api(testPath, { method: "POST" });
+              if (result.ok) {
+                status.textContent = `AI test OK · ${result.provider} / ${result.model} · ${result.active_key_source} key · ${result.reply || "UBETRA_OK"}`;
+              } else {
+                error.textContent = result.detail || "AI test failed";
+                error.classList.remove("hidden");
+                status.textContent = `AI test failed · ${result.provider} / ${result.model}`;
+              }
+            } catch (err) {
+              error.textContent = err.message;
+              error.classList.remove("hidden");
+            }
+          },
+        }, "Save and test"),
         el("button", {
           className: "ghost-btn",
           type: "button",
@@ -24081,7 +27077,7 @@ function renderSettings() {
       const addPurpose = el("select", {}, [
         el("option", { value: "general" }, "General text"),
         el("option", { value: "adult" }, "Adult / NSFW text"),
-        el("option", { value: "images" }, "Images / manga panels"),
+        el("option", { value: "images" }, "Images"),
       ]);
       const addModel = el("input", { placeholder: "Model id" });
       const addImageModel = el("input", { placeholder: "Image model (optional)" });
@@ -24156,7 +27152,11 @@ function renderSettings() {
           ),
         }, "Advanced AI routing →"),
       );
-      llmBody.appendChild(aiConnCard);
+      llmBody.appendChild(el("details", { className: "stack" }, [
+        el("summary", {}, "More connections and routing"),
+        el("p", { className: "muted" }, "Optional. A fresh install only needs the OpenRouter key above."),
+        aiConnCard,
+      ]));
       stack.appendChild(llmCard);
 
       const assistantDomOnly = !!(assistantSettings.dynamic_id && assistantSettings.you_are_dominant === false);
@@ -25293,9 +28293,9 @@ function renderSettings() {
       const bucketHelp = {
         You: "Account, appearance, backup, and optional tips. Theme and icon stay on this device.",
         "This dynamic": "The same feature index as onboarding, plus settings for modules you turned on.",
-        "AI & assistant": "Gemini: Google AI Studio → Create API key. OpenAI: platform.openai.com → API keys. Powers scenes, interviews, and Assistant Domme.",
+        "AI & assistant": "Fresh install: open Connect OpenRouter, paste one key from openrouter.ai/keys, then Save and test. That key is shared with your partner.",
         "Chat & privacy": "History retention, encryption, and push for this device.",
-        "This device": "Camera, microphone, notifications, Android extras, and Edge Guard.",
+        "This device": "Camera, microphone, notifications, Android extras, server, and Wear OS.",
         Help: "In-app wiki for this install.",
       };
       const titleMap = {
@@ -25317,7 +28317,6 @@ function renderSettings() {
         "Feelings notifications": "This dynamic",
         "Chastity policy": "This dynamic",
         "Sex & orgasm tracking details": "This dynamic",
-        "Edge Guard list": "This dynamic",
         "Privacy & security": "Chat & privacy",
         "Assistant domme": "AI & assistant",
         "LLM API Configuration": "AI & assistant",
@@ -25325,7 +28324,8 @@ function renderSettings() {
         "Android app": "This device",
         "Update app": "This device",
         Permissions: "This device",
-        "Edge Guard": "This device",
+        "Server": "This device",
+        "Wear OS": "This device",
         Wiki: "Help",
         About: "Help",
       };
@@ -25372,7 +28372,7 @@ function renderSettings() {
         const id = bucketIds[name] || "";
         grouped.appendChild(settingsSection(name, items, {
           id,
-          open: focus === id || (focus === "setup" && id === "account"),
+          open: focus === id || (focus === "setup" && id === "account") || (id === "ai" && !(settings.configured || settings.shared_configured)),
           help: bucketHelp[name] || "",
         }));
       });
@@ -25383,37 +28383,48 @@ function renderSettings() {
 
       if (focus) {
         setTimeout(() => {
-          const target = document.getElementById(focus === "edge-guard" ? "settings-features" : `settings-${focus}`);
+          const target = document.getElementById(`settings-${focus}`);
           if (target) {
             target.open = true;
             target.scrollIntoView({ behavior: "smooth", block: "start" });
           }
-          if (focus === "edge-guard") {
-            document.getElementById("edge-guard-manage")?.scrollIntoView({ behavior: "smooth", block: "start" });
-          }
         }, 50);
       }
       setViewContent(grouped);
+      if (window.UbetraPhone) window.UbetraPhone.paint();
     })
-    .catch((err) => setViewContent(el("p", { className: "error" }, err.message)));
+    .catch((err) => setViewContent(el("div", { className: "stack" }, [
+      el("h1", {}, "Settings"),
+      el("p", { className: "error" }, err.message || "Could not load settings"),
+      buildPhoneServerCard(),
+      buildWearOsCard(),
+    ])));
 }
 
 async function renderRoute() {
+  bottomNavEl?.classList.remove("nav-away");
   const hashPath = (location.hash.replace(/^#/, "") || "/");
   rememberRoute(hashPath.startsWith("/") ? hashPath : `/${hashPath}`);
+  closeNavSheets();
   const { parts } = parseRoute();
   if (!state.token && parts[0] !== "login" && parts[0] !== "register"
-      && parts[0] !== "forgot-password" && parts[0] !== "reset-password") {
+      && parts[0] !== "forgot-password" && parts[0] !== "reset-password" && parts[0] !== "email-signin") {
     renderLogin();
     return;
   }
-  if (state.token && state.user && ["login", "forgot-password", "reset-password"].includes(parts[0])) {
+  if (state.token && state.user && ["login", "forgot-password", "reset-password", "email-signin"].includes(parts[0])) {
     navigateAfterAuth();
+    return;
+  }
+  if (window.UbetraPhone && window.UbetraPhone.blockedRoute(parts)) {
+    window.UbetraPhone.renderNeedsServer();
+    updateBottomNav();
     return;
   }
 
   if (parts[0] === "login") return renderLogin();
   if (parts[0] === "register") return renderRegister();
+  if (parts[0] === "email-signin") return renderEmailSignIn();
   if (parts[0] === "forgot-password") return renderForgotPassword();
   if (parts[0] === "reset-password") return renderResetPassword();
   if (parts[0] === "onboarding") return renderOnboarding();
@@ -25427,6 +28438,7 @@ async function renderRoute() {
   if (parts[0] === "settings") {
     if (parts[1] === "ai-routing") return renderAiRoutingSettings();
     if (parts[1] === "help" || parts[1] === "wiki") return renderHelpWiki();
+    if (parts[1] === "wear") return renderWearPairing();
     return renderSettings();
   }
   // Legacy History URL — keep Dynamic tab active, never a bottom-nav item.
@@ -25436,17 +28448,34 @@ async function renderRoute() {
     return;
   }
   if (parts[0] === "chat") return renderChat(parts[1]);
+  if (parts[0] === "quick") {
+    const quickId = preferredDynamicId();
+    if (!quickId) {
+      if (state.user) return renderHome();
+      setViewContent(el("p", { className: "muted" }, "Loading…"));
+      return;
+    }
+    if (parts[1] === "lock") {
+      history.replaceState(null, "", `#/dynamic/${quickId}/chastity`);
+      return renderChastity(quickId);
+    }
+    history.replaceState(null, "", `#/dynamic/${quickId}/track`);
+    renderToday(quickId);
+    openQuickLogSheet(quickId);
+    return;
+  }
   if (parts[0] === "home" || parts.length === 0) {
-    if (state.dynamics.length) return renderTrackingHub(state.dynamics[0].id);
+    if (state.dynamics.length) return renderToday(state.dynamics[0].id);
     return renderHome();
   }
 
   if (parts[0] === "dynamic" && parts[1]) {
     const dynamicId = parts[1];
     if (parts[2] === "history") {
+      if (parts[3] === "list") return renderHistoryHub(dynamicId);
       if (parts[3] === "sessions" && parts[4]) return renderHistorySession(dynamicId, parts[4]);
       if (parts[3]) return renderHistoryReport(dynamicId, parts[3]);
-      return renderHistoryHub(dynamicId);
+      return renderHistoryReport(dynamicId, "chastity-days");
     }
     if (parts[2] === "survey") return renderSurvey(dynamicId);
     if (parts[2] === "ground-rules") return renderGroundRules(dynamicId);
@@ -25461,14 +28490,19 @@ async function renderRoute() {
     if (parts[2] === "assistant") {
       if (parts[3] === "chat") return renderAssistantChatPage(dynamicId);
       if (parts[3] === "scene") return renderPlaytimeScene(dynamicId);
+      if (parts[3] === "games" && parts[4] === "roulette" && parts[5] === "setup") return renderRouletteSetup(dynamicId);
+      if (parts[3] === "games" && parts[4] === "roulette") return renderRoulette(dynamicId);
       if (parts[3] === "games" && parts[4] === "spin") return renderSpinTheWheel(dynamicId);
+      if (parts[3] === "games" && parts[4] === "red-light") return renderRedLightGame(dynamicId);
+      if (parts[3] === "games" && parts[4] === "toys") return renderToySpin(dynamicId);
+      if (parts[3] === "games" && parts[4] === "fate") return renderFateGame(dynamicId);
       if (parts[3] === "games") return renderPlaytimeGames(dynamicId);
       return renderAssistant(dynamicId);
     }
     if (parts[2] === "interview") return renderInterview(dynamicId);
     if (parts[2] === "context") return renderContext(dynamicId);
     if (parts[2] === "journal") return renderJournal(dynamicId);
-    if (parts[2] === "track") return renderTrackingHub(dynamicId);
+    if (parts[2] === "track") return renderToday(dynamicId);
     if (parts[2] === "tracking") {
       if (parts[3] === "history") return renderOrgasmPriorHistory(dynamicId);
       return renderTracking(dynamicId);
@@ -25476,7 +28510,6 @@ async function renderRoute() {
     if (parts[2] === "feelings") return renderFeelings(dynamicId);
     if (parts[2] === "sleep") return renderSleep(dynamicId);
     if (parts[2] === "cycle") return renderCycle(dynamicId);
-    if (parts[2] === "manga") return renderManga(dynamicId);
     if (parts[2] === "instructor" || parts[2] === "web-play") return renderInstructor(dynamicId);
     if (parts[2] === "wiki") {
       history.replaceState(null, "", "#/settings/help");
@@ -25494,7 +28527,8 @@ async function renderRoute() {
     if (parts[2] === "gear") return renderGear(dynamicId);
     if (parts[2] === "vault") return renderVault(dynamicId);
     if (parts[2] === "features") return renderFeatureSettings(dynamicId);
-    return renderTrackingHub(dynamicId);
+    navigate(`/dynamic/${dynamicId}/track`);
+    return;
   }
 
   renderHome();

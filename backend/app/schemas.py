@@ -83,8 +83,18 @@ class UserEmailUpdate(BaseModel):
 
 
 class UserPasswordUpdate(BaseModel):
-    current_password: str = Field(min_length=1, max_length=128)
+    current_password: str = ""
     new_password: str = Field(min_length=6, max_length=128)
+
+
+class EmailSignInRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+
+
+class EmailSignInConfirm(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    code: str | None = Field(default=None, max_length=12)
+    token: str | None = Field(default=None, max_length=128)
 
 
 class PasswordResetRequest(BaseModel):
@@ -176,6 +186,7 @@ class PartnerOut(BaseModel):
     spti_completed: bool = False
     chastity_enabled: bool = False
     chastity_max_lock_hours: int | None = None
+    biological_sex: str = ""
     is_you: bool = False
 
 
@@ -1537,6 +1548,8 @@ class OrgTrackingEntryCreate(BaseModel):
     satisfaction: int | None = Field(default=None, ge=1, le=5)
     edging_count: int | None = Field(default=None, ge=0, le=100)
     notes_private: bool = False
+    client_event_id: str | None = Field(default=None, max_length=64)
+    updated_at: datetime | None = None
 
 
 class OrgTrackingEntryUpdate(BaseModel):
@@ -1627,6 +1640,8 @@ class HistoryWeekBucket(BaseModel):
     avg_duration_by_partner: dict[str, float | None] = Field(default_factory=dict)
     play_by_partner: dict[str, int] = Field(default_factory=dict)
     ruined_by_partner: dict[str, int] = Field(default_factory=dict)
+    full_by_partner: dict[str, int] = Field(default_factory=dict)
+    sessions_by_partner: dict[str, int] = Field(default_factory=dict)
 
 
 class HistoryPartnerSummary(BaseModel):
@@ -1634,6 +1649,10 @@ class HistoryPartnerSummary(BaseModel):
     name: str
     role: str
     orgasm_count: int
+    full_orgasm_count: int = 0
+    ruined_orgasm_count: int = 0
+    full_session_count: int = 0
+    ruined_session_count: int = 0
     play_count: int
     avg_duration_minutes: float | None = None
     chastity_enabled: bool
@@ -1776,6 +1795,8 @@ class HistoryChastityStatsOut(BaseModel):
 class HistoryWeeklyOut(BaseModel):
     dynamic_name: str
     days: int
+    span_days: int = 0
+    span_label: str = ""
     comparison_label: str
     partners: list[HistoryPartnerSummary]
     weekly_buckets: list[HistoryWeekBucket]
@@ -1789,6 +1810,8 @@ class ChastityLockupStart(BaseModel):
     planned_end_at: datetime | None = None
     show_planned_end: bool = False
     tags: list[str] = Field(default_factory=list)
+    client_event_id: str | None = Field(default=None, max_length=64)
+    updated_at: datetime | None = None
 
 
 class ChastityLockupEnd(BaseModel):
@@ -1797,6 +1820,8 @@ class ChastityLockupEnd(BaseModel):
     tags: list[str] | None = None
     # unlocked | released_orgasm | released_timer
     ended_kind: Literal["unlocked", "released_orgasm", "released_timer"] = "released_orgasm"
+    client_event_id: str | None = Field(default=None, max_length=64)
+    updated_at: datetime | None = None
 
 
 class ChastityTimerExtend(BaseModel):
@@ -1841,12 +1866,16 @@ class ChastityBreakCreate(BaseModel):
     ended_at: datetime | None = None
     note: str = Field(default="", max_length=500)
     tags: list[str] = Field(default_factory=list)
+    client_event_id: str | None = Field(default=None, max_length=64)
+    updated_at: datetime | None = None
 
 
 class ChastityBreakFinish(BaseModel):
     ended_at: datetime | None = None
     break_type: str | None = None
     break_reason: str = Field(default="", max_length=255)
+    client_event_id: str | None = Field(default=None, max_length=64)
+    updated_at: datetime | None = None
 
 
 class ChastityBreakUpdate(BaseModel):
@@ -2072,6 +2101,8 @@ class GearCatalogItemOut(BaseModel):
     owned: bool = False
     want: bool = False
     inventory_id: str | None = None
+    has_image: bool = False
+    art_key: str = ""
 
 
 class GearInventoryItemOut(BaseModel):
@@ -2085,6 +2116,8 @@ class GearInventoryItemOut(BaseModel):
     is_custom: bool = False
     tier: str = "common"
     created_at: datetime
+    has_image: bool = False
+    art_key: str = ""
 
     class Config:
         from_attributes = True

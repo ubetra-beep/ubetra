@@ -22,6 +22,8 @@ from ..schemas import (
     LoginResponse,
     MfaResendRequest,
     MfaVerifyRequest,
+    EmailSignInConfirm,
+    EmailSignInRequest,
     PasswordResetConfirm,
     PasswordResetOk,
     PasswordResetRequest,
@@ -414,12 +416,44 @@ def update_password(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UserOut:
-    if not verify_password(payload.current_password, user.password_hash):
+    current = (payload.current_password or "").strip()
+    if current and not verify_password(current, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
     user.password_hash = hash_password(payload.new_password)
     db.commit()
     db.refresh(user)
     return _user_out(user)
+
+
+@router.post("/email-signin/request", response_model=PasswordResetOk)
+def email_signin_request(
+    payload: EmailSignInRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> PasswordResetOk:
+    from ..services.email_signin import request_email_signin
+
+    result = request_email_signin(db, payload.email)
+    db.commit()
+    return PasswordResetOk(**result)
+
+
+@router.post("/email-signin/confirm", response_model=PasswordResetOk)
+def email_signin_confirm(
+    payload: EmailSignInConfirm,
+    db: Annotated[Session, Depends(get_db)],
+) -> PasswordResetOk:
+    from ..services.email_signin import confirm_email_signin
+
+    try:
+        user = confirm_email_signin(db, email=payload.email, code=payload.code, token=payload.token)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return PasswordResetOk(
+        ok=True,
+        detail="You're signed in.",
+        access_token=create_access_token(user.id),
+    )
 
 
 @router.post("/password-reset/request", response_model=PasswordResetOk)

@@ -30,7 +30,8 @@ from .routers import (
     interview,
     journals,
     kiosk,
-    manga,
+    image_gen,
+    play_games,
     instructor,
     onboarding,
     org_tracking,
@@ -41,11 +42,12 @@ from .routers import (
     punishments,
     settings as settings_router,
     sleep,
+    switch,
     cycle,
     tasks,
     vault,
     video,
-    edge_guard,
+    watch,
 )
 
 HAR_CATALOG = Path(
@@ -89,16 +91,19 @@ app.include_router(gear.router, prefix="/api")
 app.include_router(vault.router, prefix="/api")
 app.include_router(google_tasks.router, prefix="/api")
 app.include_router(sleep.router, prefix="/api")
+app.include_router(switch.router, prefix="/api")
 app.include_router(sleep.callback_router, prefix="/api")
 app.include_router(cycle.router, prefix="/api")
 app.include_router(kiosk.router, prefix="/api")
 app.include_router(instructor.router, prefix="/api")
-app.include_router(manga.router, prefix="/api")
+app.include_router(image_gen.router, prefix="/api")
+app.include_router(play_games.router, prefix="/api")
 app.include_router(push.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(video.router, prefix="/api")
-app.include_router(edge_guard.router, prefix="/api")
+app.include_router(watch.router, prefix="/api")
+app.include_router(watch.summary_router, prefix="/api")
 
 
 @app.on_event("startup")
@@ -117,17 +122,23 @@ def on_startup() -> None:
     finally:
         db.close()
     from .services.task_notify import start_task_notify_loop
-    from .services.edge_guard import start_edge_guard_loop
     from .services.relationship_check_in import start_check_in_loop
 
     start_task_notify_loop()
-    start_edge_guard_loop()
     start_check_in_loop()
 
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/privacy")
+def privacy_policy() -> HTMLResponse:
+    page = FRONTEND_DIR / "privacy.html"
+    if page.is_file():
+        return HTMLResponse(page.read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
+    return HTMLResponse("<h1>Privacy</h1><p>Host a privacy policy on this self-hosted UBETRA.</p>")
 
 
 APK_DIST = ROOT_DIR / "mobile" / "dist"
@@ -200,6 +211,34 @@ def download_android_apk(request: Request) -> Response:
     )
 
 
+def _published_wear_apk() -> Path | None:
+    path = APK_DIST / "ubetra-wear.apk"
+    if path.is_file() and path.stat().st_size > 0:
+        return path
+    return None
+
+
+@app.api_route("/apk/ubetra-wear.apk", methods=["GET", "HEAD"])
+def download_wear_apk(request: Request) -> Response:
+    apk = _published_wear_apk()
+    if apk is None:
+        raise HTTPException(status_code=404, detail="Wear APK is not published on this server.")
+    headers = {
+        "Cache-Control": "no-cache",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(apk.stat().st_size),
+        "Content-Disposition": 'attachment; filename="ubetra-wear.apk"',
+    }
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type="application/vnd.android.package-archive", headers=headers)
+    return FileResponse(
+        apk,
+        media_type="application/vnd.android.package-archive",
+        filename="ubetra-wear.apk",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 if FRONTEND_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
 
@@ -238,9 +277,9 @@ if FRONTEND_DIR.exists():
         return JSONResponse(
             {
                 "id": "/",
-                "name": "Shared space",
-                "short_name": "Space",
-                "description": "Private shared planner",
+                "name": "UBETRA",
+                "short_name": "UBETRA",
+                "description": "Private shared log",
                 "start_url": "/",
                 "scope": "/",
                 "display": "standalone",
@@ -266,6 +305,20 @@ if FRONTEND_DIR.exists():
                         "sizes": "512x512",
                         "type": "image/png",
                         "purpose": "maskable",
+                    },
+                ],
+                "shortcuts": [
+                    {
+                        "name": "Log orgasm",
+                        "short_name": "Log",
+                        "description": "Log an orgasm or play session",
+                        "url": "/#/quick/log",
+                    },
+                    {
+                        "name": "Lock",
+                        "short_name": "Lock",
+                        "description": "Open chastity lock controls",
+                        "url": "/#/quick/lock",
                     },
                 ],
             },

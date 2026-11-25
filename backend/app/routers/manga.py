@@ -87,9 +87,9 @@ def manga_modes(
     if dynamic is None:
         raise HTTPException(status_code=404, detail="Dynamic not found")
     modes = [
-        {"id": "script", "label": "Script / storyboard", "warning": MODE_WARNINGS["script"]},
         {"id": "hybrid", "label": "Hybrid (images when allowed)", "warning": MODE_WARNINGS["hybrid"]},
         {"id": "full", "label": "Full AI panels", "warning": MODE_WARNINGS["full"]},
+        {"id": "script", "label": "Script / storyboard", "warning": MODE_WARNINGS["script"]},
     ]
     return MangaModesOut(
         modes=modes,

@@ -975,6 +975,9 @@ def _perform_task_complete(
         notify_late_complete(db, dynamic_id=task_list.dynamic_id, task=task)
     elif membership.role == PartnerRole.submissive:
         notify_task_completed(db, dynamic_id=task_list.dynamic_id, task=task, actor=membership)
+    from ..services.roulette import note_project_task
+
+    note_project_task(db, task_list.dynamic_id, task)
     db.flush()
     for nxt in tasks:
         if nxt.id == task.id:

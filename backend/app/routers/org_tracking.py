@@ -40,11 +40,20 @@ from ..services.tags import tags_to_list, tags_to_string
 
 from ..services.chat_events import post_activity_event, post_system_event
 
-from ..services.tracking_events import has_full_orgasm_tag, is_orgasm_event, is_play_event, orgasm_count
+from ..services.tracking_events import (
+    counts_as_full_orgasm,
+    entry_orgasm_tag_lists,
+    has_denial_tag,
+    has_full_orgasm_tag,
+    has_ruined_orgasm_tag,
+    is_orgasm_event,
+    is_play_event,
+)
 from ..services.chastity_release import event_goal_kind, maybe_relock_after_orgasm, orgasm_end_kind
 
 from ..services.feelings import feelings_status, has_recent_context_checkin
 
+from ..services.tracking import recent_orgasm_glance
 from ..services.tracking_calendar import build_tracking_calendar
 
 from ..services.org_tracking_prefs import prefs_for_dynamic, serialize_org_tracking_prefs
@@ -267,66 +276,85 @@ def tracking_stats(
 ) -> OrgTrackingStatsOut:
     get_membership(dynamic_id, user, db)
     memberships = db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
+    glance = recent_orgasm_glance(db, dynamic_id, memberships)
+    partners = glance["partners"]
+    label = glance["recent_orgasm_label"]
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    since_7 = today - timedelta(days=6)
     since_30 = today - timedelta(days=29)
+    since_prior = today - timedelta(days=59)
 
-    partners = []
-    label_bits = []
-    for membership in memberships:
-        entries = (
-            db.query(OrgTrackingEntry)
-            .options(joinedload(OrgTrackingEntry.orgasms))
-            .filter(
-                OrgTrackingEntry.dynamic_id == dynamic_id,
-                OrgTrackingEntry.for_membership_id == membership.id,
-                OrgTrackingEntry.occurred_at >= since_7,
-            )
-            .all()
-        )
-        orgasm_count_total = sum(
-            orgasm_count(entry) for entry in entries if is_orgasm_event(entry.event_type)
-        )
-        partners.append(
-            {
-                "membership_id": membership.id,
-                "name": membership.display_name,
-                "orgasm_count": orgasm_count_total,
-            }
-        )
-        label_bits.append(f"{membership.display_name}: {orgasm_count_total}")
-
-    if any(p["orgasm_count"] for p in partners):
-        label = f"{' · '.join(label_bits)} (last 7 days)"
-    else:
-        label = "No orgasms in the last 7 days"
-
-    # Preload 30-day entries once
-    entries_30 = (
+    entries_60 = (
         db.query(OrgTrackingEntry)
         .options(joinedload(OrgTrackingEntry.orgasms))
         .filter(
             OrgTrackingEntry.dynamic_id == dynamic_id,
-            OrgTrackingEntry.occurred_at >= since_30,
+            OrgTrackingEntry.occurred_at >= since_prior,
             OrgTrackingEntry.occurred_at < today + timedelta(days=1),
         )
         .all()
     )
-    running = {m.id: 0 for m in memberships}
+
+    def _kind(tags: list[str]) -> str:
+        if has_ruined_orgasm_tag(tags) and not has_full_orgasm_tag(tags):
+            return "ruined"
+        if has_denial_tag(tags):
+            return "denial"
+        if counts_as_full_orgasm(tags):
+            return "full"
+        return ""
+
+    def _stamp(entry: OrgTrackingEntry):
+        occurred = entry.occurred_at
+        if getattr(occurred, "tzinfo", None):
+            occurred = occurred.replace(tzinfo=None)
+        return occurred
+
+    prior_full = {m.id: 0 for m in memberships}
+    prior_ruined = {m.id: 0 for m in memberships}
+    for entry in entries_60:
+        if not is_orgasm_event(entry.event_type):
+            continue
+        occurred = _stamp(entry)
+        if occurred is None or not (since_prior <= occurred < since_30):
+            continue
+        if entry.for_membership_id not in prior_full:
+            continue
+        for tags in entry_orgasm_tag_lists(entry):
+            kind = _kind(tags)
+            if kind == "full":
+                prior_full[entry.for_membership_id] += 1
+            elif kind == "ruined":
+                prior_ruined[entry.for_membership_id] += 1
+
+    running_full = dict(prior_full)
+    running_ruined = dict(prior_ruined)
     cumulative_30d = []
     for i in range(30):
         day = since_30 + timedelta(days=i)
         day_end = day + timedelta(days=1)
-        for entry in entries_30:
+        denials = {m.id: 0 for m in memberships}
+        for entry in entries_60:
             if not is_orgasm_event(entry.event_type):
                 continue
-            occurred = entry.occurred_at.replace(tzinfo=None) if getattr(entry.occurred_at, "tzinfo", None) else entry.occurred_at
-            if day <= occurred < day_end and entry.for_membership_id in running:
-                running[entry.for_membership_id] += orgasm_count(entry)
+            occurred = _stamp(entry)
+            if occurred is None or not (day <= occurred < day_end):
+                continue
+            if entry.for_membership_id not in running_full:
+                continue
+            for tags in entry_orgasm_tag_lists(entry):
+                kind = _kind(tags)
+                if kind == "full":
+                    running_full[entry.for_membership_id] += 1
+                elif kind == "ruined":
+                    running_ruined[entry.for_membership_id] += 1
+                elif kind == "denial":
+                    denials[entry.for_membership_id] += 1
         cumulative_30d.append(
             {
                 "date": day.date().isoformat(),
-                "by_partner": {mid: running[mid] for mid in running},
+                "by_partner": {mid: running_full[mid] for mid in running_full},
+                "ruined_by_partner": {mid: running_ruined[mid] for mid in running_ruined},
+                "denials_by_partner": denials,
             }
         )
 
@@ -458,6 +486,24 @@ def log_tracking_entry(
 
     membership = get_membership(dynamic_id, user, db)
 
+    from ..services.client_events import clean_client_event_id, stamp_updated_at
+
+    cid = clean_client_event_id(payload.client_event_id)
+    if cid:
+        prior = (
+            db.query(OrgTrackingEntry)
+            .options(joinedload(OrgTrackingEntry.orgasms))
+            .filter(OrgTrackingEntry.client_event_id == cid)
+            .first()
+        )
+        if prior is not None:
+            if prior.dynamic_id != dynamic_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="client_event_id belongs to another dynamic",
+                )
+            return _entry_out(prior, _membership_map(db, dynamic_id), viewer=membership)
+
     target = (
 
         db.query(Membership)
@@ -533,6 +579,8 @@ def log_tracking_entry(
         edging_count=payload.edging_count,
 
         notes_private=bool(payload.notes_private),
+        client_event_id=cid or None,
+        updated_at=stamp_updated_at(None, payload.updated_at),
 
     )
 
@@ -594,7 +642,7 @@ def log_tracking_entry(
 
     if gift_kind and dynamic_row is not None:
         from ..services.chastity_goals import note_orgasm_gift
-        from ..services.tracking_events import has_cheated_tag, has_full_orgasm_tag, has_ruined_orgasm_tag
+        from ..services.tracking_events import counts_as_full_orgasm, has_cheated_tag, has_ruined_orgasm_tag
 
         sources = [tags_to_list(row.tags) for row in (entry.orgasms or [])] or [tags_to_list(entry.tags)]
         orgasm_counts = {"full": 0, "ruin": 0, "cheated": 0}
@@ -603,7 +651,7 @@ def log_tracking_entry(
                 orgasm_counts["cheated"] += 1
             elif has_ruined_orgasm_tag(row_tags):
                 orgasm_counts["ruin"] += 1
-            elif has_full_orgasm_tag(row_tags):
+            elif counts_as_full_orgasm(row_tags):
                 orgasm_counts["full"] += 1
         note_orgasm_gift(
             db,
@@ -613,6 +661,10 @@ def log_tracking_entry(
             tags=orgasm_tags,
             orgasm_counts=orgasm_counts,
         )
+
+    from ..services.roulette import note_tracking_entry
+
+    note_tracking_entry(db, dynamic_id, target, entry)
 
     db.commit()
 

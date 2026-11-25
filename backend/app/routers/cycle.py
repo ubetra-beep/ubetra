@@ -50,6 +50,7 @@ class CycleSummaryOut(BaseModel):
     last_period_start: str = ""
     cycle_day: int | None = None
     typical_length: int = 28
+    period_length: int = 5
     predicted_next: str = ""
     on_period: bool = False
     logged_days: int = 0
@@ -115,6 +116,33 @@ def _log_out(row: CycleLog, viewer_id: str) -> CycleLogOut:
     )
 
 
+def _period_length(days: list[CycleLog]) -> int:
+    stretches: list[int] = []
+    run = 0
+    prev: date | None = None
+    for row in days:
+        current = date.fromisoformat(row.day)
+        if (row.flow or "none") in BLEEDING:
+            if prev is not None and (current - prev).days <= 1:
+                run += 1
+            else:
+                if run:
+                    stretches.append(run)
+                run = 1
+            prev = current
+        else:
+            if run:
+                stretches.append(run)
+            run = 0
+            prev = None
+    if run:
+        stretches.append(run)
+    recent = stretches[-6:]
+    if not recent:
+        return 5
+    return max(1, round(sum(recent) / len(recent)))
+
+
 def summarize_cycle(logs: list[CycleLog]) -> CycleSummaryOut:
     days = sorted(logs, key=lambda row: row.day)
     starts: list[str] = []
@@ -149,6 +177,7 @@ def summarize_cycle(logs: list[CycleLog]) -> CycleSummaryOut:
         last_period_start=last,
         cycle_day=cycle_day if cycle_day and cycle_day > 0 else None,
         typical_length=typical,
+        period_length=_period_length(days),
         predicted_next=predicted,
         on_period=on_period,
         logged_days=len(days),

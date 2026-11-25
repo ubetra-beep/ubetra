@@ -23,8 +23,9 @@ from ..models import (
     TaskCompletion,
 )
 from .tracking_events import (
+    counts_as_full_orgasm,
+    entry_counts_as_full_orgasm,
     has_denial_tag,
-    has_full_orgasm_tag,
     has_ruined_orgasm_tag,
     is_orgasm_event,
     is_play_event,
@@ -35,7 +36,7 @@ REQUIREMENT_TYPES = {
     "days_since_full_orgasm": {
         "title": "Days since last full orgasm",
         "kind": "duration",
-        "hint": "Time since the sub’s last full-orgasm tag / Released!",
+        "hint": "Time since the sub’s last full orgasm. Older logs without a ruined tag count.",
     },
     "days_since_lockup": {
         "title": "Days in current / last lockup",
@@ -73,6 +74,7 @@ GOAL_KINDS = {
     "orgasm_grant": {"title": "Orgasm / unlock grant", "tone": "primary"},
     "ruin_gift": {"title": "Ruin gift", "tone": "gift"},
     "misc_gift": {"title": "Misc gift", "tone": "gift"},
+    "switch_gift": {"title": "Switch gift", "tone": "gift"},
 }
 
 DEFAULT_MAX_SOFT = 2
@@ -217,6 +219,7 @@ def parse_goals(raw: str | None) -> dict:
                     "ready_remind_every_minutes": _clean_every_minutes(g.get("ready_remind_every_minutes")),
                     "ready_pushed_for": g.get("ready_pushed_for") or None,
                     "cycle_extras": _clean_cycle_extras(g.get("cycle_extras")),
+                    "switch_style": "scene" if g.get("switch_style") == "scene" else "goal",
                 }
             )
         base["goals"] = cleaned
@@ -267,11 +270,7 @@ def _last_full_orgasm_at(db: Session, dynamic_id: str, sub_id: str) -> datetime 
         .all()
     )
     for entry in entries:
-        rows = entry.orgasms or []
-        if rows:
-            if any(has_full_orgasm_tag(tags_to_list(r.tags)) for r in rows):
-                return entry.occurred_at
-        elif has_full_orgasm_tag(tags_to_list(entry.tags)):
+        if entry_counts_as_full_orgasm(entry):
             return entry.occurred_at
     lockup = (
         db.query(ChastityLockup)
@@ -766,6 +765,7 @@ def _goal_progress_row(
         "created_at": goal.get("created_at"),
         "reset_at": goal.get("reset_at"),
         "start_mode": goal.get("start_mode") or "rolling",
+        "switch_style": "scene" if goal.get("switch_style") == "scene" else "goal",
         "archived_at": goal.get("archived_at"),
         "archive_reason": goal.get("archive_reason"),
         "repeat_count": int(goal.get("repeat_count") or 0),
@@ -914,7 +914,7 @@ def note_orgasm_gift(
     if orgasm_counts is None:
         cheated = has_cheated_tag(tags)
         ruined = has_ruined_orgasm_tag(tags)
-        full = has_full_orgasm_tag(tags) and not ruined
+        full = counts_as_full_orgasm(tags) and not ruined
         cheated_n = 1 if cheated else 0
         ruin_n = 1 if ruined and not cheated else 0
         full_n = 1 if full else 0

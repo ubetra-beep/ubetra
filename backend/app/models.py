@@ -195,8 +195,13 @@ class User(Base):
     memberships: Mapped[list["Membership"]] = relationship(back_populates="user")
     push_subscriptions: Mapped[list["PushSubscription"]] = relationship(back_populates="user")
     native_push_tokens: Mapped[list["NativePushToken"]] = relationship(back_populates="user")
+    watch_devices: Mapped[list["WatchDevice"]] = relationship(back_populates="user")
+    watch_pair_codes: Mapped[list["WatchPairCode"]] = relationship(back_populates="user")
     mfa_challenges: Mapped[list["MfaChallenge"]] = relationship(back_populates="user")
     password_reset_challenges: Mapped[list["PasswordResetChallenge"]] = relationship(
+        back_populates="user"
+    )
+    email_signin_challenges: Mapped[list["EmailSignInChallenge"]] = relationship(
         back_populates="user"
     )
 
@@ -226,6 +231,22 @@ class PasswordResetChallenge(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped[User] = relationship(back_populates="password_reset_challenges")
+
+
+class EmailSignInChallenge(Base):
+    """One-time email code or link that signs the account in without a password."""
+
+    __tablename__ = "email_signin_challenges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(255))
+    token_hash: Mapped[str] = mapped_column(String(255))
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped[User] = relationship(back_populates="email_signin_challenges")
 
 
 class PushSubscription(Base):
@@ -369,6 +390,7 @@ class Dynamic(Base):
     spin_sessions: Mapped[list["SpinGameSession"]] = relationship(back_populates="dynamic")
     feeling_checkins: Mapped[list["FeelingCheckIn"]] = relationship(back_populates="dynamic")
     punishment_reports: Mapped[list["PunishmentReport"]] = relationship(back_populates="dynamic")
+    switch_sessions: Mapped[list["SwitchSession"]] = relationship(back_populates="dynamic")
     kiosk_visits: Mapped[list["KioskVisit"]] = relationship(back_populates="dynamic")
     web_play_apps: Mapped[list["WebPlayApp"]] = relationship(back_populates="dynamic")
     instructor_sessions: Mapped[list["InstructorSession"]] = relationship(back_populates="dynamic")
@@ -377,6 +399,35 @@ class Dynamic(Base):
     assistant_change_logs: Mapped[list["AssistantChangeLog"]] = relationship(
         back_populates="dynamic"
     )
+
+
+class SwitchSession(Base):
+    """Temporary switch overlay. Does not change Membership.role."""
+
+    __tablename__ = "switch_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    # timed | session | until_goal | goal_gift | scene_gift
+    kind: Mapped[str] = mapped_column(String(32), default="timed")
+    # drafting | pending_approval | active | completed | declined
+    status: Mapped[str] = mapped_column(String(32), default="drafting", index=True)
+    offered_by_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    drafter_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    subject_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
+    # clock | one_scene | goal
+    end_rule: Mapped[str] = mapped_column(String(32), default="clock")
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    draft_goal_json: Mapped[str] = mapped_column(Text, default="")
+    draft_scene_json: Mapped[str] = mapped_column(Text, default="")
+    source_goal_id: Mapped[str] = mapped_column(String(64), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dynamic: Mapped[Dynamic] = relationship(back_populates="switch_sessions")
 
 
 class PunishmentReport(Base):
@@ -868,6 +919,8 @@ class OrgTrackingEntry(Base):
     goal_unmet: Mapped[bool] = mapped_column(Boolean, default=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    client_event_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     dynamic: Mapped[Dynamic] = relationship(back_populates="org_entries")
     orgasms: Mapped[list["OrgTrackingOrgasm"]] = relationship(
@@ -935,6 +988,8 @@ class ChastityLockup(Base):
         Enum(ChastityRecordType), default=ChastityRecordType.normal
     )
     status: Mapped[LockupStatus] = mapped_column(Enum(LockupStatus), default=LockupStatus.active)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    client_event_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     dynamic: Mapped[Dynamic] = relationship(back_populates="chastity_lockups")
     breaks: Mapped[list["ChastityBreak"]] = relationship(
@@ -956,6 +1011,18 @@ class ChastityBreak(Base):
     created_by_membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id"))
 
     lockup: Mapped[ChastityLockup] = relationship(back_populates="breaks")
+
+
+class ClientEvent(Base):
+    """Idempotency row for a phone retry of a chastity or tracking write."""
+
+    __tablename__ = "client_events"
+
+    client_event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dynamic_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(32), default="")
+    resource_id: Mapped[str] = mapped_column(String(36), default="")
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class RelationshipCheckIn(Base):
@@ -1026,6 +1093,38 @@ class GearInventoryItem(Base):
     )
 
     dynamic: Mapped[Dynamic] = relationship(back_populates="gear_items")
+
+
+class GearArt(Base):
+    """Generated picture for one gear catalog or custom item. The file lives beside the database."""
+
+    __tablename__ = "gear_art"
+    __table_args__ = (
+        UniqueConstraint("dynamic_id", "item_key", name="uq_gear_art_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    item_key: Mapped[str] = mapped_column(String(80), index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    slug: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class FateGame(Base):
+    """One hidden six-card fate game for a dynamic. Card text stays server-side until a number is opened."""
+
+    __tablename__ = "fate_games"
+    __table_args__ = (UniqueConstraint("dynamic_id", name="uq_fate_game_dynamic"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    cards_json: Mapped[str] = mapped_column(Text, default="[]")
+    revealed_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
 
 
 class VaultImage(Base):
@@ -1342,5 +1441,51 @@ class EdgeGuardPolicy(Base):
     off_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     stale_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class WatchPairCode(Base):
+    """Short-lived phone pairing code. Only the hash is stored."""
+
+    __tablename__ = "watch_pair_codes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64), index=True)
+    api_base: Mapped[str] = mapped_column(String(300), default="")
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped[User] = relationship(back_populates="watch_pair_codes")
+
+
+class WatchDevice(Base):
+    """A paired Wear OS device. The refresh token is stored only as a hash."""
+
+    __tablename__ = "watch_devices"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    label: Mapped[str] = mapped_column(String(64), default="Wear OS")
+    refresh_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    api_base: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="watch_devices")
+
+
+class RouletteCampaign(Base):
+    """Orgasm Roulette marble bag for one dynamic."""
+
+    __tablename__ = "roulette_campaigns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dynamic_id: Mapped[str] = mapped_column(ForeignKey("dynamics.id"), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    mode: Mapped[str] = mapped_column(String(16), default="virtual")
+    state_json: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

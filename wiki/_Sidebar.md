@@ -1,6 +1,7 @@
 # Sidebar
 
 **[Home](Home)**  
+**[How to](How-to)**  
 **[Getting Started](Getting-Started)**  
 **[Onboarding](Onboarding)**  
 **[Features & Settings](Features-and-Settings)**  

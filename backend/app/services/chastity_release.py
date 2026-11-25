@@ -15,7 +15,7 @@ from ..models import (
     Membership,
 )
 from .chastity import active_lockup
-from .tracking_events import has_cheated_tag, has_full_orgasm_tag, has_ruined_orgasm_tag
+from .tracking_events import counts_as_full_orgasm, has_cheated_tag, has_ruined_orgasm_tag
 
 DEFAULT_UNLOCK_PRESETS = [
     {"name": "Sleep", "break_type": "authorized_sleep", "start": "23:00", "end": "07:00"},
@@ -25,7 +25,7 @@ DEFAULT_UNLOCK_PRESETS = [
 def orgasm_end_kind(tags: list[str]) -> str | None:
     """Full orgasm ends as released_orgasm. Ruined ends only when also cheated."""
     ruined = has_ruined_orgasm_tag(tags)
-    full = has_full_orgasm_tag(tags)
+    full = counts_as_full_orgasm(tags)
     cheated = has_cheated_tag(tags)
     if ruined and cheated:
         return "cheated_orgasm"
@@ -39,7 +39,7 @@ def event_goal_kind(tags: list[str]) -> str | None:
         return "cheated"
     if has_ruined_orgasm_tag(tags):
         return "ruin"
-    if has_full_orgasm_tag(tags):
+    if counts_as_full_orgasm(tags):
         return "full"
     return None
 

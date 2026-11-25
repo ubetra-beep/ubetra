@@ -81,16 +81,24 @@ def history_weekly_report(
     db: Annotated[Session, Depends(get_db)],
     days: int = Query(default=90, ge=7, le=3650),
     tags: str = Query(default=""),
+    since: str = Query(default=""),
 ) -> HistoryWeeklyOut:
     get_membership(dynamic_id, user, db)
     dynamic = db.get(Dynamic, dynamic_id)
     memberships = _memberships(db, dynamic_id)
     payload = build_history_dashboard(
-        db, dynamic_id, memberships, days=days, selected_tags=_parse_tags(tags)
+        db,
+        dynamic_id,
+        memberships,
+        days=days,
+        selected_tags=_parse_tags(tags),
+        since_first=since.strip().lower() == "first",
     )
     return HistoryWeeklyOut(
         dynamic_name=dynamic.name if dynamic else "Dynamic",
         days=payload["days"],
+        span_days=payload["span_days"],
+        span_label=payload["span_label"],
         comparison_label=payload["comparison_label"],
         partners=payload["partners"],
         weekly_buckets=payload["weekly_buckets"],
@@ -114,6 +122,7 @@ def history_chastity_days_report(
         _memberships(db, dynamic_id),
         year=y,
         since_first=since.strip().lower() == "first",
+        since_recent=since.strip().lower() == "recent",
     )
     return HistoryChastityDaysOut(**payload)
 

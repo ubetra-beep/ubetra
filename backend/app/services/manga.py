@@ -73,6 +73,25 @@ def get_month_comic(db: Session, dynamic_id: str, year_month: str | None = None)
     )
 
 
+def _partner_names(db: Session, dynamic_id: str) -> list[str]:
+    rows = db.query(Membership).filter(Membership.dynamic_id == dynamic_id).all()
+    names: list[str] = []
+    for row in rows:
+        if (row.display_name or "").strip():
+            names.append(row.display_name.strip())
+        account = db.get(User, row.user_id)
+        if account and (account.username or "").strip():
+            names.append(account.username.strip())
+    return names
+
+
+def _without_names(text: str, names: list[str]) -> str:
+    cleaned = text or ""
+    for name in sorted({n for n in names if len(n) > 1}, key=len, reverse=True):
+        cleaned = re.sub(re.escape(name), "", cleaned, flags=re.IGNORECASE)
+    return re.sub(r"\s{2,}", " ", cleaned).strip(" -,:")
+
+
 def generate_manga(
     db: Session,
     *,
@@ -130,6 +149,7 @@ Rules:
 - 4 to 8 panels
 - Stay inside negotiated boundaries from the context
 - Be concrete and story-shaped (beginning, tension, close)
+- visual_prompt must not contain any name, username, caption, or written text. Call the people only "the keyholder" and "the submissive".
 - Mode requested: {mode}
 """
     raw = generate_text(
@@ -183,18 +203,24 @@ Rules:
         db.add(comic)
         db.flush()
 
-    img_model = "dall-e-3"
-    if image_svc and (image_svc.image_model or "").strip():
-        img_model = image_svc.image_model.strip()
-    elif image_cfg.model:
-        img_model = image_cfg.model
+    explicit = (image_svc.image_model or "").strip() if image_svc else ""
+    candidate = explicit or (image_cfg.model or "").strip()
+    lowered = candidate.lower()
+    if lowered.startswith(("gpt-image", "chatgpt-image", "dall-e")) or "/" in candidate:
+        img_model = candidate
+    else:
+        # Text models such as gpt-4o cannot draw. This key's working image model is gpt-image-1.5.
+        img_model = "gpt-image-1.5"
 
     for idx, panel in enumerate(panels_in[:8]):
         if not isinstance(panel, dict):
             continue
         caption = str(panel.get("caption") or "").strip()
         dialogue = str(panel.get("dialogue") or "").strip()
-        visual = str(panel.get("visual_prompt") or caption or dialogue).strip()
+        visual = _without_names(
+            str(panel.get("visual_prompt") or caption or dialogue).strip(),
+            _partner_names(db, dynamic.id),
+        )
         image_data = ""
         image_error = ""
         if want_images:
@@ -202,7 +228,8 @@ Rules:
                 image_data = generate_image_openai_compatible(
                     api_key=image_cfg.api_key if image_cfg.api_key != "local" else "",
                     prompt=(
-                        "Manga panel, black and white ink, adult consensual couple, "
+                        "Manga panel, black and white ink, adult consensual couple. "
+                        "No text, no letters, no captions, no speech balloons, no names, no usernames. "
                         f"{visual}"
                     )[:1000],
                     model=img_model,

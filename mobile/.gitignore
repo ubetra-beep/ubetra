@@ -5,9 +5,13 @@ dist/
 .idea/
 *.iml
 .gradle/
+build/
 local.properties
 google-services.json
 *.jks
 *.keystore
 keystore/password
 *.apk
+www/shell.html
+www/assets/
+www/sw.js

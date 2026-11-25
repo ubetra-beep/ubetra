@@ -142,18 +142,25 @@ def generate_playtime_scene(
             f"{avoid_summary.strip()[:800]}\n"
         )
     note_block = f"User direction for the new scene: {note.strip()}\n" if note.strip() else ""
+    gear_block = ""
+    gear_images: list[str] = []
+    if db is not None and dynamic is not None:
+        from .gear_art import scene_gear_prompt
+
+        gear_block, gear_images = scene_gear_prompt(db, dynamic)
 
     prompt = f"""Create ONE concrete playtime scene for this couple.
 
 Subject: {subject.strip()}
 Effort level: {effort_label}
 Desire lean: {lean_label}
-{avoid_block}{note_block}
+{avoid_block}{note_block}{gear_block}
 Constraints:
 - Match the effort budget strictly (especially Low = under ~5 minutes).
 - Stay inside negotiated interests and boundaries from context.
 - Be specific and actionable for a dominant/keyholder to run.
 - Do not invent app features, device control, or third parties.
+- If gear photos are attached, use those real objects and do not invent extra toys.
 
 Return ONLY valid JSON (no markdown):
 {{
@@ -169,6 +176,7 @@ Return ONLY valid JSON (no markdown):
         dynamic=dynamic,
         tool_id="playtime",
         db=db,
+        image_data_urls=gear_images or None,
     )
     data = _extract_json(raw)
     if not isinstance(data, dict):
