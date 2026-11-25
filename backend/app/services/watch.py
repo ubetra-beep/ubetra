@@ -680,6 +680,7 @@ def _sleep_block(
                 "night_date": night.night_date if night else None,
                 "duration_min": night.duration_min if night else None,
                 "duration_label": format_duration(night.duration_min * 60) if night else None,
+                "start_at": night.start_at if night else None,
                 "end_at": night.end_at if night else None,
             }
         )
@@ -716,6 +717,7 @@ def _cycle_block(
                 "last_period_start": summary.last_period_start,
                 "predicted_next": summary.predicted_next,
                 "typical_length": summary.typical_length,
+                "period_length": summary.period_length,
                 "today_flow": (today_row.flow if today_row else "") or "",
             }
         )

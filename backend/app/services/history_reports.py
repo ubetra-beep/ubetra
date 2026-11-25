@@ -85,6 +85,29 @@ def _month_keys(period_start: date, period_end: date) -> list[str]:
     return keys
 
 
+def _last_full_orgasm_date(db: Session, dynamic_id: str, membership_id: str) -> date | None:
+    rows = (
+        db.query(OrgTrackingEntry)
+        .options(joinedload(OrgTrackingEntry.orgasms))
+        .filter(
+            OrgTrackingEntry.dynamic_id == dynamic_id,
+            OrgTrackingEntry.for_membership_id == membership_id,
+        )
+        .all()
+    )
+    latest = None
+    for entry in rows:
+        if not is_orgasm_event(entry.event_type) or not entry_counts_as_full_orgasm(entry):
+            continue
+        occurred = as_naive_utc(entry.occurred_at) or entry.occurred_at
+        if occurred is None:
+            continue
+        day = occurred.date()
+        if latest is None or day > latest:
+            latest = day
+    return latest
+
+
 def _chastity_days_bounds(
     db: Session,
     dynamic_id: str,
@@ -121,17 +144,32 @@ def build_chastity_days_report(
     *,
     year: int,
     since_first: bool = False,
+    since_recent: bool = False,
 ) -> dict:
     now = datetime.utcnow()
     tracked_subs = chastity_subs(memberships)
-    period_start, period_end, year, since_first, range_start = _chastity_days_bounds(
-        db,
-        dynamic_id,
-        [s.id for s in tracked_subs],
-        year,
-        since_first,
-        now,
-    )
+    partner_start: dict[str, date] = {}
+    if since_recent:
+        today = now.date()
+        floor = today - timedelta(days=21)
+        for sub in tracked_subs:
+            last = _last_full_orgasm_date(db, dynamic_id, sub.id)
+            partner_start[sub.id] = floor if last is None else min(floor, last)
+        earliest = min(partner_start.values()) if partner_start else floor
+        period_start = datetime(earliest.year, earliest.month, earliest.day)
+        period_end = now
+        year = earliest.year
+        since_first = False
+        range_start = earliest.isoformat()
+    else:
+        period_start, period_end, year, since_first, range_start = _chastity_days_bounds(
+            db,
+            dynamic_id,
+            [s.id for s in tracked_subs],
+            year,
+            since_first,
+            now,
+        )
     lockups = (
         db.query(ChastityLockup)
         .options(joinedload(ChastityLockup.breaks))
@@ -220,7 +258,11 @@ def build_chastity_days_report(
                 first_lock = started
         first_day = first_lock.date() if first_lock is not None else None
         for day in day_list:
-            if first_day is None or day < first_day:
+            window = partner_start.get(sub.id)
+            if window is not None:
+                if day < window:
+                    continue
+            elif first_day is None or day < first_day:
                 continue
             status, locked = calendar_day_status(
                 lockups, sub.id, day, period_end=period_end

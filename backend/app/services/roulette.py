@@ -656,10 +656,50 @@ def public_state(db: Session, dynamic_id: str, *, you_are_dominant: bool, now: d
         enabled = bool(row.enabled)
         mode = row.mode if row.mode in ("virtual", "logged") else "virtual"
         db.commit()
-    return _public(state, enabled=enabled, mode=mode, you_are_dominant=you_are_dominant, now=now)
+    return _public(state, enabled=enabled, mode=mode, you_are_dominant=you_are_dominant, now=now, db=db, dynamic_id=dynamic_id)
 
 
-def _public(state: dict, *, enabled: bool, mode: str, you_are_dominant: bool, now: datetime) -> dict:
+def _log_pull_tally(db: Session, dynamic_id: str, start: datetime) -> dict:
+    """Count ruin, denial, and orgasm logs for the sub since the game started."""
+    tally = {"R": 0, "D": 0, "O": 0, "total": 0}
+    subs = [
+        row.id
+        for row in db.query(Membership.id)
+        .filter(Membership.dynamic_id == dynamic_id, Membership.role == PartnerRole.submissive)
+        .all()
+    ]
+    if not subs:
+        return tally
+    entries = (
+        db.query(OrgTrackingEntry)
+        .options(joinedload(OrgTrackingEntry.orgasms))
+        .filter(
+            OrgTrackingEntry.dynamic_id == dynamic_id,
+            OrgTrackingEntry.for_membership_id.in_(subs),
+            OrgTrackingEntry.occurred_at >= start,
+        )
+        .all()
+    )
+    alias = {"grant-O": "O", "stolen-O": "O", "grant-R": "R", "stolen-R": "R"}
+    for entry in entries:
+        marble = alias.get(_classify(entry) or "", "")
+        if marble not in ("R", "D", "O"):
+            continue
+        tally[marble] += 1
+        tally["total"] += 1
+    return tally
+
+
+def _public(
+    state: dict,
+    *,
+    enabled: bool,
+    mode: str,
+    you_are_dominant: bool,
+    now: datetime,
+    db: Session | None = None,
+    dynamic_id: str = "",
+) -> dict:
     bag = state["bag"]
     day = campaign_day(state, now)
     if day < 30:
@@ -747,6 +787,9 @@ def _public(state: dict, *, enabled: bool, mode: str, you_are_dominant: bool, no
             "draws": session.get("draws") or [],
         },
         "history": list(reversed(state.get("history") or []))[:12],
+        "pull_tally": _log_pull_tally(db, dynamic_id, _parse(state.get("campaign_started_at")))
+        if db is not None and dynamic_id
+        else {"R": 0, "D": 0, "O": 0, "total": 0},
     }
 
 
@@ -828,7 +871,7 @@ def update_settings(
         advance(state, now, logs)
         row.state_json = _dump(state)
     db.commit()
-    return _public(state, enabled=bool(enabled), mode=mode, you_are_dominant=you_are_dominant, now=now)
+    return _public(state, enabled=bool(enabled), mode=mode, you_are_dominant=you_are_dominant, now=now, db=db, dynamic_id=dynamic_id)
 
 
 def _mutate(db: Session, dynamic_id: str, you_are_dominant: bool, action) -> dict:
@@ -841,7 +884,7 @@ def _mutate(db: Session, dynamic_id: str, you_are_dominant: bool, action) -> dic
     row.state_json = _dump(state)
     row.updated_at = now
     db.commit()
-    return _public(state, enabled=True, mode=row.mode, you_are_dominant=you_are_dominant, now=now)
+    return _public(state, enabled=True, mode=row.mode, you_are_dominant=you_are_dominant, now=now, db=db, dynamic_id=dynamic_id)
 
 
 def perform_draw(db: Session, dynamic_id: str, *, you_are_dominant: bool) -> dict:
@@ -873,7 +916,7 @@ def set_rules(db: Session, dynamic_id: str, *, rules: dict, you_are_dominant: bo
     row.state_json = _dump(state)
     row.updated_at = now
     db.commit()
-    return _public(state, enabled=bool(row.enabled), mode=row.mode or "virtual", you_are_dominant=True, now=now)
+    return _public(state, enabled=bool(row.enabled), mode=row.mode or "virtual", you_are_dominant=True, now=now, db=db, dynamic_id=dynamic_id)
 
 
 def perform_desperation(db: Session, dynamic_id: str, *, you_are_dominant: bool) -> dict:
@@ -1067,7 +1110,7 @@ def set_bag(
     row.state_json = _dump(state)
     row.updated_at = now
     db.commit()
-    return _public(state, enabled=bool(row.enabled), mode=row.mode, you_are_dominant=you_are_dominant, now=now)
+    return _public(state, enabled=bool(row.enabled), mode=row.mode, you_are_dominant=you_are_dominant, now=now, db=db, dynamic_id=dynamic_id)
 
 
 def approve_bag(db: Session, dynamic_id: str, *, you_are_dominant: bool) -> dict:
@@ -1085,7 +1128,7 @@ def approve_bag(db: Session, dynamic_id: str, *, you_are_dominant: bool) -> dict
     row.state_json = _dump(state)
     row.updated_at = now
     db.commit()
-    return _public(state, enabled=True, mode=row.mode, you_are_dominant=True, now=now)
+    return _public(state, enabled=True, mode=row.mode, you_are_dominant=True, now=now, db=db, dynamic_id=dynamic_id)
 
 
 def deny_bag(db: Session, dynamic_id: str, *, you_are_dominant: bool) -> dict:
@@ -1103,7 +1146,7 @@ def deny_bag(db: Session, dynamic_id: str, *, you_are_dominant: bool) -> dict:
     row.state_json = _dump(state)
     row.updated_at = now
     db.commit()
-    return _public(state, enabled=True, mode=row.mode, you_are_dominant=True, now=now)
+    return _public(state, enabled=True, mode=row.mode, you_are_dominant=True, now=now, db=db, dynamic_id=dynamic_id)
 
 
 def log_decision(
@@ -1157,7 +1200,7 @@ def log_decision(
     row.state_json = _dump(state)
     row.updated_at = now
     db.commit()
-    return _public(state, enabled=True, mode=row.mode, you_are_dominant=True, now=now)
+    return _public(state, enabled=True, mode=row.mode, you_are_dominant=True, now=now, db=db, dynamic_id=dynamic_id)
 
 
 def request_start(db: Session, dynamic_id: str, *, started_on: str, you_are_dominant: bool) -> dict:
@@ -1179,7 +1222,7 @@ def request_start(db: Session, dynamic_id: str, *, started_on: str, you_are_domi
         advance(state, now, logs)
         row.state_json = _dump(state)
     db.commit()
-    return _public(state, enabled=bool(row.enabled), mode=row.mode or "virtual", you_are_dominant=False, now=now)
+    return _public(state, enabled=bool(row.enabled), mode=row.mode or "virtual", you_are_dominant=False, now=now, db=db, dynamic_id=dynamic_id)
 
 
 def dismiss_start_request(db: Session, dynamic_id: str, *, you_are_dominant: bool) -> dict:
@@ -1194,7 +1237,7 @@ def dismiss_start_request(db: Session, dynamic_id: str, *, you_are_dominant: boo
     row.state_json = _dump(state)
     row.updated_at = now
     db.commit()
-    return _public(state, enabled=bool(row.enabled), mode=row.mode or "virtual", you_are_dominant=True, now=now)
+    return _public(state, enabled=bool(row.enabled), mode=row.mode or "virtual", you_are_dominant=True, now=now, db=db, dynamic_id=dynamic_id)
 
 
 def perform_infraction(db: Session, dynamic_id: str, *, you_are_dominant: bool) -> dict:
@@ -1207,7 +1250,7 @@ def perform_infraction(db: Session, dynamic_id: str, *, you_are_dominant: bool) 
     row.state_json = _dump(state)
     row.updated_at = now
     db.commit()
-    return _public(state, enabled=True, mode=row.mode, you_are_dominant=you_are_dominant, now=now)
+    return _public(state, enabled=True, mode=row.mode, you_are_dominant=you_are_dominant, now=now, db=db, dynamic_id=dynamic_id)
 
 
 def perform_penalty(db: Session, dynamic_id: str, *, you_are_dominant: bool) -> dict:
@@ -1436,4 +1479,4 @@ def set_grant_rules(db: Session, dynamic_id: str, rules: list[dict], *, you_are_
     row.state_json = _dump(state)
     row.updated_at = now
     db.commit()
-    return _public(state, enabled=bool(row.enabled), mode=row.mode or "virtual", you_are_dominant=you_are_dominant, now=now)
+    return _public(state, enabled=bool(row.enabled), mode=row.mode or "virtual", you_are_dominant=you_are_dominant, now=now, db=db, dynamic_id=dynamic_id)

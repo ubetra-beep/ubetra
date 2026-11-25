@@ -1300,16 +1300,22 @@ textarea {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
+  transition: transform 0.22s ease;
   bottom: 0;
   width: 100%;
   max-width: 720px;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 0.15rem;
   padding: 0.45rem max(0.35rem, env(safe-area-inset-right, 0px)) calc(0.65rem + env(safe-area-inset-bottom, 0px)) max(0.35rem, env(safe-area-inset-left, 0px));
   background: var(--top-bar-bg, rgba(20, 20, 20, 0.98));
   border-top: 1px solid var(--border);
   z-index: 20;
+}
+
+.bottom-nav.nav-away {
+  transform: translateX(-50%) translateY(120%);
+  pointer-events: none;
 }
 
 .nav-tab {
@@ -2563,6 +2569,20 @@ textarea {
   margin: 0;
   width: 1.05rem;
   height: 1.05rem;
+}
+
+.log-for-choice {
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  padding: 0.4rem 0.65rem;
+}
+
+.log-for-choice.log-for-sub {
+  border-color: #2f9e5f;
+}
+
+.log-for-choice.log-for-domme {
+  border-color: #c97b4a;
 }
 
 .brand-link {
@@ -5112,6 +5132,31 @@ details[open] summary {
   object-fit: contain;
   background: #000;
 }
+.instructor-stage-wrap.instructor-preview-ended .instructor-media {
+  width: 42px;
+  height: 42px;
+  max-width: 42px;
+  max-height: 42px;
+  align-self: flex-start;
+}
+.today-sleep-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  width: 100%;
+}
+.today-sleep-person {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.today-card-value.sleep-red { color: #dc4a4a; }
+.today-card-value.sleep-yellow { color: #d4a017; }
+.today-card-value.sleep-green { color: #2f9e5f; }
+.brand.period-mark {
+  transition: color 0.6s linear;
+}
 .instructor-instruction {
   position: relative;
   margin: 0;
@@ -5953,14 +5998,24 @@ details[open] summary {
   flex-shrink: 0;
 }
 
-.roulette-slide-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+.roulette-pie {
+  width: min(220px, 70vw);
+  height: auto;
+  align-self: center;
 }
 
-.roulette-slide {
-  width: 100%;
+.roulette-twofinger {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  min-height: 4.2rem;
+  touch-action: none;
+}
+
+.roulette-result {
+  text-align: center;
+  margin: 0;
 }
 
 .roulette-chart-row {

@@ -1,7 +1,7 @@
 const API = "/api";
 const TOKEN_KEY = "ubetra_token";
 /** Keep in sync with frontend/sw.js CACHE when shipping UI. */
-const CLIENT_SW_CACHE = "ubetra-v175";
+const CLIENT_SW_CACHE = "ubetra-v182";
 const THEME_KEY = "ubetra_theme";
 const THEME_OPTIONS = [
   { id: "midnight", label: "Midnight", themeColor: "#1a1a1a", swatchA: "#c084fc", swatchB: "#a855f7" },
@@ -143,7 +143,6 @@ applyIconStyle(getIconStyle(), { persist: true });
 
 const NAV_TABS = [
   { id: "today", label: "Today", icon: "◎", requiresDynamic: true },
-  { id: "log", label: "Log", icon: "＋", requiresDynamic: true },
   { id: "play", label: "Play", icon: "▶", requiresDynamic: true },
   { id: "chat", label: "Chat", icon: "💬", requiresDynamic: true },
   { id: "more", label: "More", icon: "⋯", requiresDynamic: false },
@@ -159,6 +158,7 @@ const FACET_SECTIONS = [
       { id: "interview", icon: "🎙", title: "Dynamic interview", subtitle: "Tell the AI what you want here", core: true, route: "interview", badge: "interview" },
       { id: "check_in", icon: "🪞", title: "Relationship check-in", subtitle: "Quarterly AI review for both of you", core: true, route: "check-in" },
       { id: "kink_list", icon: "📋", title: "Kink list", subtitle: "Want / if partner / not into", core: true, route: "survey", badge: "survey" },
+      { id: "gear", icon: "🧰", title: "Gear", subtitle: "Vanilla toys, kinky stuff, outfits", route: "gear" },
     ],
   },
   {
@@ -175,8 +175,8 @@ const FACET_SECTIONS = [
 /** Facets linked from Today under More tracking. */
 const TRACKING_FACETS = [
   { id: "history", icon: "📊", title: "History", subtitle: "Days in chastity", route: "history", core: true },
-  { id: "chastity", icon: "🔒", title: "Chastity tracking", subtitle: "Lockup stats and current lock time", route: "chastity" },
-  { id: "org_tracking", icon: "📈", title: "Sex & orgasm tracking", subtitle: "Counts and recent activity", route: "tracking" },
+  { id: "chastity", icon: "🔒", title: "Tracking", subtitle: "Calendar", route: "chastity" },
+  { id: "org_tracking", icon: "📈", title: "Sex tracking", subtitle: "Counts and recent activity", route: "tracking" },
   { id: "feelings", icon: "💫", title: "Feelings tracking", subtitle: "Wheel check-ins before/after play", route: "feelings" },
   {
     id: "sleep_tracking",
@@ -222,13 +222,6 @@ const PLAYTIME_FACETS = [
     route: "instructor",
     core: true,
   },
-  {
-    id: "gear",
-    icon: "🧰",
-    title: "Gear",
-    subtitle: "Vanilla toys, kinky stuff, outfits",
-    route: "gear",
-  },
 ];
 
 const PLAYTIME_EXTRA_FACETS = [];
@@ -247,6 +240,23 @@ const settingsBtn = document.getElementById("settings-btn");
 const updateBadgeBtn = document.getElementById("update-badge-btn");
 const installPwaBtn = document.getElementById("install-pwa-btn");
 const bottomNavEl = document.getElementById("bottom-nav");
+
+if (viewEl) {
+  viewEl.addEventListener("scroll", (event) => {
+    const scroller = event.target;
+    if (!bottomNavEl || !scroller || typeof scroller.scrollTop !== "number") return;
+    if (bottomNavEl.classList.contains("hidden")) return;
+    const y = scroller.scrollTop;
+    const previous = Number(scroller.dataset.navScrollY || "0");
+    scroller.dataset.navScrollY = String(y);
+    const delta = y - previous;
+    const canScroll = scroller.scrollHeight > scroller.clientHeight + 8;
+    const nearEnd = canScroll && y + scroller.clientHeight >= scroller.scrollHeight - 48;
+    if (y < 12) bottomNavEl.classList.remove("nav-away");
+    else if (nearEnd || delta > 8) bottomNavEl.classList.add("nav-away");
+    else if (delta < -8) bottomNavEl.classList.remove("nav-away");
+  }, { passive: true, capture: true });
+}
 const topBarEl = document.getElementById("top-bar");
 const appBrandEl = document.getElementById("app-brand");
 const domGoalMetersEl = document.getElementById("dom-goal-meters");
@@ -2400,9 +2410,8 @@ function parseTimeOfDay(value) {
 function formatTimeOfDay(value) {
   const t = parseTimeOfDay(value);
   if (!t) return "";
-  const d = new Date();
-  d.setHours(t.h, t.min, 0, 0);
-  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const d = new Date(Date.UTC(2020, 0, 1, t.h, t.min, 0));
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: "UTC" });
 }
 
 function isSleepUnlockRecord(brk) {
@@ -2416,10 +2425,33 @@ function isSleepPreset(preset) {
   return String(preset?.break_type || "").includes("sleep") || String(preset?.name || "").toLowerCase().includes("sleep");
 }
 
+function zonedDateParts(date) {
+  const tz = displayTimeZone();
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz || undefined,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = {};
+  fmt.formatToParts(date).forEach((part) => {
+    if (part.type !== "literal") parts[part.type] = part.value;
+  });
+  if (parts.hour === "24") parts.hour = "00";
+  return parts;
+}
+
 function localMinutesOf(iso) {
   const d = parseServerDate(iso);
   if (!d || Number.isNaN(d.getTime())) return null;
-  return d.getHours() * 60 + d.getMinutes();
+  const parts = zonedDateParts(d);
+  const hour = Number(parts.hour);
+  const minute = Number(parts.minute);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return hour * 60 + minute;
 }
 
 function circularMeanMinutes(minutes) {
@@ -2444,19 +2476,15 @@ function minutesToTimeOfDay(mins) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function averageSleepUnlockTimes(lockups, membershipId) {
+function averageFromClockPairs(pairs) {
   const starts = [];
   const ends = [];
-  (lockups || []).forEach((lockup) => {
-    if (membershipId && lockup.for_membership_id !== membershipId) return;
-    (lockup.breaks || []).forEach((brk) => {
-      if (!brk.ended_at || !isSleepUnlockRecord(brk)) return;
-      const start = localMinutesOf(brk.started_at);
-      const end = localMinutesOf(brk.ended_at);
-      if (start == null || end == null) return;
-      starts.push(start);
-      ends.push(end);
-    });
+  pairs.forEach((pair) => {
+    const start = localMinutesOf(pair.start);
+    const end = localMinutesOf(pair.end);
+    if (start == null || end == null) return;
+    starts.push(start);
+    ends.push(end);
   });
   if (!starts.length) return null;
   return {
@@ -2466,15 +2494,45 @@ function averageSleepUnlockTimes(lockups, membershipId) {
   };
 }
 
-function sleepPresetWithAverage(preset, lockups, membershipId) {
+function averageSleepUnlockTimes(lockups, membershipId, sessions) {
+  const nights = typeof groupSleepNights === "function" ? groupSleepNights(sessions || []) : [];
+  const fromNights = averageFromClockPairs(
+    nights
+      .filter((night) => !membershipId || night.subject_membership_id === membershipId)
+      .filter((night) => (Number(night.duration_min) || 0) >= 180)
+      .slice(0, 30)
+      .map((night) => ({ start: night.start_at, end: night.end_at }))
+  );
+  if (fromNights) return { ...fromNights, from: "nights" };
+  const breaks = [];
+  (lockups || []).forEach((lockup) => {
+    if (membershipId && lockup.for_membership_id !== membershipId) return;
+    (lockup.breaks || []).forEach((brk) => {
+      if (!brk.ended_at || !isSleepUnlockRecord(brk)) return;
+      breaks.push({ start: brk.started_at, end: brk.ended_at });
+    });
+  });
+  const fromBreaks = averageFromClockPairs(breaks.slice(-30));
+  if (!fromBreaks) return null;
+  return { ...fromBreaks, from: "unlocks" };
+}
+
+function sleepPresetWithAverage(preset, lockups, membershipId, sessions) {
   const base = preset || { name: "Sleep", break_type: "authorized_sleep", start: "23:00", end: "07:00" };
   if (!isSleepPreset(base)) return { preset: base, average: null };
-  const average = averageSleepUnlockTimes(lockups, membershipId);
+  const average = averageSleepUnlockTimes(lockups, membershipId, sessions);
   if (!average) return { preset: base, average: null };
   return {
     preset: { ...base, start: average.start, end: average.end },
     average,
   };
+}
+
+function sleepAverageSentence(average) {
+  if (!average) return "";
+  const noun = average.from === "nights" ? "night" : "Sleep unlock";
+  const plural = average.count === 1 ? noun : `${noun}s`;
+  return `Sleep times are the average of ${average.count} past ${plural}: unlock ${formatTimeOfDay(average.start)}, locked again ${formatTimeOfDay(average.end)}.`;
 }
 
 function presetWindowForDate(day, preset) {
@@ -4908,7 +4966,7 @@ function updateBottomNav() {
   const enabledFeatures = state.currentDynamic?.enabled_features || [];
   const playtimeOn =
     !enabledFeatures.length || enabledFeatures.includes("scene_workshop");
-  const playtimeRoutes = new Set(["assistant", "tasks", "acts", "instructor", "gear"]);
+  const playtimeRoutes = new Set(["assistant", "tasks", "acts", "instructor"]);
   let activeTab = "today";
   if (navSheet === "log") activeTab = "log";
   else if (navSheet === "more") activeTab = "more";
@@ -4931,7 +4989,6 @@ function updateBottomNav() {
             closeNavSheets();
             navigate(`/dynamic/${dynamicId}/track`);
           }
-          if (tab.id === "log" && dynamicId) openQuickLogSheet(dynamicId);
           if (tab.id === "play" && dynamicId) {
             closeNavSheets();
             navigate(`/dynamic/${dynamicId}/assistant`);
@@ -4954,6 +5011,7 @@ function updateBottomNav() {
     })
   );
   if (window.UbetraPhone) window.UbetraPhone.paint();
+  refreshPeriodBrand(dynamicId);
 }
 
 /** Hub title row with Application features hamburger. */
@@ -6537,6 +6595,107 @@ function chastityDayStatusLine(status) {
   return "Free. No lockup covers this day.";
 }
 
+function openTrackingDayChooser(dynamicId, day, { membershipId = "", onChanged } = {}) {
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const card = el("div", { className: "card stack modal-card" }, [
+    el("h3", {}, day.date || "Day"),
+    el("button", {
+      type: "button",
+      className: "choice-btn playtime-option",
+      onClick: () => {
+        backdrop.remove();
+        openChastityDaySheet(dynamicId, day, { membershipId, onChanged });
+      },
+    }, [
+      el("strong", {}, "Chastity log"),
+      el("span", { className: "muted" }, "Lockup for this day"),
+    ]),
+    el("button", {
+      type: "button",
+      className: "choice-btn playtime-option",
+      onClick: () => {
+        backdrop.remove();
+        openOrgasmDaySheet(dynamicId, day, { membershipId, onChanged });
+      },
+    }, [
+      el("strong", {}, "Orgasm log"),
+      el("span", { className: "muted" }, "Entry for this day"),
+    ]),
+    el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Close"),
+  ]);
+  backdrop.appendChild(card);
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+}
+
+function localDayKey(value) {
+  const parsed = parseServerDate(value);
+  if (!parsed || Number.isNaN(parsed.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`;
+}
+
+async function openOrgasmDaySheet(dynamicId, day, { membershipId = "", onChanged } = {}) {
+  const backdrop = el("div", { className: "modal-backdrop" });
+  const card = el("div", { className: "card stack modal-card" }, [
+    el("h3", {}, day.date || "Orgasm log"),
+    el("p", { className: "muted" }, "Loading…"),
+  ]);
+  backdrop.appendChild(card);
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+  try {
+    const [entries, dynamic] = await Promise.all([
+      api(`/dynamics/${dynamicId}/tracking`),
+      loadDynamic(dynamicId).then(() => state.currentDynamic),
+    ]);
+    const partners = dynamic?.partners || [];
+    const matches = (entries || []).filter((entry) => {
+      if (localDayKey(entry.occurred_at) !== day.date) return false;
+      if (membershipId && entry.for_membership_id !== membershipId) return false;
+      return true;
+    });
+    const body = [
+      el("h3", {}, day.date || "Orgasm log"),
+      el("button", {
+        type: "button",
+        className: "primary-btn",
+        onClick: () => {
+          backdrop.remove();
+          navigate(`/dynamic/${dynamicId}/tracking?on=${encodeURIComponent(day.date || "")}`);
+        },
+      }, "New orgasm log"),
+    ];
+    if (!matches.length) body.push(el("p", { className: "muted" }, "No orgasm log on this day."));
+    matches.forEach((entry) => {
+      body.push(el("button", {
+        type: "button",
+        className: "ghost-btn",
+        onClick: () => {
+          card.replaceChildren(buildTrackingEntryEditCard(dynamicId, entry, partners, {
+            onSaved: () => {
+              backdrop.remove();
+              onChanged?.();
+            },
+            onCancel: () => {
+              backdrop.remove();
+              openOrgasmDaySheet(dynamicId, day, { membershipId, onChanged });
+            },
+          }));
+        },
+      }, `Edit ${entry.for_display_name || "log"} · ${formatLogWhen(entry.occurred_at)}`));
+    });
+    body.push(el("button", { type: "button", className: "ghost-btn", onClick: () => backdrop.remove() }, "Close"));
+    card.replaceChildren(...body);
+  } catch (err) {
+    card.replaceChildren(el("p", { className: "error" }, err.message || "Could not load orgasm logs."));
+  }
+}
+
 async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChanged } = {}) {
   const backdrop = el("div", { className: "modal-backdrop" });
   const card = el("div", { className: "card stack modal-card" }, [
@@ -6549,10 +6708,11 @@ async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChang
   });
   document.body.appendChild(backdrop);
   try {
-    const [lockups, coveringRaw, settings] = await Promise.all([
+    const [lockups, coveringRaw, settings, sleepSessions] = await Promise.all([
       api(`/dynamics/${dynamicId}/chastity`),
       api(`/dynamics/${dynamicId}/chastity?on=${encodeURIComponent(day.date || "")}`),
       api(`/dynamics/${dynamicId}/chastity/settings`).catch(() => ({ unlock_presets: [] })),
+      api(`/dynamics/${dynamicId}/sleep`).catch(() => []),
     ]);
     const covering = (coveringRaw || []).filter((lockup) => {
       if (membershipId && lockup.for_membership_id !== membershipId) return false;
@@ -6561,7 +6721,7 @@ async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChang
     const configuredSleep = (settings.unlock_presets || []).find((preset) => isSleepPreset(preset))
       || { name: "Sleep", break_type: "authorized_sleep", start: "23:00", end: "07:00" };
     const memberId = membershipId || covering[0]?.for_membership_id || "";
-    const { preset: sleep, average: sleepAverage } = sleepPresetWithAverage(configuredSleep, lockups, memberId);
+    const { preset: sleep, average: sleepAverage } = sleepPresetWithAverage(configuredSleep, lockups, memberId, sleepSessions);
     const startInput = el("input", { type: "datetime-local" });
     const endInput = el("input", { type: "datetime-local" });
     const lockupSelect = el("select");
@@ -6578,7 +6738,7 @@ async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChang
     function applySleepWindow() {
       const chosen = chosenLockup();
       if (!chosen) return null;
-      const next = sleepPresetWithAverage(configuredSleep, lockups, chosen.for_membership_id || memberId);
+      const next = sleepPresetWithAverage(configuredSleep, lockups, chosen.for_membership_id || memberId, sleepSessions);
       const span = sleepSpanForDay(day.date, next.preset, chosen);
       if (!span) {
         clipNote.textContent = "The usual sleep window does not fall inside this lockup on this day.";
@@ -6630,7 +6790,7 @@ async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChang
       el("div", { className: "stack" }, covering.map((lockup) => el("p", {}, `${lockup.status} · ${formatLocalDateTime(lockup.started_at)} – ${lockup.ended_at ? formatLocalDateTime(lockup.ended_at) : "ongoing"}`))),
       covering.length > 1 ? el("label", { className: "stack" }, ["Lockup", lockupSelect]) : null,
       sleepAverage
-        ? el("p", { className: "muted" }, `Sleep times are the average of ${sleepAverage.count} past Sleep unlock${sleepAverage.count === 1 ? "" : "s"}: unlock ${formatTimeOfDay(sleepAverage.start)}, locked again ${formatTimeOfDay(sleepAverage.end)}.`)
+        ? el("p", { className: "muted" }, sleepAverageSentence(sleepAverage))
         : null,
       clipNote,
       el("button", {
@@ -6751,7 +6911,7 @@ async function openChastityDaySheet(dynamicId, day, { membershipId = "", onChang
   }
 }
 
-function renderChastityDayCell(day, { dynamicId = "", membershipId = "", onChanged } = {}) {
+function renderChastityDayCell(day, { dynamicId = "", membershipId = "", onChanged, chooser = false } = {}) {
   const dayNum = String(new Date(`${day.date}T12:00:00`).getDate());
   const hours = day.sleep_hours;
   const hasSleep = hours != null && Number(hours) > 0;
@@ -6764,7 +6924,10 @@ function renderChastityDayCell(day, { dynamicId = "", membershipId = "", onChang
     className: "chastity-day",
     title: title.join(" · "),
     onClick: () => {
-      if (dynamicId) openChastityDaySheet(dynamicId, day, { membershipId, onChanged });
+      if (!dynamicId) return;
+      const opts = { membershipId, onChanged };
+      if (chooser) openTrackingDayChooser(dynamicId, day, opts);
+      else openChastityDaySheet(dynamicId, day, opts);
     },
   });
   if (hasSleep) {
@@ -6791,7 +6954,7 @@ function renderChastityDayCell(day, { dynamicId = "", membershipId = "", onChang
   return host;
 }
 
-function renderChastityCalendar(days, { dynamicId = "", membershipId = "", onChanged } = {}) {
+function renderChastityCalendar(days, { dynamicId = "", membershipId = "", onChanged, chooser = false, quiet = false } = {}) {
   const byMonth = {};
   days.forEach((d) => {
     const key = d.date.slice(0, 7);
@@ -6805,14 +6968,16 @@ function renderChastityCalendar(days, { dynamicId = "", membershipId = "", onCha
     ]);
     const grid = el("div", { className: "chastity-day-grid" });
     byMonth[monthKey].forEach((day) => {
-      grid.appendChild(renderChastityDayCell(day, { dynamicId, membershipId, onChanged }));
+      grid.appendChild(renderChastityDayCell(day, { dynamicId, membershipId, onChanged, chooser }));
     });
     monthEl.appendChild(grid);
     wrap.appendChild(monthEl);
   });
-  wrap.appendChild(el("p", { className: "muted" }, "Bright = full calendar day locked (breaks ≤20m) · Outlined = partial (2h+) · Dim = free · Whole days = rolling 24h streaks"));
-  wrap.appendChild(el("p", { className: "muted" }, "Sleep ring = night ending that morning. Solid = slept locked · Dotted = slept unlocked. Red < 6.6h · Yellow 6.6–7.2h · Green > 7.2h"));
-  wrap.appendChild(el("p", { className: "muted" }, "Dots: red = denied / milking / partial-milking · blue = ruined orgasm · green = full orgasm"));
+  if (!quiet) {
+    wrap.appendChild(el("p", { className: "muted" }, "Bright = full calendar day locked (breaks ≤20m) · Outlined = partial (2h+) · Dim = free · Whole days = rolling 24h streaks"));
+    wrap.appendChild(el("p", { className: "muted" }, "Sleep ring = night ending that morning. Solid = slept locked · Dotted = slept unlocked. Red < 6.6h · Yellow 6.6–7.2h · Green > 7.2h"));
+    wrap.appendChild(el("p", { className: "muted" }, "Dots: red = denied / milking / partial-milking · blue = ruined orgasm · green = full orgasm"));
+  }
   return wrap;
 }
 
@@ -7647,7 +7812,7 @@ function renderHistoryReport(dynamicId, reportId) {
             className: "link-btn",
             type: "button",
             onClick: () => navigate(`/dynamic/${id}/chastity`),
-          }, "Chastity tracking →"),
+          }, "Tracking →"),
         ]);
       })
       .catch((err) => historyReportShell(id, report.title, el("p", { className: "error" }, err.message)));
@@ -8943,11 +9108,11 @@ function openMoreSheet(dynamicId) {
           return;
         }
         closeNavSheets();
-        navigate(`/dynamic/${dynamicId}/assistant/games`);
+        navigate(`/dynamic/${dynamicId}/assistant/games/toys`);
       },
     }, [
-      el("span", {}, "Games"),
-      el("span", { className: "muted" }, "Orgasm Roulette and toy spin"),
+      el("span", {}, "Toy spin"),
+      el("span", { className: "muted" }, "Pick an owned toy"),
     ]));
   }
   buttons.push(el("button", {
@@ -9117,33 +9282,121 @@ function todayCouldNot(label) {
   ]);
 }
 
-function todayOrgasmCard(dynamicId, stats) {
-  const partners = (stats && stats.partners) || [];
-  const total = partners.reduce((acc, partner) => acc + (Number(partner.orgasm_count) || 0), 0);
-  const bars = todayOrgasmBars(stats);
-  let max = 1;
-  bars.forEach((count) => {
-    if (count > max) max = count;
-  });
-  const spark = el("span", { className: "today-spark", "aria-hidden": "true" });
-  bars.forEach((count) => {
-    const bar = el("span", { className: "today-spark-bar" });
-    const height = Math.round((count / max) * 100);
-    bar.style.height = `${Math.max(height, count > 0 ? 18 : 8)}%`;
-    spark.appendChild(bar);
-  });
+function todayOrgasmWindow(roulette) {
+  const fallback = new Date();
+  fallback.setDate(fallback.getDate() - 30);
+  if (roulette && roulette.enabled && roulette.started_on) {
+    const start = parseServerDate(String(roulette.started_on).length === 10 ? `${roulette.started_on}T00:00:00Z` : roulette.started_on);
+    if (start && !Number.isNaN(start.getTime())) return { since: start, label: "This marble game" };
+  }
+  return { since: fallback, label: "Last 30 days" };
+}
+
+function orgasmTagKey(tag) {
+  return String(tag || "").toLowerCase().replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function tagListIsFullOrgasm(tags) {
+  const keys = (tags || []).map(orgasmTagKey).filter(Boolean);
+  const ruined = keys.some((tag) => tag.includes("ruin"));
+  const full = keys.some((tag) => tag === "full orgasm" || tag.startsWith("full orgasm") || (tag.includes("full") && tag.includes("orgasm")));
+  if (ruined && !full) return false;
+  if (full) return true;
+  const denied = keys.some((tag) => !tag.includes("ruin") && (tag.includes("denied") || tag.includes("denial") || tag === "deny"));
+  if (denied || keys.some((tag) => tag.includes("milk"))) return false;
+  return true;
+}
+
+function fullOrgasmCount(entry) {
+  if (!entry || (entry.event_type !== "orgasm" && entry.event_type !== "both")) return 0;
+  const rows = Array.isArray(entry.orgasms) ? entry.orgasms : [];
+  if (rows.length) {
+    return rows.reduce((acc, row) => acc + (tagListIsFullOrgasm(row.tags || []) ? 1 : 0), 0);
+  }
+  return tagListIsFullOrgasm(entry.tags || []) ? 1 : 0;
+}
+
+function todayOrgasmCard(dynamicId, entries, dynamic, roulette) {
+  const partners = (dynamic && dynamic.partners) || [];
+  const sub = partners.find((partner) => partner.role === "submissive");
+  const dom = partners.find((partner) => partner.role === "dominant");
+  const window = todayOrgasmWindow(roulette);
+  function countFor(id) {
+    if (!id) return 0;
+    return (entries || []).reduce((acc, entry) => {
+      if (entry.for_membership_id !== id) return acc;
+      const when = parseServerDate(entry.occurred_at);
+      if (!when || when < window.since) return acc;
+      return acc + fullOrgasmCount(entry);
+    }, 0);
+  }
+  const subCount = countFor(sub && sub.id);
+  const domCount = countFor(dom && dom.id);
+  const caption = `${(sub && sub.display_name) || "Sub"} : ${(dom && dom.display_name) || "Domme"} · ${window.label}`;
   return el("button", {
     type: "button",
     className: "today-card today-card-wide",
     onClick: () => navigate(`/dynamic/${dynamicId}/tracking`),
   }, [
-    el("span", { className: "today-card-kicker" }, "Orgasms · 7 days"),
-    el("span", { className: "today-card-row" }, [
-      el("strong", { className: "today-card-value" }, String(total)),
-      (stats && stats.cumulative_30d && stats.cumulative_30d.length > 1) ? spark : null,
-    ]),
-    el("span", { className: "muted" }, (stats && stats.recent_orgasm_label) || "Last 7 days"),
+    el("span", { className: "today-card-kicker" }, "Full orgasms"),
+    el("strong", { className: "today-card-value" }, `${subCount}:${domCount}`),
+    el("span", { className: "muted" }, caption),
   ]);
+}
+
+function todaySleepPeople(people) {
+  const row = el("span", { className: "today-sleep-row" });
+  people.forEach((person) => {
+    const band = person.hours == null ? "" : sleepHoursBand(person.hours);
+    const value = person.hours == null ? (person.fallback || "—") : `${person.hours.toFixed(1)}h`;
+    row.appendChild(el("span", { className: "today-sleep-person" }, [
+      el("span", { className: "muted" }, person.name || "Sleep"),
+      el("strong", { className: `today-card-value ${band}` }, value),
+      el("span", { className: "muted" }, person.label || ""),
+    ]));
+  });
+  return row;
+}
+
+function todaySleepPeopleCard(dynamicId, people) {
+  const body = people.length
+    ? todaySleepPeople(people)
+    : el("span", { className: "muted" }, "No nights yet");
+  return el("button", {
+    type: "button",
+    className: "today-card today-card-wide",
+    onClick: () => navigate(`/dynamic/${dynamicId}/sleep`),
+  }, [
+    el("span", { className: "today-card-kicker" }, "Sleep"),
+    body,
+  ]);
+}
+
+function latestSleepPeople(sessions, dynamic) {
+  const nights = groupSleepNights(sessions || []);
+  const latest = new Map();
+  nights.forEach((night) => {
+    const id = night.subject_membership_id || "";
+    const prev = latest.get(id);
+    if (!prev || sleepTimeMs(night.start_at) > sleepTimeMs(prev.start_at)) latest.set(id, night);
+  });
+  return [...latest.values()].map((night) => {
+    const who = ((dynamic && dynamic.partners) || []).find((partner) => partner.id === night.subject_membership_id);
+    return {
+      name: (who && who.display_name) || "Sleep",
+      hours: (Number(night.duration_min) || 0) / 60,
+      label: formatSleepNightTitle(night.end_at, night.start_at),
+    };
+  });
+}
+
+function glanceSleepPeople(nights) {
+  return (nights || []).filter((night) => night && (night.duration_min != null || night.duration_label)).map((night) => ({
+    name: night.name || "Sleep",
+    hours: night.duration_min == null ? null : Number(night.duration_min) / 60,
+    fallback: night.duration_label || "",
+    label: formatSleepNightTitle(night.end_at, night.start_at),
+  }));
 }
 
 function todaySleepGlanceCard(dynamicId, night) {
@@ -9295,6 +9548,50 @@ function markOfflineBodyCard(node, kind) {
   return node;
 }
 
+function periodFade(cycleDay, periodLength) {
+  const length = Math.max(1, Number(periodLength) || 5);
+  const day = Number(cycleDay) || 1;
+  const progress = Math.min(Math.max((day - 0.5) / length, 0), 1);
+  const edge = 0.22;
+  if (progress < edge) return progress / edge;
+  if (progress > 1 - edge) return (1 - progress) / edge;
+  return 1;
+}
+
+function paintPeriodBrand(dynamic, cycle) {
+  const brand = document.getElementById("app-brand");
+  if (!brand) return;
+  const dom = ((dynamic && dynamic.partners) || []).find((partner) => partner.role === "dominant");
+  const people = (cycle && (cycle.people || cycle)) || [];
+  const list = Array.isArray(people) ? people : [];
+  const person = list.find((row) => {
+    if (!dom) return !!row.on_period || !!(row.summary && row.summary.on_period);
+    return row.membership_id === dom.id || row.display_name === dom.display_name || row.name === dom.display_name;
+  });
+  const summary = (person && person.summary) || person || {};
+  if (!summary.on_period) {
+    brand.classList.remove("period-mark");
+    brand.style.color = "";
+    return;
+  }
+  const fade = periodFade(summary.cycle_day, summary.period_length);
+  brand.classList.add("period-mark");
+  brand.style.color = `rgba(214, 54, 78, ${(0.28 + 0.72 * fade).toFixed(3)})`;
+}
+
+let periodBrandFetched = 0;
+function refreshPeriodBrand(dynamicId) {
+  if (!dynamicId || !appBrandEl) return;
+  if (Date.now() - periodBrandFetched < 60000) return;
+  periodBrandFetched = Date.now();
+  api(`/dynamics/${dynamicId}/cycle`).then((cycle) => {
+    const known = state.currentDynamic && state.currentDynamic.id === dynamicId
+      ? state.currentDynamic
+      : ((state.dynamics || []).find((row) => row.id === dynamicId) || state.currentDynamic);
+    paintPeriodBrand(known, cycle);
+  }).catch(() => {});
+}
+
 function paintToday(dynamicId, dynamic, enabled, pack) {
   if (!todayStillCurrent(dynamicId)) return;
   const todayLabel = new Date().toLocaleDateString(undefined, {
@@ -9330,7 +9627,7 @@ function paintToday(dynamicId, dynamic, enabled, pack) {
       todayLockRing(focus, pack.lockups),
       el("span", { className: "today-status-copy" }, [
         el("strong", {}, pack.overview.summary_label || "Chastity"),
-        el("span", { className: "muted" }, "Open chastity"),
+        el("span", { className: "muted" }, "Open Tracking"),
       ]),
     ]));
   } else if (pack.chastityOn) {
@@ -9341,7 +9638,7 @@ function paintToday(dynamicId, dynamic, enabled, pack) {
     }, [
       el("span", { className: "today-status-copy" }, [
         el("strong", {}, (pack.overview && pack.overview.summary_label) || "Chastity is off"),
-        el("span", { className: "muted" }, "Open chastity"),
+        el("span", { className: "muted" }, "Open Tracking"),
       ]),
     ]));
   }
@@ -9372,9 +9669,12 @@ function paintToday(dynamicId, dynamic, enabled, pack) {
   if (pack.sleepOn) {
     const sleepCard = !pack.sleepOk
       ? todayCouldNot("Sleep")
-      : pack.sleepGlance
-        ? todaySleepGlanceCard(dynamicId, pack.sleepGlance)
-        : todaySleepCard(dynamicId, pack.sleepSessions, dynamic);
+      : todaySleepPeopleCard(
+        dynamicId,
+        pack.sleepNights
+          ? glanceSleepPeople(pack.sleepNights)
+          : latestSleepPeople(pack.sleepSessions, dynamic)
+      );
     cards.appendChild(markOfflineBodyCard(sleepCard, "sleep"));
   }
   if (pack.cycleOn) {
@@ -9382,12 +9682,11 @@ function paintToday(dynamicId, dynamic, enabled, pack) {
     cards.appendChild(markOfflineBodyCard(cycleCard, "cycle"));
   }
   if (pack.orgasmOn) {
-    cards.appendChild(pack.statsOk && pack.stats ? todayOrgasmCard(dynamicId, pack.stats) : todayCouldNot("Orgasms · 7 days"));
+    cards.appendChild(pack.entriesOk
+      ? todayOrgasmCard(dynamicId, pack.entries, dynamic, pack.roulette)
+      : todayCouldNot("Orgasms"));
   }
-  if (cards.childNodes.length) {
-    stack.appendChild(el("h2", { className: "today-section-label" }, "Body"));
-    stack.appendChild(cards);
-  }
+  if (cards.childNodes.length) stack.appendChild(cards);
   if (isNativeApp() && (pack.sleepOn || pack.cycleOn)) {
     stack.appendChild(el("button", {
       type: "button",
@@ -9398,28 +9697,7 @@ function paintToday(dynamicId, dynamic, enabled, pack) {
     }, "Sync body data"));
   }
 
-  const events = todayRecentEvents(dynamicId, pack.entriesOk ? pack.entries : [], pack.lockups);
-  const recent = el("div", { className: "card today-events-card" }, [
-    el("h2", { className: "today-section-label" }, "Recent"),
-  ]);
-  if (!events.length) {
-    recent.appendChild(el("p", { className: "muted" }, pack.entriesOk ? "No recent events." : "Couldn't load recent events."));
-  } else {
-    events.forEach((event) => {
-      recent.appendChild(el("button", {
-        type: "button",
-        className: "today-event",
-        onClick: () => navigate(event.path),
-      }, [
-        el("span", { className: "today-event-copy" }, [
-          el("strong", {}, event.title),
-          event.detail ? el("span", { className: "muted" }, event.detail) : null,
-        ]),
-        el("span", { className: "today-event-when" }, formatLogWhen(event.at)),
-      ]));
-    });
-  }
-  stack.appendChild(recent);
+  paintPeriodBrand(dynamic, pack.cycle);
 
   const more = el("details", { className: "hub-setup-details today-more" }, [
     el("summary", {}, "More tracking"),
@@ -9479,6 +9757,7 @@ function renderToday(dynamicId) {
         chastityOn ? todayQuiet(api(`/dynamics/${id}/chastity`), []) : Promise.resolve({ ok: true, value: [] }),
         sleepOn ? todayQuiet(api(`/dynamics/${id}/sleep`), []) : Promise.resolve({ ok: true, value: [] }),
         cycleOn ? todayQuiet(api(`/dynamics/${id}/cycle`), null) : Promise.resolve({ ok: true, value: null }),
+        todayQuiet(api(`/dynamics/${id}/play-games/roulette`), null),
       ]).then((rows) => {
         if (!todayStillCurrent(id)) return;
         paintToday(id, dynamic, enabled, {
@@ -9497,6 +9776,7 @@ function renderToday(dynamicId) {
           sleepSessions: rows[4].ok && Array.isArray(rows[4].value) ? rows[4].value : [],
           cycleOk: !cycleOn || rows[5].ok,
           cycle: rows[5].ok ? rows[5].value : null,
+          roulette: rows[6] && rows[6].ok ? rows[6].value : null,
         });
       });
     }
@@ -9510,6 +9790,7 @@ function renderToday(dynamicId) {
       return Promise.all([
         todayQuiet(api(`/dynamics/${id}/tracking`), []),
         chastityOn ? todayQuiet(api(`/dynamics/${id}/chastity`), []) : Promise.resolve({ ok: true, value: [] }),
+        todayQuiet(api(`/dynamics/${id}/play-games/roulette`), null),
       ]).then((rows) => {
         if (!todayStillCurrent(id)) return;
         const partners = ((summary.chastity && summary.chastity.subjects) || []).map((subject) => {
@@ -9528,7 +9809,7 @@ function renderToday(dynamicId) {
             active_lockup_id: subject.active_lockup_id || null,
           };
         });
-        const nights = ((summary.sleep && summary.sleep.nights) || []).filter((night) => night && (night.duration_label || night.duration_min != null));
+        const nights = (summary.sleep && summary.sleep.nights) || [];
         paintToday(id, dynamic, enabled, {
           sleepOn: sleepOn,
           cycleOn: cycleOn,
@@ -9554,11 +9835,13 @@ function renderToday(dynamicId) {
           entries: rows[0].ok && Array.isArray(rows[0].value) ? rows[0].value : [],
           lockups: rows[1].ok && Array.isArray(rows[1].value) ? rows[1].value : [],
           sleepOk: true,
-          sleepGlance: nights[0] || null,
+          sleepNights: nights,
           sleepSessions: [],
           cycleOk: true,
+          roulette: rows[2] && rows[2].ok ? rows[2].value : null,
           cycle: {
             people: ((summary.cycle && summary.cycle.people) || []).map((person) => ({
+              membership_id: person.membership_id,
               display_name: person.name,
               is_you: !!person.is_you,
               summary: {
@@ -9566,6 +9849,8 @@ function renderToday(dynamicId) {
                 on_period: !!person.on_period,
                 last_period_start: person.last_period_start || "",
                 predicted_next: person.predicted_next || "",
+                period_length: person.period_length,
+                typical_length: person.typical_length,
               },
             })),
           },
@@ -10011,6 +10296,15 @@ function renderTasksActsSwitcher(dynamicId, active) {
         onClick: () => navigate(`/dynamic/${dynamicId}/tasks`),
       },
       "Task lists"
+    ),
+    el(
+      "button",
+      {
+        type: "button",
+        className: active === "goals" ? "primary-btn" : "ghost-btn",
+        onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=goals`),
+      },
+      "Goals"
     ),
     el(
       "button",
@@ -10621,8 +10915,47 @@ function renderOverlap(dynamicId) {
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
 }
 
+function renderTaskRequest(dynamicId) {
+  const taskRequestBody = el("textarea", { rows: "3", placeholder: "Task you want to request…" });
+  const taskRequestError = el("div", { className: "error hidden" });
+  return el("div", { className: "card stack" }, [
+    el("h2", {}, "Request a task"),
+    el("p", { className: "muted" }, "Needs keyholder approval before you can complete it."),
+    taskRequestBody,
+    taskRequestError,
+    el("button", {
+      className: "primary-btn",
+      type: "button",
+      onClick: async () => {
+        taskRequestError.classList.add("hidden");
+        const content = taskRequestBody.value.trim();
+        if (!content) {
+          taskRequestError.textContent = "Describe the task.";
+          taskRequestError.classList.remove("hidden");
+          return;
+        }
+        try {
+          await api(`/dynamics/${dynamicId}/tasks/items`, {
+            method: "POST",
+            body: JSON.stringify({ content }),
+          });
+          taskRequestBody.value = "";
+          showToast("Task request sent to your keyholder.");
+        } catch (err) {
+          taskRequestError.textContent = err.message;
+          taskRequestError.classList.remove("hidden");
+        }
+      },
+    }, "Submit for approval"),
+  ]);
+}
+
 function renderTasks(dynamicId) {
   const { query } = parseRoute();
+  if (query.get("tab") === "goals") {
+    renderTaskGoals(dynamicId);
+    return;
+  }
   if (query.get("tab") === "regimen") {
     renderTrainingRegimen(dynamicId);
     return;
@@ -10663,19 +10996,13 @@ function renderTasks(dynamicId) {
       const stack = el("div", { className: "stack" }, [
         el("h1", {}, "Tasks"),
         assistantChatEntry(dynamicId),
-        el("div", { className: "row wrap" }, [
-          el("button", {
-            type: "button",
-            className: "ghost-btn ai-only",
-            "data-ai-label": "Training regimen drafts task lists with your shared AI context.",
-            onClick: () => navigate(`/dynamic/${dynamicId}/tasks?tab=regimen`),
-          }, "Build training regimen"),
-        ]),
+        renderTasksActsSwitcher(dynamicId, "tasks"),
         el("p", { className: "muted" }, confession
           ? "Assign a punishment task for this confession."
           : "Create tasks here. Open, missed, and paused work is below."),
         error,
       ]);
+      if (you?.role === "submissive") stack.appendChild(renderTaskRequest(dynamicId));
       appendCreateTaskForm(stack, {
         dynamicId,
         dynamic,
@@ -12458,8 +12785,9 @@ function renderAssistant(dynamicId) {
     loadDynamic(dynamicId),
     api(`/dynamics/${dynamicId}/menu-summaries`).catch(() => ({})),
     api(`/dynamics/${dynamicId}/switch`).catch(() => null),
+    api(`/dynamics/${dynamicId}/play-games/roulette`).catch(() => null),
   ])
-    .then(([status, , menuSummaries, switchData]) => {
+    .then(([status, , menuSummaries, switchData, roulette]) => {
       const stack = el("div", { className: "stack" }, [
         buildHubHeader(dynamicId, "Playtime", {
           subtitle: "Tasks, scenes, and release tools.",
@@ -12476,39 +12804,16 @@ function renderAssistant(dynamicId) {
       const you = dynamic?.partners?.find((p) => p.is_you);
       const enabledFeatures = dynamic?.enabled_features || [];
 
-      if (you?.role === "submissive") {
-        const taskRequestBody = el("textarea", { rows: "3", placeholder: "Task you want to request…" });
-        const taskRequestError = el("div", { className: "error hidden" });
-        stack.appendChild(el("div", { className: "card stack" }, [
-          el("h2", {}, "Request a task"),
-          el("p", { className: "muted" }, "Needs keyholder approval before you can complete it."),
-          taskRequestBody,
-          taskRequestError,
-          el("button", {
-            className: "primary-btn",
-            type: "button",
-            onClick: async () => {
-              taskRequestError.classList.add("hidden");
-              const content = taskRequestBody.value.trim();
-              if (!content) {
-                taskRequestError.textContent = "Describe the task.";
-                taskRequestError.classList.remove("hidden");
-                return;
-              }
-              try {
-                await api(`/dynamics/${dynamicId}/tasks/items`, {
-                  method: "POST",
-                  body: JSON.stringify({ content }),
-                });
-                taskRequestBody.value = "";
-                showToast("Task request sent to your keyholder.");
-              } catch (err) {
-                taskRequestError.textContent = err.message;
-                taskRequestError.classList.remove("hidden");
-              }
-            },
-          }, "Submit for approval"),
-        ]));
+      if (roulette && roulette.enabled) {
+        const marbleBtn = el("button", {
+          className: "choice-btn playtime-option",
+          type: "button",
+          onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/roulette`),
+        }, [
+          el("strong", {}, "Orgasm Roulette"),
+          el("span", { className: "muted" }, "Marble game"),
+        ]);
+        stack.insertBefore(marbleBtn, stack.children[1] || null);
       }
 
       const playtimeList = el("div", { className: "facet-list" });
@@ -12551,16 +12856,6 @@ function renderAssistant(dynamicId) {
           el("button", {
             className: "choice-btn playtime-option",
             type: "button",
-            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
-          }, [
-            el("strong", {}, "Games"),
-            el("span", { className: "muted" }, "Orgasm Roulette and toy spin"),
-          ])
-        );
-        stack.appendChild(
-          el("button", {
-            className: "choice-btn playtime-option",
-            type: "button",
             onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/toys`),
           }, [
             el("strong", {}, "Toy spin"),
@@ -12584,16 +12879,6 @@ function renderAssistant(dynamicId) {
             ])
           );
         }
-        stack.appendChild(
-          el("button", {
-            className: "choice-btn playtime-option",
-            type: "button",
-            onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
-          }, [
-            el("strong", {}, "Games"),
-            el("span", { className: "muted" }, "Orgasm Roulette and toy spin"),
-          ])
-        );
         stack.appendChild(
           el("button", {
             className: "choice-btn playtime-option",
@@ -13004,14 +13289,66 @@ function renderRoulette(dynamicId) {
     .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
 }
 
+function renderRouletteSetup(dynamicId) {
+  viewEl.replaceChildren(el("p", { className: "muted" }, "Loading setup…"));
+  api(`/dynamics/${dynamicId}/play-games/roulette`)
+    .then((game) => paintRouletteSetup(dynamicId, game))
+    .catch((err) => viewEl.replaceChildren(el("p", { className: "error" }, err.message)));
+}
+
+function paintRouletteView(dynamicId, game) {
+  const { parts } = parseRoute();
+  if (parts[5] === "setup") paintRouletteSetup(dynamicId, game);
+  else paintRoulette(dynamicId, game);
+}
+
 function paintRoulette(dynamicId, game) {
-  const odds = game.probabilities || {};
   const stack = el("div", { className: "stack" });
   stack.appendChild(el("h1", {}, "Orgasm Roulette"));
-  stack.appendChild(el("p", { className: "muted" }, game.enabled
-    ? `Day ${game.campaign_day || 1} of 90. Started ${game.started_on || ""}.`
-    : "The marble bag is off."));
-  stack.appendChild(el("p", { className: "muted" }, "Choose what earns a pull. Logged orgasms, ruins, and denials still move the marbles. Bag and reserve share one set of each color."));
+  if (!game.enabled) stack.appendChild(el("p", { className: "muted" }, "Game is off."));
+  stack.appendChild(rouletteAvailable(game));
+  stack.appendChild(rouletteTally(game));
+  const session = game.session || {};
+  const draws = session.draws || [];
+  if (draws.length) {
+    const last = draws[draws.length - 1];
+    const meta = ROULETTE_MARBLES[last.marble];
+    if (meta) stack.appendChild(el("h2", { className: "roulette-result" }, meta.name));
+  }
+  if (game.enabled && game.pending_count) {
+    stack.appendChild(el("p", {}, `${game.pending_count} waiting`));
+  }
+  if (game.enabled && game.can_draw) {
+    stack.appendChild(rouletteTwoFinger(game.session?.bonus ? "Pull again" : "Pull", () =>
+      api(`/dynamics/${dynamicId}/play-games/roulette/draw`, { method: "POST" })
+        .then((next) => paintRouletteView(dynamicId, next))
+    ));
+  } else if (game.enabled && !game.can_end) {
+    stack.appendChild(el("p", { className: "muted" }, "No pull is open."));
+  }
+  if (game.enabled && game.can_end) {
+    stack.appendChild(rouletteTwoFinger("End session", () =>
+      api(`/dynamics/${dynamicId}/play-games/roulette/end`, { method: "POST" })
+        .then((next) => paintRouletteView(dynamicId, next))
+    ));
+  }
+  stack.appendChild(el("button", {
+    className: "ghost-btn",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/roulette/setup`),
+  }, "Setup"));
+  stack.appendChild(el("button", {
+    className: "ghost-btn",
+    type: "button",
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
+  }, "Back to Games"));
+  viewEl.replaceChildren(stack);
+  updateBottomNav();
+}
+
+function paintRouletteSetup(dynamicId, game) {
+  const stack = el("div", { className: "stack" });
+  stack.appendChild(el("h1", {}, "Game setup"));
   const toggle = el("input", { type: "checkbox" });
   toggle.checked = !!game.enabled;
   toggle.addEventListener("change", () => {
@@ -13019,57 +13356,24 @@ function paintRoulette(dynamicId, game) {
       method: "PUT",
       body: JSON.stringify({ enabled: toggle.checked, mode: game.mode || "virtual" }),
     })
-      .then((next) => paintRoulette(dynamicId, next))
+      .then((next) => paintRouletteSetup(dynamicId, next))
       .catch((err) => {
         toggle.checked = !!game.enabled;
         showToast(err.message);
       });
   });
   stack.appendChild(el("label", { className: "row" }, [toggle, el("span", {}, "Game on")]));
-  stack.appendChild(rouletteChart(game));
   stack.appendChild(rouletteGrantEditor(dynamicId, game));
   stack.appendChild(el("div", { className: "card stack" }, [
     el("h2", {}, "Bag"),
-    rouletteCounts(dynamicId, game, "bag", odds),
-    el("p", { className: "muted" }, `${game.pending_count || 0} pull${game.pending_count === 1 ? "" : "s"} waiting${game.pending_reason ? ` · ${game.pending_reason}` : ""}`),
+    rouletteCounts(dynamicId, game, "bag"),
   ]));
   stack.appendChild(rouletteReserveCard(dynamicId, game));
-  const session = game.session || {};
-  const draws = session.draws || [];
-  if (draws.length) {
-    const last = draws[draws.length - 1];
-    const meta = ROULETTE_MARBLES[last.marble];
-    stack.appendChild(el("div", { className: "card stack" }, [
-      el("h2", {}, meta ? meta.name : "Pull"),
-      el("p", {}, (last.notes || []).join(" ")),
-    ]));
-  }
-  if (game.enabled && game.can_draw) {
-    stack.appendChild(rouletteSlide(game.session?.bonus ? "Slide to pull again" : "Slide to pull", () =>
-      api(`/dynamics/${dynamicId}/play-games/roulette/draw`, { method: "POST" })
-        .then((next) => paintRoulette(dynamicId, next))
-    ));
-  } else if (game.enabled && !game.can_end) {
-    stack.appendChild(el("p", { className: "muted" }, "No pull is open."));
-  }
-  if (game.enabled && game.can_end) {
-    stack.appendChild(rouletteSlide("Slide to end the session", () =>
-      api(`/dynamics/${dynamicId}/play-games/roulette/end`, { method: "POST" })
-        .then((next) => paintRoulette(dynamicId, next))
-    ));
-  }
-  const history = game.history || [];
-  if (history.length) {
-    stack.appendChild(el("div", { className: "card stack" }, [
-      el("h2", {}, "Recent"),
-      ...history.slice(0, 8).map((row) => el("p", { className: "muted" }, (row.notes || []).join(" ") || row.marble || "")),
-    ]));
-  }
   stack.appendChild(el("button", {
     className: "ghost-btn",
     type: "button",
-    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games`),
-  }, "Back to Games"));
+    onClick: () => navigate(`/dynamic/${dynamicId}/assistant/games/roulette`),
+  }, "Back to game"));
   viewEl.replaceChildren(stack);
   updateBottomNav();
 }
@@ -13088,7 +13392,7 @@ function rouletteCounts(dynamicId, game, which, odds) {
         method: "PUT",
         body: JSON.stringify({ bag, reserve, focus: which === "reserve" ? "reserve" : "bag" }),
       })
-        .then((next) => paintRoulette(dynamicId, next))
+        .then((next) => paintRouletteView(dynamicId, next))
         .catch((err) => showToast(err.message));
     };
     wrap.appendChild(el("div", { className: "roulette-count" }, [
@@ -13102,32 +13406,111 @@ function rouletteCounts(dynamicId, game, which, odds) {
   return wrap;
 }
 
-function rouletteChart(game) {
-  const rows = game.chart || [];
-  const card = el("div", { className: "card stack" }, [
-    el("h2", {}, "Marbles"),
-    el("p", { className: "muted" }, "Total is the bag plus the reserve. Next-pull odds come from the bag. Pull share is how often that color has been drawn."),
-  ]);
-  rows.forEach((row) => {
-    const meta = ROULETTE_MARBLES[row.key] || { name: row.name, color: "#ccc" };
-    card.appendChild(el("div", { className: "roulette-chart-row" }, [
+function rouletteSvg(tag, attrs) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  Object.entries(attrs || {}).forEach(([key, value]) => node.setAttribute(key, value));
+  return node;
+}
+
+function roulettePie(counts) {
+  const keys = ["R", "D", "O"];
+  const total = keys.reduce((sum, key) => sum + (Number(counts[key]) || 0), 0);
+  const svg = rouletteSvg("svg", { viewBox: "0 0 100 100", class: "roulette-pie" });
+  if (!total) {
+    svg.appendChild(rouletteSvg("circle", { cx: "50", cy: "50", r: "40", fill: "rgba(255,255,255,0.12)" }));
+    return svg;
+  }
+  const only = keys.filter((key) => Number(counts[key]) > 0);
+  if (only.length === 1) {
+    svg.appendChild(rouletteSvg("circle", {
+      cx: "50",
+      cy: "50",
+      r: "40",
+      fill: ROULETTE_MARBLES[only[0]].color,
+    }));
+    return svg;
+  }
+  let angle = -Math.PI / 2;
+  keys.forEach((key) => {
+    const value = Number(counts[key]) || 0;
+    if (!value) return;
+    const slice = (value / total) * Math.PI * 2;
+    const x1 = 50 + 40 * Math.cos(angle);
+    const y1 = 50 + 40 * Math.sin(angle);
+    angle += slice;
+    const x2 = 50 + 40 * Math.cos(angle);
+    const y2 = 50 + 40 * Math.sin(angle);
+    const large = slice > Math.PI ? 1 : 0;
+    svg.appendChild(rouletteSvg("path", {
+      d: `M 50 50 L ${x1} ${y1} A 40 40 0 ${large} 1 ${x2} ${y2} Z`,
+      fill: ROULETTE_MARBLES[key].color,
+    }));
+  });
+  return svg;
+}
+
+function rouletteLegend(counts) {
+  const keys = ["R", "D", "O"];
+  const total = keys.reduce((sum, key) => sum + (Number(counts[key]) || 0), 0);
+  const list = el("div", { className: "roulette-bag" });
+  keys.forEach((key) => {
+    const count = Number(counts[key]) || 0;
+    const pct = total ? Math.round(count / total * 100) : 0;
+    const meta = ROULETTE_MARBLES[key];
+    list.appendChild(el("div", { className: "roulette-count" }, [
       el("span", { className: "roulette-dot", style: `background:${meta.color}` }),
-      el("strong", {}, meta.name),
-      el("span", {}, `${row.total} total`),
-      el("span", {}, `${row.bag} in bag`),
-      el("span", {}, `${row.reserve} reserve`),
-      row.removed ? el("span", {}, `${row.removed} drawn out`) : null,
-      el("span", {}, `${row.pulled} pulled · ${row.pulled_pct}%`),
-      el("span", {}, `next ${row.next_pct}%`),
-    ]));
-    card.appendChild(el("div", { className: "roulette-odds" }, [
-      el("span", {
-        className: "roulette-odds-pulled",
-        style: `width:${Math.max(0, Math.min(100, row.pulled_pct || 0))}%;background:${meta.color}`,
-      }),
+      el("span", { className: "roulette-name" }, meta.name),
+      el("strong", {}, String(count)),
+      el("span", { className: "muted" }, `${pct}%`),
     ]));
   });
-  return card;
+  return list;
+}
+
+function rouletteAvailable(game) {
+  const bag = game.bag || {};
+  return el("div", { className: "card stack" }, [
+    el("h2", {}, "Marbles available"),
+    roulettePie(bag),
+    rouletteLegend(bag),
+  ]);
+}
+
+function rouletteTally(game) {
+  const tally = game.pull_tally || {};
+  return el("div", { className: "card stack" }, [
+    el("h2", {}, "Pulls"),
+    rouletteLegend({
+      R: tally.R || 0,
+      D: tally.D || 0,
+      O: tally.O || 0,
+    }),
+  ]);
+}
+
+function rouletteTwoFinger(label, action) {
+  const button = el("button", { type: "button", className: "primary-btn roulette-twofinger" }, [
+    el("span", {}, label),
+    el("span", { className: "muted" }, "Two fingers"),
+  ]);
+  const pointers = new Set();
+  let busy = false;
+  const drop = (event) => pointers.delete(event.pointerId);
+  button.addEventListener("pointerdown", (event) => {
+    pointers.add(event.pointerId);
+    if (pointers.size < 2 || busy) return;
+    busy = true;
+    pointers.clear();
+    Promise.resolve(action())
+      .catch((err) => showToast(err.message))
+      .finally(() => {
+        busy = false;
+      });
+  });
+  button.addEventListener("pointerup", drop);
+  button.addEventListener("pointercancel", drop);
+  button.addEventListener("click", (event) => event.preventDefault());
+  return button;
 }
 
 function rouletteReserveCard(dynamicId, game) {
@@ -13136,7 +13519,6 @@ function rouletteReserveCard(dynamicId, game) {
   const inputs = {};
   card.appendChild(el("h2", {}, "Reserve"));
   card.appendChild(rouletteCounts(dynamicId, game, "reserve"));
-  card.appendChild(el("p", { className: "muted" }, "Plus and minus move marbles between the bag and the reserve. Edit reserve to add or remove marbles."));
   const editor = el("div", { className: "stack hidden" });
   ["R", "D", "O"].forEach((key) => {
     const meta = ROULETTE_MARBLES[key];
@@ -13164,7 +13546,7 @@ function rouletteReserveCard(dynamicId, game) {
         method: "PUT",
         body: JSON.stringify({ bag: game.bag || {}, reserve: next, focus: "reserve-set" }),
       })
-        .then((updated) => paintRoulette(dynamicId, updated))
+        .then((updated) => paintRouletteView(dynamicId, updated))
         .catch((err) => showToast(err.message));
     },
   }, "Save reserve"));
@@ -13190,7 +13572,6 @@ function rouletteGrantEditor(dynamicId, game) {
   const rules = (game.grant_rules || []).map((rule) => ({ ...rule }));
   const card = el("div", { className: "card stack" }, [
     el("h2", {}, "What earns a pull"),
-    el("p", { className: "muted" }, "These count while the game is on. A task can match more than one rule."),
   ]);
   if (!rules.length) card.appendChild(el("p", { className: "muted" }, "Nothing earns a pull until you add a rule."));
   rules.forEach((rule) => {
@@ -13256,31 +13637,8 @@ function saveRouletteGrants(dynamicId, rules) {
       })),
     }),
   })
-    .then((next) => paintRoulette(dynamicId, next))
+    .then((next) => paintRouletteView(dynamicId, next))
     .catch((err) => showToast(err.message));
-}
-
-function rouletteSlide(label, action) {
-  const input = el("input", { className: "roulette-slide", type: "range", min: "0", max: "100", value: "0" });
-  let busy = false;
-  input.addEventListener("change", () => {
-    if (Number(input.value) < 100) {
-      input.value = "0";
-      return;
-    }
-    if (busy) return;
-    busy = true;
-    Promise.resolve(action())
-      .catch((err) => showToast(err.message))
-      .finally(() => {
-        busy = false;
-        input.value = "0";
-      });
-  });
-  return el("label", { className: "roulette-slide-wrap" }, [
-    el("span", {}, label),
-    input,
-  ]);
 }
 
 function renderSpinTheWheel(dynamicId) {
@@ -17244,15 +17602,19 @@ function renderCumulativeOrgasmChart(series, partners) {
   }
   const w = 360;
   const h = 180;
-  const pad = { t: 12, r: 12, b: 28, l: 28 };
-  const maxY = Math.max(1, ...series.flatMap((pt) => Object.values(pt.by_partner || {})));
+  const pad = { t: 16, r: 12, b: 28, l: 32 };
+  const values = series.flatMap((pt) => [
+    ...Object.values(pt.by_partner || {}),
+    ...Object.values(pt.ruined_by_partner || {}),
+  ]);
+  const maxY = Math.max(1, ...values.map((value) => Number(value) || 0));
   const colors = ["var(--accent)", "#7eb8a8", "#c97b4a", "#8a9bb8"];
   const svgNS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(svgNS, "svg");
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   svg.setAttribute("class", "cum-line-chart");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "Cumulative orgasms over 30 days");
+  svg.setAttribute("aria-label", "Cumulative full and ruined orgasms over 30 days, starting from last month");
 
   function xAt(i) {
     return pad.l + (i / Math.max(1, series.length - 1)) * (w - pad.l - pad.r);
@@ -17261,7 +17623,6 @@ function renderCumulativeOrgasmChart(series, partners) {
     return pad.t + (1 - v / maxY) * (h - pad.t - pad.b);
   }
 
-  // baseline
   const base = document.createElementNS(svgNS, "line");
   base.setAttribute("x1", String(pad.l));
   base.setAttribute("x2", String(w - pad.r));
@@ -17271,29 +17632,53 @@ function renderCumulativeOrgasmChart(series, partners) {
   svg.appendChild(base);
 
   partners.forEach((partner, pIdx) => {
-    const pts = series.map((pt, i) => {
-      const v = Number(pt.by_partner?.[partner.membership_id] || 0);
-      return `${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`;
-    }).join(" ");
-    const poly = document.createElementNS(svgNS, "polyline");
-    poly.setAttribute("points", pts);
-    poly.setAttribute("fill", "none");
-    poly.setAttribute("stroke", colors[pIdx % colors.length]);
-    poly.setAttribute("stroke-width", "2.5");
-    poly.setAttribute("stroke-linejoin", "round");
-    poly.setAttribute("stroke-linecap", "round");
-    svg.appendChild(poly);
+    const color = colors[pIdx % colors.length];
+    ["by_partner", "ruined_by_partner"].forEach((key) => {
+      const pts = series.map((pt, i) => {
+        const v = Number((pt[key] || {})[partner.membership_id] || 0);
+        return `${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`;
+      }).join(" ");
+      const poly = document.createElementNS(svgNS, "polyline");
+      poly.setAttribute("points", pts);
+      poly.setAttribute("fill", "none");
+      poly.setAttribute("stroke", color);
+      poly.setAttribute("stroke-width", key === "by_partner" ? "2.5" : "2");
+      poly.setAttribute("stroke-linejoin", "round");
+      poly.setAttribute("stroke-linecap", "round");
+      if (key === "ruined_by_partner") poly.setAttribute("stroke-dasharray", "5 4");
+      svg.appendChild(poly);
+    });
+    series.forEach((pt, i) => {
+      const count = Number((pt.denials_by_partner || {})[partner.membership_id] || 0);
+      for (let n = 0; n < Math.min(count, 4); n += 1) {
+        const dot = document.createElementNS(svgNS, "circle");
+        dot.setAttribute("cx", xAt(i).toFixed(1));
+        dot.setAttribute("cy", (h - pad.b - 7 - (pIdx * 6) - (n * 3)).toFixed(1));
+        dot.setAttribute("r", "3.2");
+        dot.setAttribute("fill", color);
+        dot.setAttribute("stroke", "var(--bg-card, #111)");
+        dot.setAttribute("stroke-width", "1");
+        svg.appendChild(dot);
+      }
+    });
   });
 
   wrap.appendChild(svg);
   const legend = el("div", { className: "history-legend" });
   partners.forEach((p, idx) => {
+    const color = colors[idx % colors.length];
     legend.appendChild(el("span", {
       className: `history-legend-item p${idx}`,
-      style: `border-color: ${colors[idx % colors.length]}`,
-    }, p.name));
+      style: `border-color: ${color}`,
+    }, `${p.name} full`));
+    legend.appendChild(el("span", {
+      className: `history-legend-item p${idx}`,
+      style: `border-color: ${color}; border-style: dashed`,
+    }, `${p.name} ruined`));
   });
+  legend.appendChild(el("span", { className: "history-legend-item" }, "Dots = denials"));
   wrap.appendChild(legend);
+  wrap.appendChild(el("p", { className: "muted" }, "Lines start at last month’s total, then add this month. Dots mark denial days."));
   return wrap;
 }
 
@@ -17318,10 +17703,9 @@ function renderTracking(dynamicId) {
       const partners = dynamic.partners || [];
 
       const stack = el("div", { className: "stack" }, [
-        el("h1", {}, "Sex & orgasm tracking"),
+        el("h1", {}, "Sex tracking"),
         assistantChatEntry(dynamicId),
         el("p", { className: "muted" }, stats.recent_orgasm_label || "No orgasms in the last 7 days"),
-        el("p", { className: "muted" }, "Select who climaxed. Session times are shared; satisfaction, edging, and orgasm tags are per partner."),
       ]);
       const orgasmBalanceHost = el("div");
       stack.appendChild(orgasmBalanceHost);
@@ -17335,7 +17719,6 @@ function renderTracking(dynamicId) {
           renderCumulativeOrgasmChart(stats.cumulative_30d || [], stats.partners || []),
         ]));
       }
-      stack.appendChild(renderTrackingEventsCalendar(dynamicId, partners));
 
       const partnerChecks = partners.map((p, idx) => {
         const input = el("input", {
@@ -17347,7 +17730,9 @@ function renderTracking(dynamicId) {
       const partnerSelectRow = el("div", { className: "stack" }, [
         el("strong", {}, "Log for"),
         el("div", { className: "row wrap" }, partnerChecks.map(({ partner, input }) =>
-          el("label", { className: "checkbox-label" }, [input, ` ${partner.display_name}`])
+          el("label", {
+            className: `checkbox-label log-for-choice ${partner.role === "dominant" ? "log-for-domme" : "log-for-sub"}`,
+          }, [input, ` ${partner.display_name}`])
         )),
       ]);
 
@@ -17358,7 +17743,11 @@ function renderTracking(dynamicId) {
       ].forEach(([value, label]) => {
         eventType.appendChild(el("option", { value }, label));
       });
-      const sessionStart = el("input", { type: "datetime-local", value: toLocalDatetimeValue() });
+      const presetDay = parseRoute().query?.get?.("on") || "";
+      const sessionStart = el("input", {
+        type: "datetime-local",
+        value: presetDay ? `${presetDay}T12:00` : toLocalDatetimeValue(),
+      });
       const sessionEnd = el("input", { type: "datetime-local" });
       const locationInput = el("input", { type: "text", maxlength: "120", placeholder: "e.g. home, hotel" });
       const initiatedBy = el("select");
@@ -18487,20 +18876,41 @@ function renderChastity(dynamicId) {
     api(`/dynamics/${dynamicId}/chastity-goals`).catch(() => null),
     loadDynamic(dynamicId),
     api(`/dynamics/${dynamicId}/tracking`).catch(() => []),
+    api(`/dynamics/${dynamicId}/sleep`).catch(() => []),
   ])
-    .then(([overview, settings, lockups, limitProposals, tagData, goalsData, , orgasmEntries]) => {
+    .then(([overview, settings, lockups, limitProposals, tagData, goalsData, , orgasmEntries, sleepSessions]) => {
       const dynamic = state.currentDynamic;
       const you = dynamic.partners.find((p) => p.is_you);
       const error = el("div", { className: "error hidden" });
       const flowHost = el("div", { className: "chastity-flow-host hidden" });
       const chastityTagPresets = tagData.presets || [];
       const stack = el("div", { className: "stack" }, [
-        el("h1", {}, "Chastity tracking"),
+        el("h1", {}, "Tracking"),
         assistantChatEntry(dynamicId),
-        el("p", { className: "muted" }, "Lockups are tracked for submissives with chastity available. Orgasm and lockup data can be shared with the assistant domme in Settings."),
         error,
         flowHost,
       ]);
+      const calendarHost = el("div", { className: "stack" });
+      stack.appendChild(calendarHost);
+      api(`/dynamics/${dynamicId}/history/reports/chastity-days?since=recent`)
+        .then((report) => {
+          const people = report.partners || [];
+          if (!people.length) {
+            calendarHost.appendChild(el("p", { className: "muted" }, "No days in this range."));
+            return;
+          }
+          people.forEach((person) => {
+            calendarHost.appendChild(el("h2", {}, person.name || "Calendar"));
+            calendarHost.appendChild(renderChastityCalendar(person.days || [], {
+              dynamicId,
+              membershipId: person.membership_id,
+              chooser: true,
+              quiet: true,
+              onChanged: () => renderChastity(dynamicId),
+            }));
+          });
+        })
+        .catch((err) => calendarHost.appendChild(el("p", { className: "error" }, err.message || "Could not load the calendar.")));
 
       if (settings.you_are_dominant && goalsData) {
         const activeCount = Number(goalsData.active_count || (goalsData.goals || []).length || 0);
@@ -18578,76 +18988,6 @@ function renderChastity(dynamicId) {
       }, "Availability & lock time agreements →"));
 
       enrolled.forEach((partner) => {
-        const hero = el("div", { className: `card lockup-hero ${partner.state === "locked" ? "locked" : ""}` });
-        let heroText = "";
-        if (partner.state === "locked") {
-          heroText = `${partner.name} has been locked for ${partner.current_duration_label}`;
-        } else if (partner.state === "on_break") {
-          heroText = `${partner.name} is on a break for ${partner.break_duration_label}`;
-        } else if (partner.free_duration_label) {
-          heroText = `${partner.name} has been free for ${partner.free_duration_label}`;
-        } else {
-          heroText = `${partner.name} has not been locked up yet`;
-        }
-        hero.appendChild(el("p", { className: "lockup-hero-text" }, heroText));
-        if (partner.state === "locked") {
-          hero.appendChild(el("p", { className: "lockup-timer" }, partner.current_duration_label));
-        } else if (partner.state === "on_break") {
-          hero.appendChild(el("p", { className: "lockup-timer break" }, partner.break_duration_label));
-        }
-        if (partner.timer_overdue && partner.active_lockup_id && settings.you_are_dominant) {
-          const timerBanner = el("div", { className: "chastity-timer-overdue stack" }, [
-            el("p", {}, `${partner.name}'s lock timer is up.`),
-            el("p", { className: "muted" }, "Extend the time, or confirm Released!"),
-            el("div", { className: "row" }, [
-              el("button", {
-                type: "button",
-                className: "primary-btn",
-                onClick: async () => {
-                  const raw = prompt("Extend by how many hours?", "24");
-                  if (raw == null) return;
-                  const hours = parseInt(raw, 10);
-                  if (!hours || hours < 1) {
-                    error.textContent = "Enter a positive number of hours.";
-                    error.classList.remove("hidden");
-                    return;
-                  }
-                  try {
-                    await api(`/dynamics/${dynamicId}/chastity/${partner.active_lockup_id}/timer/extend`, {
-                      method: "PATCH",
-                      body: JSON.stringify({ hours }),
-                    });
-                    renderChastity(dynamicId);
-                  } catch (err) {
-                    error.textContent = err.message;
-                    error.classList.remove("hidden");
-                  }
-                },
-              }, "Extend"),
-              el("button", {
-                type: "button",
-                className: "ghost-btn",
-                onClick: async () => {
-                  if (!confirm("Confirm Released! for this lock timer?")) return;
-                  try {
-                    await api(`/dynamics/${dynamicId}/chastity/${partner.active_lockup_id}/timer/release`, {
-                      method: "PATCH",
-                    });
-                    renderChastity(dynamicId);
-                  } catch (err) {
-                    error.textContent = err.message;
-                    error.classList.remove("hidden");
-                  }
-                },
-              }, "Released!"),
-            ]),
-          ]);
-          hero.appendChild(timerBanner);
-        } else if (partner.timer_overdue) {
-          hero.appendChild(el("p", { className: "chastity-timer-overdue-note" }, "Lock timer finished — waiting on keyholder."));
-        }
-        stack.appendChild(hero);
-
         stack.appendChild(el("div", { className: "card chastity-stats-grid" }, [
           el("div", { className: "chastity-stat" }, [
             el("span", { className: "chastity-stat-value" }, `${partner.percent_locked_all_time}%`),
@@ -18946,12 +19286,12 @@ function renderChastity(dynamicId) {
             type: "button",
             onClick: () => showUnlockDisambiguation(),
           }, "Temporary unlock"));
-          const sleepAverage = averageSleepUnlockTimes(lockups, partner.membership_id);
+          const sleepAverage = averageSleepUnlockTimes(lockups, partner.membership_id, sleepSessions);
           if (sleepAverage) {
-            actions.appendChild(el("p", { className: "muted" }, `Sleep uses the average of ${sleepAverage.count} past Sleep unlock${sleepAverage.count === 1 ? "" : "s"}: unlock ${formatTimeOfDay(sleepAverage.start)}, locked again ${formatTimeOfDay(sleepAverage.end)}.`));
+            actions.appendChild(el("p", { className: "muted" }, sleepAverageSentence(sleepAverage)));
           }
           (settings.unlock_presets || []).forEach((preset) => {
-            const applied = sleepPresetWithAverage(preset, lockups, partner.membership_id);
+            const applied = sleepPresetWithAverage(preset, lockups, partner.membership_id, sleepSessions);
             const label = applied.average
               ? `${preset.name || "Sleep"} · ${formatTimeOfDay(applied.average.start)}–${formatTimeOfDay(applied.average.end)}`
               : (preset.name || "Unlock");
@@ -20117,10 +20457,21 @@ function formatSleepClock(value) {
   return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-function formatSleepNightTitle(endAt) {
-  const d = parseServerDate(endAt);
-  if (!d) return "Night";
-  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+function formatSleepNightTitle(endAt, startAt) {
+  const start = parseServerDate(startAt);
+  const basis = start || parseServerDate(endAt);
+  if (!basis) return "Night";
+  const parts = zonedDateParts(basis);
+  let stamp = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+  if (start && Number(parts.hour) < 12) stamp -= 86400000;
+  const shown = new Date(stamp);
+  if (Number.isNaN(shown.getTime())) return "Night";
+  return shown.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 function formatSleepSource(source) {
@@ -20155,7 +20506,7 @@ function renderSleepNightCard(night, { dynamicId, canDelete, who } = {}) {
       },
       [
         el("div", { className: "stack log-card-main" }, [
-          el("strong", {}, who ? `${who} · ${formatSleepNightTitle(night.end_at)}` : formatSleepNightTitle(night.end_at)),
+          el("strong", {}, who ? `${who} · ${formatSleepNightTitle(night.end_at, night.start_at)}` : formatSleepNightTitle(night.end_at, night.start_at)),
           el(
             "span",
             { className: "muted log-card-when" },
@@ -28051,6 +28402,7 @@ function renderSettings() {
 }
 
 async function renderRoute() {
+  bottomNavEl?.classList.remove("nav-away");
   const hashPath = (location.hash.replace(/^#/, "") || "/");
   rememberRoute(hashPath.startsWith("/") ? hashPath : `/${hashPath}`);
   closeNavSheets();
@@ -28138,6 +28490,7 @@ async function renderRoute() {
     if (parts[2] === "assistant") {
       if (parts[3] === "chat") return renderAssistantChatPage(dynamicId);
       if (parts[3] === "scene") return renderPlaytimeScene(dynamicId);
+      if (parts[3] === "games" && parts[4] === "roulette" && parts[5] === "setup") return renderRouletteSetup(dynamicId);
       if (parts[3] === "games" && parts[4] === "roulette") return renderRoulette(dynamicId);
       if (parts[3] === "games" && parts[4] === "spin") return renderSpinTheWheel(dynamicId);
       if (parts[3] === "games" && parts[4] === "red-light") return renderRedLightGame(dynamicId);

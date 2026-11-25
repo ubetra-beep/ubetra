@@ -436,6 +436,9 @@
     let media = orderMedia(liveState, catalog.media || []);
     const audio = createAudio();
     const started = Date.now();
+    const testSession = !isDom && opts.source !== "live" && !opts.taskId && !joining;
+    let previewShrunk = false;
+    let previewTimer = null;
     let playing = false;
     let closed = false;
     let holdSlide = false;
@@ -482,6 +485,13 @@
     const instruction = el("div", { className: "instructor-instruction" }, [instructionText, progress]);
     const stage = el("div", { className: "instructor-stage" });
     const stageWrap = el("div", { className: "instructor-stage-wrap" }, [stage]);
+    if (testSession) {
+      previewTimer = setTimeout(() => {
+        previewShrunk = true;
+        stageWrap.classList.add("instructor-preview-ended");
+        stage.querySelectorAll("video").forEach((video) => { video.muted = true; });
+      }, 25000);
+    }
     const triggers = el("div", { className: "instructor-triggers" });
     const beatDots = el("div", { className: "instructor-beat-lane-flow" });
     const beatHit = el("div", { className: "instructor-beat-hit" });
@@ -705,7 +715,7 @@
       const item = currentMedia();
       if (!item) return;
       const attachVideo = (video) => {
-        video.muted = !hud.videoAudio || !!stageWrap.querySelector(".instructor-red-cover");
+        video.muted = previewShrunk || !hud.videoAudio || !!stageWrap.querySelector(".instructor-red-cover");
         video.loop = false;
         video.removeAttribute("loop");
         video.addEventListener("ended", () => requestAdvance("ended"));
@@ -1582,6 +1592,7 @@
       if (closed) return;
       closed = true;
       playing = false;
+      if (previewTimer) clearTimeout(previewTimer);
       gen += 1;
       if (beatRaf) cancelAnimationFrame(beatRaf);
       stopRecorder();
@@ -1761,7 +1772,12 @@
         },
       }, catalog.empty ? "Open anyway" : "Start session"));
 
-      if (isDom) {
+      if (!isDom) {
+        stack.appendChild(el("p", { className: "muted" }, cfg.locked
+          ? `${controllerDisplayName()} locked this game. You can read the setup. Start when you're told.`
+          : "Game setup uses the settings below. Change them here, or leave them for the keyholder."));
+      }
+      {
         const durationMin = numField("Minimum game duration (min)", cfg.duration_min || 5, { min: "1" });
         const durationMax = numField("Maximum game duration (min)", cfg.duration_max || cfg.duration_min || 15, { min: "1" });
         const slide = numField("Slide duration (sec)", cfg.slide_duration || 10, { min: "3" });
@@ -1804,7 +1820,7 @@
         const lists = playlistChecks(catalog.playlists || [], cfg.playlists || []);
         const tasks = taskPicker(cfg.tasks || []);
         stack.appendChild(el("div", { className: "card stack" }, [
-          el("h2", {}, "Create a game"),
+          el("h2", {}, "Game setup"),
           el("p", { className: "muted" }, `${controllerDisplayName()} setup. Locked config cannot be changed by the sub. Assign a session as a UBETRA task when you want them to run this.`),
           el("h3", {}, "Game duration"),
           durationMin.wrap,
@@ -1847,6 +1863,11 @@
             className: "primary-btn",
             onClick: async () => {
               error.classList.add("hidden");
+              if (!isDom && cfg.locked) {
+                error.textContent = "The keyholder locked these settings.";
+                error.classList.remove("hidden");
+                return;
+              }
               try {
                 await api(`/dynamics/${dynamicId}/instructor/config`, {
                   method: "PUT",
@@ -1888,8 +1909,9 @@
           }, "Save"),
           el("button", {
             type: "button",
-            className: "ghost-btn",
+            className: `ghost-btn${isDom ? "" : " hidden"}`,
             onClick: async () => {
+              if (!isDom) return;
               try {
                 await api(`/dynamics/${dynamicId}/instructor/assign-task`, {
                   method: "POST",
@@ -1903,25 +1925,8 @@
             },
           }, "Assign as task"),
         ]));
-      } else {
-        stack.appendChild(el("p", { className: "muted" }, cfg.locked
-          ? `${controllerDisplayName()} locked this game. Start when you're told.`
-          : `${controllerDisplayName()} sets duration, tasks, and playlists.`));
       }
 
-      const log = el("div", { className: "stack" });
-      (sessions || []).forEach((row) => {
-        const when = typeof formatLocalDateTime === "function" ? formatLocalDateTime(row.started_at) : row.started_at;
-        const dur = row.ended_at
-          ? `${Math.max(1, Math.round((row.duration_sec || 0) / 60))} min`
-          : "open";
-        log.appendChild(el("p", { className: "muted" }, `${row.member_name || "Partner"} · ${dur} · ${when}`));
-      });
-      if (!(sessions || []).length) log.appendChild(el("p", { className: "muted" }, "No sessions yet."));
-      stack.appendChild(el("div", { className: "card stack" }, [
-        el("h2", {}, isDom ? "Session log" : "Your sessions"),
-        log,
-      ]));
       stack.appendChild(el("button", {
         type: "button",
         className: "ghost-btn",

@@ -122,6 +122,7 @@ def history_chastity_days_report(
         _memberships(db, dynamic_id),
         year=y,
         since_first=since.strip().lower() == "first",
+        since_recent=since.strip().lower() == "recent",
     )
     return HistoryChastityDaysOut(**payload)
 

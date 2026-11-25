@@ -40,7 +40,15 @@ from ..services.tags import tags_to_list, tags_to_string
 
 from ..services.chat_events import post_activity_event, post_system_event
 
-from ..services.tracking_events import is_orgasm_event, is_play_event, orgasm_count
+from ..services.tracking_events import (
+    counts_as_full_orgasm,
+    entry_orgasm_tag_lists,
+    has_denial_tag,
+    has_full_orgasm_tag,
+    has_ruined_orgasm_tag,
+    is_orgasm_event,
+    is_play_event,
+)
 from ..services.chastity_release import event_goal_kind, maybe_relock_after_orgasm, orgasm_end_kind
 
 from ..services.feelings import feelings_status, has_recent_context_checkin
@@ -273,33 +281,80 @@ def tracking_stats(
     label = glance["recent_orgasm_label"]
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     since_30 = today - timedelta(days=29)
+    since_prior = today - timedelta(days=59)
 
-    # Preload 30-day entries once
-    entries_30 = (
+    entries_60 = (
         db.query(OrgTrackingEntry)
         .options(joinedload(OrgTrackingEntry.orgasms))
         .filter(
             OrgTrackingEntry.dynamic_id == dynamic_id,
-            OrgTrackingEntry.occurred_at >= since_30,
+            OrgTrackingEntry.occurred_at >= since_prior,
             OrgTrackingEntry.occurred_at < today + timedelta(days=1),
         )
         .all()
     )
-    running = {m.id: 0 for m in memberships}
+
+    def _kind(tags: list[str]) -> str:
+        if has_ruined_orgasm_tag(tags) and not has_full_orgasm_tag(tags):
+            return "ruined"
+        if has_denial_tag(tags):
+            return "denial"
+        if counts_as_full_orgasm(tags):
+            return "full"
+        return ""
+
+    def _stamp(entry: OrgTrackingEntry):
+        occurred = entry.occurred_at
+        if getattr(occurred, "tzinfo", None):
+            occurred = occurred.replace(tzinfo=None)
+        return occurred
+
+    prior_full = {m.id: 0 for m in memberships}
+    prior_ruined = {m.id: 0 for m in memberships}
+    for entry in entries_60:
+        if not is_orgasm_event(entry.event_type):
+            continue
+        occurred = _stamp(entry)
+        if occurred is None or not (since_prior <= occurred < since_30):
+            continue
+        if entry.for_membership_id not in prior_full:
+            continue
+        for tags in entry_orgasm_tag_lists(entry):
+            kind = _kind(tags)
+            if kind == "full":
+                prior_full[entry.for_membership_id] += 1
+            elif kind == "ruined":
+                prior_ruined[entry.for_membership_id] += 1
+
+    running_full = dict(prior_full)
+    running_ruined = dict(prior_ruined)
     cumulative_30d = []
     for i in range(30):
         day = since_30 + timedelta(days=i)
         day_end = day + timedelta(days=1)
-        for entry in entries_30:
+        denials = {m.id: 0 for m in memberships}
+        for entry in entries_60:
             if not is_orgasm_event(entry.event_type):
                 continue
-            occurred = entry.occurred_at.replace(tzinfo=None) if getattr(entry.occurred_at, "tzinfo", None) else entry.occurred_at
-            if day <= occurred < day_end and entry.for_membership_id in running:
-                running[entry.for_membership_id] += orgasm_count(entry)
+            occurred = _stamp(entry)
+            if occurred is None or not (day <= occurred < day_end):
+                continue
+            if entry.for_membership_id not in running_full:
+                continue
+            for tags in entry_orgasm_tag_lists(entry):
+                kind = _kind(tags)
+                if kind == "full":
+                    running_full[entry.for_membership_id] += 1
+                elif kind == "ruined":
+                    running_ruined[entry.for_membership_id] += 1
+                elif kind == "denial":
+                    denials[entry.for_membership_id] += 1
         cumulative_30d.append(
             {
                 "date": day.date().isoformat(),
-                "by_partner": {mid: running[mid] for mid in running},
+                "by_partner": {mid: running_full[mid] for mid in running_full},
+                "ruined_by_partner": {mid: running_ruined[mid] for mid in running_ruined},
+                "denials_by_partner": denials,
             }
         )
 

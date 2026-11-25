@@ -109,6 +109,7 @@ class WatchSleepNightOut(BaseModel):
     night_date: str | None = None
     duration_min: int | None = None
     duration_label: str | None = None
+    start_at: datetime | None = None
     end_at: datetime | None = None
 
 
@@ -126,6 +127,7 @@ class WatchCyclePersonOut(BaseModel):
     last_period_start: str = ""
     predicted_next: str = ""
     typical_length: int = 28
+    period_length: int = 5
     today_flow: str = ""
 
 
